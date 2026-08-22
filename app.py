@@ -21,17 +21,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. MOTOR DE INGESTA DE DATOS (Parser) ---
+# --- 2. MOTOR DE INGESTA DE DATOS ---
 @st.cache_data
 def limpiar_y_unpivot_cesim(ruta_archivo, ronda_nro):
     df_raw = pd.read_excel(ruta_archivo, header=None)
-    
     fila_equipos_idx = None
     for i, row in df_raw.iterrows():
         if 'CADIZ' in row.values:
             fila_equipos_idx = i
             break
-            
     if fila_equipos_idx is None:
         raise ValueError("No se encontró la fila con los nombres de los equipos (CADIZ).")
         
@@ -43,15 +41,12 @@ def limpiar_y_unpivot_cesim(ruta_archivo, ronda_nro):
     
     for i, row in df_raw.iterrows():
         met = str(row[0]).strip()
-        
         if met == 'nan' or met == '' or i == fila_equipos_idx or i == 0:
             continue
             
         vals = row[1:len(nombres_equipos)+1]
-        
         if vals.isnull().all() or vals.astype(str).str.strip().eq('').all():
             keywords_seccion = ['cuenta de', 'hoja de', 'informe', 'clasificación', 'valuación', 'creación de', 'sostenibilidad', 'ratios', 'flujo de efectivo', 'detalles de']
-            
             if any(kw in met.lower() for kw in keywords_seccion) or i < fila_equipos_idx:
                 seccion_principal = met
                 grupo = pd.NA 
@@ -60,20 +55,15 @@ def limpiar_y_unpivot_cesim(ruta_archivo, ronda_nro):
         else:
             for equipo, val in zip(nombres_equipos, vals):
                 parsed_data.append({
-                    'Ronda': ronda_nro,
-                    'Sección': seccion_principal,
+                    'Ronda': ronda_nro, 'Sección': seccion_principal,
                     'Grupo': grupo if pd.notna(grupo) else seccion_principal,
-                    'Métrica': met,
-                    'Equipo': equipo,
+                    'Métrica': met, 'Equipo': equipo,
                     'Valor': pd.to_numeric(val, errors='coerce') 
                 })
                 
     df_final = pd.DataFrame(parsed_data)
-    df_final = df_final.dropna(subset=['Valor']).copy()
-    
-    return df_final
+    return df_final.dropna(subset=['Valor']).copy()
 
-# Cargamos la ronda de práctica 1
 try:
     df = limpiar_y_unpivot_cesim('results-pr01.xls', 1)
 except Exception as e:
@@ -83,12 +73,10 @@ except Exception as e:
 # --- 3. BARRA LATERAL ---
 st.sidebar.title("🎛️ Controles")
 equipo_seleccionado = st.sidebar.selectbox("Seleccionar Equipo", ["CADIZ", "CEOS", "CHIEF", "CLAVE", "CUORE", "FOCUS", "TOKIO"])
-# Si tuvieras más rondas, acá concatenarías los dataframes. Por ahora fijamos la 1.
 ronda_seleccionada = 1 
 
 # --- 4. EXTRACCIÓN SEGURA DE KPIs ---
 def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
-    """Filtra el DF asegurando que trae la métrica de la sección correcta."""
     filtro = df_datos[
         (df_datos['Equipo'] == equipo) & 
         (df_datos['Métrica'] == metrica) & 
@@ -96,48 +84,59 @@ def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
     ]
     return filtro['Valor'].values[0] if not filtro.empty else 0
 
-# --- CÁLCULO DE KPIs PARA EL EQUIPO SELECCIONADO ---
-# Beneficio Global
-ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', 'Cuenta de resultados, miles USD, Global')
-# Ingresos Globales
-ven_val = extraer_kpi(df, equipo_seleccionado, 'Ingresos por ventas', 'Cuenta de resultados, miles USD, Global')
-
-# Share Global (Acá redondeamos a 1 decimal)
-share_val = extraer_kpi(df, equipo_seleccionado, 'Total', 'Informe de mercado, global')
-share_val = round(share_val, 1) if share_val != 0 else 0
-
-# ROS (Corregimos la palabra clave de búsqueda a 'Ratios' y redondeamos)
-ros_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
-ros_val = round(ros_val, 1) if ros_val != 0 else 0
-
-# Deltas temporales (Ronda 1 = 0)
-delta_ben = 0.0
-delta_ven = 0.0
-delta_share = 0.0
-delta_ros = 0.0
-
 # --- 5. RENDERIZADO DEL DASHBOARD ---
 st.title(f"📊 Resumen Ejecutivo - Ronda {ronda_seleccionada}")
-st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Industria:** Automotriz Global")
+st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Industria:** Automotriz")
 st.divider()
 
 tab1, tab2, tab3, tab4 = st.tabs(["🚀 High-Level KPIs", "🌍 Dinámica de Mercado", "⚙️ Operaciones & Costos", "🔬 I+D & Largo Plazo"])
 
 with tab1:
     st.subheader("Indicadores Críticos del Negocio")
+    
+    # --- SELECTOR REGIONAL ---
+    region = st.radio(
+        "Filtro de Análisis Regional:",
+        ["Global", "EE.UU.", "Europa", "China"],
+        horizontal=True
+    )
+    
+    # Mapeo de sufijos para buscar en las secciones del Excel
+    sufijo_finanzas = "Global" if region == "Global" else region
+    sufijo_mercado = "global" if region == "Global" else region
+
+    # Cálculos dinámicos basados en la región elegida
+    ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    ven_val = extraer_kpi(df, equipo_seleccionado, 'Ingresos por ventas', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    
+    share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
+    share_val = round(share_val, 1) if share_val != 0 else 0
+    
+    # El ROS siempre se extrae de 'Ratios' para la visión Global. 
+    # Para la visión regional, usamos el Margen de Contribución de Combustión como proxy rápido (luego se puede complejizar)
+    if region == "Global":
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
+        titulo_margen = "Margen ROS"
+    else:
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
+        # Convertimos el margen absoluto a % sobre las ventas regionales
+        margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
+        titulo_margen = "Margen Contribución (Combustión)"
+        
+    margen_val = round(margen_val, 1) if margen_val != 0 else 0
+
     col1, col2, col3, col4 = st.columns(4)
     
-    col1.metric("Beneficio Neto (USD)", f"${ben_val / 1000000:.2f}M", f"{delta_ben}%", help="Beneficio después de impuestos.")
-    col2.metric("Ingresos Totales (USD)", f"${ven_val / 1000000:.2f}M", f"{delta_ven}%", help="Facturación global.")
-    col3.metric("Cuota de Mercado Global", f"{share_val}%", f"{delta_share}%", delta_color="inverse" if delta_share < 0 else "normal")
-    col4.metric("Margen ROS", f"{ros_val}%", f"{delta_ros}%", help="Rentabilidad operativa sobre ventas.")
+    col1.metric(f"Beneficio Neto ({region})", f"${ben_val / 1000000:.2f}M")
+    col2.metric(f"Ingresos ({region})", f"${ven_val / 1000000:.2f}M")
+    col3.metric(f"Cuota de Mercado ({region})", f"{share_val}%")
+    col4.metric(titulo_margen, f"{margen_val}%")
     
     st.markdown("---")
-    st.markdown("#### 🚨 Alertas Operativas (Fallas de Stock)")
-    st.info("Espacio reservado para el seguimiento de Demanda Insatisfecha por región (EE.UU., Europa, China).")
+    st.info("Espacio reservado para Gráficos de barra apiladas comparativos.")
 
 with tab2:
-    st.write("Sensibilidad de mercado por región (Precios, Promoción y Características).")
+    st.write("Acá cruzamos elasticidad de precio y promoción vs share de mercado (Scatter Plots).")
 with tab3:
     st.write("Análisis de estructura de costos, aranceles y capacidad de planta.")
 with tab4:
