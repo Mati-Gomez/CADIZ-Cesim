@@ -115,3 +115,30 @@ delta_ben = 0.0
 delta_ven = 0.0
 delta_share = 0.0
 delta_ros = 0.0
+
+# --- 5. RENDERIZADO DEL DASHBOARD ---
+st.title(f"📊 Resumen Ejecutivo - Ronda {ronda_seleccionada}")
+st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Industria:** Automotriz Global")
+st.divider()
+
+tab1, tab2, tab3, tab4 = st.tabs(["🚀 High-Level KPIs", "🌍 Dinámica de Mercado", "⚙️ Operaciones & Costos", "🔬 I+D & Largo Plazo"])
+
+with tab1:
+    st.subheader("Indicadores Críticos del Negocio")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    col1.metric("Beneficio Neto (USD)", f"${ben_val / 1000000:.2f}M", f"{delta_ben}%", help="Beneficio después de impuestos.")
+    col2.metric("Ingresos Totales (USD)", f"${ven_val / 1000000:.2f}M", f"{delta_ven}%", help="Facturación global.")
+    col3.metric("Cuota de Mercado Global", f"{share_val}%", f"{delta_share}%", delta_color="inverse" if delta_share < 0 else "normal")
+    col4.metric("Margen ROS", f"{ros_val}%", f"{delta_ros}%", help="Rentabilidad operativa sobre ventas.")
+    
+    st.markdown("---")
+    st.markdown("#### 🚨 Alertas Operativas (Fallas de Stock)")
+    st.info("Espacio reservado para el seguimiento de Demanda Insatisfecha por región (EE.UU., Europa, China).")
+
+with tab2:
+    st.write("Sensibilidad de mercado por región (Precios, Promoción y Características).")
+with tab3:
+    st.write("Análisis de estructura de costos, aranceles y capacidad de planta.")
+with tab4:
+    st.write("Tracking de inversión y transición hacia nuevas tecnologías (Híbridos, EV, Hidrógeno).")
