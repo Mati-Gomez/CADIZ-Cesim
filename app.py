@@ -101,9 +101,91 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏆 8. Clasificación"
 ])
 
+# --- RENDERIZADO DE LAS NUEVAS PESTAÑAS ---
+
 with tab1:
     st.subheader("🏆 Centro de Creación de Valor (Core Strategy)")
-    st.write("Desglose analítico de la matriz de valor: cuánto se generó para accionistas, acreedores, personal, gobierno y proveedores.")
+    st.markdown("Desglose de la matriz de valor total creada por el equipo en la ronda.")
+    
+    # Extraemos la sección de Creación de valor
+    df_valor = df[df['Sección'].str.contains('Creación de valor', case=False, na=False)].copy()
+    
+    if df_valor.empty:
+        st.info("No se encontraron registros de la sección 'Creación de valor' en el reporte actual.")
+    else:
+        # Filtramos para el equipo activo
+        df_valor_eq = df_valor[df_valor['Equipo'] == equipo_seleccionado].copy()
+        
+        col_v1, col_v2 = st.columns([2, 1])
+        with col_v1:
+            fig_val = px.bar(
+                df_valor_eq, x='Valor', y='Métrica', orientation='h',
+                title=f"Distribución de Valor Creado - {equipo_seleccionado}",
+                text_auto='.2s'
+            )
+            fig_val.update_layout(xaxis_title="USD", yaxis_title="", showlegend=False)
+            st.plotly_chart(fig_val, use_container_width=True)
+            
+        with col_v2:
+            st.markdown("### 💡 Foco Directivo")
+            st.write("Esta vista te muestra quién se está quedando con el valor generado. El objetivo principal de la simulación es maximizar la porción correspondiente a los accionistas.")
+
+with tab3:
+    st.subheader("💰 Estados Financieros")
+    st.markdown("Cuenta de resultados resumida y flujos de caja operativos de la ronda.")
+    
+    df_fin = df[(df['Sección'].str.contains('Cuenta de resultados', case=False, na=False)) & 
+                (df['Equipo'] == equipo_seleccionado)].copy()
+                
+    if not df_fin.empty:
+        st.dataframe(df_fin[['Sección', 'Métrica', 'Valor']], use_container_width=True, hide_index=True)
+    else:
+        st.warning("Sin datos financieros disponibles.")
+
+with tab4:
+    st.subheader("📈 Ratios & Valuación de Mercado")
+    st.markdown("Múltiplos de mercado, WACC, apalancamiento y calificación crediticia.")
+    
+    df_rat = df[(df['Sección'].str.contains('Ratios e indicadores|Valuación', case=False, na=False)) & 
+                (df['Equipo'] == equipo_seleccionado)].copy()
+                
+    if not df_rat.empty:
+        st.dataframe(df_rat[['Sección', 'Métrica', 'Valor']], use_container_width=True, hide_index=True)
+    else:
+        st.warning("Sin datos de ratios disponibles.")
+
+with tab5:
+    st.subheader("🌍 Informes de Mercado")
+    st.markdown("Análisis detallado de volúmenes, demanda insatisfecha y mix tecnológico.")
+    st.info("Utilice los gráficos de la pestaña 'Dinámica de Mercado' para el cruce de precios y características.")
+
+with tab6:
+    st.subheader("⚙️ Producción, Logística y Costos")
+    st.markdown("Control de capacidad instalada en plantas (EE.UU. y China), inventarios y aranceles de transporte.")
+    
+    df_prod = df[(df['Sección'].str.contains('Detalles de fabricación|Informe de costos|Detalles de logística', case=False, na=False)) & 
+                 (df['Equipo'] == equipo_seleccionado)].copy()
+                 
+    if not df_prod.empty:
+        # Mostramos una tabla resumen limpia con las métricas clave de costos y producción
+        st.dataframe(df_prod[['Sección', 'Métrica', 'Valor']].head(15), use_container_width=True, hide_index=True)
+    else:
+        st.warning("Sin datos operativos detallados en esta ronda.")
+
+with tab7:
+    st.subheader("👥 RRHH & Sostenibilidad (ESG)")
+    st.markdown("Métricas de dotación de personal, capacitaciones e impacto ambiental.")
+    st.info("Módulo en integración con los reportes de huella de carbono y personal.")
+
+with tab8:
+    st.subheader("🏆 Clasificación General de la Industria")
+    st.markdown("Ranking global de los equipos en función de su desempeño acumulado.")
+    
+    # Tabla comparativa general de Beneficio de la ronda para toda la industria
+    df_rank = df[df['Métrica'] == 'Beneficio de la ronda'].copy()
+    if not df_rank.empty:
+        df_rank = df_rank.sort_values(by='Valor', ascending=False).reset_index(drop=True)
+        st.dataframe(df_rank[['Equipo', 'Valor']].rename(columns={'Valor': 'Beneficio Neto'}), use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("Resumen Ejecutivo Global y Regional")
