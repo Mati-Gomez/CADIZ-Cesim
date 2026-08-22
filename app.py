@@ -101,40 +101,17 @@ def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
 ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', 'Cuenta de resultados, miles USD, Global')
 # Ingresos Globales
 ven_val = extraer_kpi(df, equipo_seleccionado, 'Ingresos por ventas', 'Cuenta de resultados, miles USD, Global')
-# Share Global
-share_val = extraer_kpi(df, equipo_seleccionado, 'Total', 'Informe de mercado, global')
-# ROS
-ros_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios e indicadores')
 
-# (Los deltas están en 0 porque recién es la Ronda 1. En el futuro, los calculamos cruzando con la Ronda N-1)
+# Share Global (Acá redondeamos a 1 decimal)
+share_val = extraer_kpi(df, equipo_seleccionado, 'Total', 'Informe de mercado, global')
+share_val = round(share_val, 1) if share_val != 0 else 0
+
+# ROS (Corregimos la palabra clave de búsqueda a 'Ratios' y redondeamos)
+ros_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
+ros_val = round(ros_val, 1) if ros_val != 0 else 0
+
+# Deltas temporales (Ronda 1 = 0)
 delta_ben = 0.0
 delta_ven = 0.0
 delta_share = 0.0
 delta_ros = 0.0
-
-# --- 5. RENDERIZADO DEL DASHBOARD ---
-st.title(f"📊 Resumen Ejecutivo - Ronda {ronda_seleccionada}")
-st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Industria:** Automotriz Global")
-st.divider()
-
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 High-Level KPIs", "🌍 Dinámica de Mercado", "⚙️ Operaciones & Costos", "🔬 I+D & Largo Plazo"])
-
-with tab1:
-    st.subheader("Indicadores Críticos del Negocio")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    col1.metric("Beneficio Neto (USD)", f"${ben_val / 1000000:.2f}M", f"{delta_ben}%", help="Beneficio después de impuestos.")
-    col2.metric("Ingresos Totales (USD)", f"${ven_val / 1000000:.2f}M", f"{delta_ven}%", help="Facturación global.")
-    col3.metric("Cuota de Mercado Global", f"{share_val}%", f"{delta_share}%", delta_color="inverse" if delta_share < 0 else "normal")
-    col4.metric("Margen ROS", f"{ros_val}%", f"{delta_ros}%", help="Rentabilidad operativa sobre ventas.")
-    
-    st.markdown("---")
-    st.markdown("#### 🚨 Alertas Operativas (Fallas de Stock)")
-    st.info("Espacio reservado para el seguimiento de Demanda Insatisfecha por región (EE.UU., Europa, China).")
-
-with tab2:
-    st.write("Sensibilidad de mercado por región (Precios, Promoción y Características).")
-with tab3:
-    st.write("Análisis de estructura de costos, aranceles y capacidad de planta.")
-with tab4:
-    st.write("Tracking de inversión y transición hacia nuevas tecnologías (Híbridos, EV, Hidrógeno).")
