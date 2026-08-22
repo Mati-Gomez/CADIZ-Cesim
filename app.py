@@ -4,60 +4,63 @@ import plotly.express as px
 
 st.set_page_config(page_title="Tablero Directivo - Bull Automotive", layout="wide")
 
-# --- INGESTA SIMULADA ---
+# Dejamos fijo a CADIZ para todo el desarrollo
+MI_EQUIPO = "CADIZ"
+
 @st.cache_data
 def cargar_datos():
-    # Datos simulados con varios equipos para probar el cruce
+    # Datos combinados para mostrar el impacto visual
     data = {
-        'Métrica': ['Beneficio de la ronda', 'Beneficio de la ronda', 'Beneficio de la ronda', 'Beneficio de la ronda',
-                    'Total (Cuota global)', 'Total (Cuota global)', 'Total (Cuota global)', 'Total (Cuota global)'],
-        'Equipo': ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CADIZ', 'CEOS', 'CHIEF', 'CLAVE'],
-        'Valor': [7.7, 10.2, 5.4, 8.1, 18.5, 22.1, 14.3, 19.0] # Valores en millones / porcentajes
+        'Métrica': ['Beneficio de la ronda', 'Beneficio de la ronda', 'Beneficio de la ronda', 
+                    'Ingresos por ventas', 'Ingresos por ventas', 'Ingresos por ventas',
+                    'Total (Cuota global)', 'Total (Cuota global)', 'Total (Cuota global)'],
+        'Equipo': ['CADIZ', 'CEOS', 'CHIEF', 'CADIZ', 'CEOS', 'CHIEF', 'CADIZ', 'CEOS', 'CHIEF'],
+        'Valor': [7.7, 10.2, 5.4, 45.9, 49.8, 44.0, 18.5, 22.1, 14.3]
     }
     return pd.DataFrame(data)
 
 df = cargar_datos()
 
-# --- CONTROLES LATERLES ---
-st.sidebar.title("🎛️ Controles")
-# Ahora esto no filtra, solo le avisa al gráfico cuál es nuestro equipo
-mi_equipo = st.sidebar.selectbox("Resaltar a Nuestro Equipo", ["CADIZ", "CEOS", "CHIEF", "CLAVE"])
-
-st.title("📊 Resumen Ejecutivo y Posición Competitiva")
+st.title(f"📊 Resumen Ejecutivo - {MI_EQUIPO}")
 st.divider()
 
-tab1, tab2 = st.tabs(["🚀 Ranking y KPIs", "🌍 Dinámica de Mercado"])
+# --- BLOQUE 1: KPIs ABSOLUTOS (Solo CADIZ) ---
+st.subheader("Performance Absoluta")
+col1, col2, col3, col4 = st.columns(4)
 
-with tab1:
-    st.subheader("Comparativa Directa vs. Industria")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        # Filtramos solo la métrica de Beneficio
-        df_ben = df[df['Métrica'] == 'Beneficio de la ronda'].copy()
-        
-        # Lógica de colores: Gris para la competencia, Verde para nuestro equipo
-        df_ben['Color'] = df_ben['Equipo'].apply(lambda x: '#00E676' if x == mi_equipo else '#555555')
-        
-        # Gráfico de barras ordenado de mayor a menor
-        df_ben = df_ben.sort_values(by='Valor', ascending=True)
-        fig_ben = px.bar(df_ben, x='Valor', y='Equipo', orientation='h',
-                         title="Beneficio Neto por Equipo (Millones USD)",
-                         color='Color', color_discrete_map="identity", text='Valor')
-        
-        fig_ben.update_layout(showlegend=False, xaxis_title="Millones USD", yaxis_title="")
-        st.plotly_chart(fig_ben, use_container_width=True)
+# Filtramos la data solo para CADIZ
+ben_cadiz = df[(df['Métrica'] == 'Beneficio de la ronda') & (df['Equipo'] == MI_EQUIPO)]['Valor'].values[0]
+ven_cadiz = df[(df['Métrica'] == 'Ingresos por ventas') & (df['Equipo'] == MI_EQUIPO)]['Valor'].values[0]
+share_cadiz = df[(df['Métrica'] == 'Total (Cuota global)') & (df['Equipo'] == MI_EQUIPO)]['Valor'].values[0]
 
-    with col2:
-        # Hacemos lo mismo para Cuota de Mercado
-        df_share = df[df['Métrica'] == 'Total (Cuota global)'].copy()
-        df_share['Color'] = df_share['Equipo'].apply(lambda x: '#00BFFF' if x == mi_equipo else '#555555')
-        
-        df_share = df_share.sort_values(by='Valor', ascending=True)
-        fig_share = px.bar(df_share, x='Valor', y='Equipo', orientation='h',
-                           title="Cuota de Mercado Global (%)",
-                           color='Color', color_discrete_map="identity", text='Valor')
-        
-        fig_share.update_layout(showlegend=False, xaxis_title="% de Mercado", yaxis_title="")
-        st.plotly_chart(fig_share, use_container_width=True)
+# Tarjetas limpias y directas
+col1.metric("Beneficio Neto (USD)", f"${ben_cadiz}M")
+col2.metric("Ingresos Totales (USD)", f"${ven_cadiz}M")
+col3.metric("Cuota Global", f"{share_cadiz}%")
+col4.metric("Alerta Logística", "Sin quiebres de stock") # Placeholder para demanda insatisfecha
+
+st.markdown("---")
+
+# --- BLOQUE 2: COMPARATIVA RELATIVA (Industria) ---
+st.subheader("Posición Competitiva vs. Industria")
+col_chart1, col_chart2 = st.columns(2)
+
+with col_chart1:
+    df_ben = df[df['Métrica'] == 'Beneficio de la ronda'].copy().sort_values(by='Valor')
+    df_ben['Color'] = df_ben['Equipo'].apply(lambda x: '#00E676' if x == MI_EQUIPO else '#555555')
+    
+    fig_ben = px.bar(df_ben, x='Valor', y='Equipo', orientation='h', 
+                     title="Beneficio Neto (USD M)", color='Color', 
+                     color_discrete_map="identity", text='Valor')
+    fig_ben.update_layout(showlegend=False, xaxis_title="", yaxis_title="")
+    st.plotly_chart(fig_ben, use_container_width=True)
+
+with col_chart2:
+    df_share = df[df['Métrica'] == 'Total (Cuota global)'].copy().sort_values(by='Valor')
+    df_share['Color'] = df_share['Equipo'].apply(lambda x: '#00BFFF' if x == MI_EQUIPO else '#555555')
+    
+    fig_share = px.bar(df_share, x='Valor', y='Equipo', orientation='h', 
+                       title="Cuota de Mercado Global (%)", color='Color', 
+                       color_discrete_map="identity", text='Valor')
+    fig_share.update_layout(showlegend=False, xaxis_title="", yaxis_title="")
+    st.plotly_chart(fig_share, use_container_width=True)
