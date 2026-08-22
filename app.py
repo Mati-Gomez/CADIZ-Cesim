@@ -85,15 +85,53 @@ def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
     ]
     return filtro['Valor'].values[0] if not filtro.empty else 0
 
-# --- 5. RENDERIZADO DEL DASHBOARD ---
-st.title(f"📊 Resumen Ejecutivo - Ronda {ronda_seleccionada}")
-st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Industria:** Automotriz")
+# --- RENDERIZADO DEL DASHBOARD DEFINITIVO ---
+st.title(f"📊 Tablero Directivo - Bull Automotive (Foco: Valor Accionista)")
+st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Métrica de Victoria:** Creación de Valor")
 st.divider()
 
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 High-Level KPIs", "🌍 Dinámica de Mercado", "⚙️ Operaciones & Costos", "🔬 I+D & Largo Plazo"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    "🎯 1. Creación de Valor", 
+    "🚀 2. Resumen Ejecutivo", 
+    "💰 3. Estados Financieros", 
+    "📈 4. Ratios & Valuación", 
+    "🌍 5. Mercado & Precios", 
+    "⚙️ 6. Producción & Costos", 
+    "👥 7. RRHH & ESG", 
+    "🏆 8. Clasificación"
+])
 
 with tab1:
-    st.subheader("Indicadores Críticos del Negocio")
+    st.subheader("🏆 Centro de Creación de Valor (Core Strategy)")
+    st.write("Desglose analítico de la matriz de valor: cuánto se generó para accionistas, acreedores, personal, gobierno y proveedores.")
+
+with tab2:
+    st.subheader("Resumen Ejecutivo Global y Regional")
+    # Aquí va tu selector regional y las tarjetas de KPIs principales (Beneficio, Ingresos, Share, Margen)
+
+with tab3:
+    st.subheader("Estados Financieros")
+    st.write("Cuenta de resultados, Balance General y Flujo de Efectivo desglosados.")
+
+with tab4:
+    st.subheader("Ratios y Valuación de Mercado")
+    st.write("WACC, múltiplos EV/EBITDA, apalancamiento y calificación crediticia.")
+
+with tab5:
+    st.subheader("Informes de Mercado")
+    st.write("Demanda, precios, características y gasto en promoción por región (EE.UU., Europa, China).")
+
+with tab6:
+    st.subheader("Producción, Logística y Costos")
+    st.write("Capacidad de plantas, inventarios, aranceles y costos unitarios.")
+
+with tab7:
+    st.subheader("RRHH y Sostenibilidad (ESG)")
+    st.write("Dotación, salarios, capacitación y huella ambiental.")
+
+with tab8:
+    st.subheader("Clasificación General de la Industria")
+    st.write("Ranking oficial de la ronda actual frente a toda la competencia.")
     
     # Selector Regional
     region = st.radio(
