@@ -189,76 +189,7 @@ with tab8:
 
 with tab2:
     st.subheader("Resumen Ejecutivo Global y Regional")
-    # Aquí va tu selector regional y las tarjetas de KPIs principales (Beneficio, Ingresos, Share, Margen)
 
-with tab3:
-    st.subheader("Estados Financieros")
-    st.write("Cuenta de resultados, Balance General y Flujo de Efectivo desglosados.")
-
-with tab4:
-    st.subheader("Ratios y Valuación de Mercado")
-    st.write("WACC, múltiplos EV/EBITDA, apalancamiento y calificación crediticia.")
-
-with tab5:
-    st.subheader("Informes de Mercado")
-    st.write("Demanda, precios, características y gasto en promoción por región (EE.UU., Europa, China).")
-
-with tab6:
-    st.subheader("Producción, Logística y Costos")
-    st.write("Capacidad de plantas, inventarios, aranceles y costos unitarios.")
-
-with tab7:
-    st.subheader("RRHH y Sostenibilidad (ESG)")
-    st.write("Dotación, salarios, capacitación y huella ambiental.")
-
-with tab8:
-    st.subheader("Clasificación General de la Industria")
-    st.write("Ranking oficial de la ronda actual frente a toda la competencia.")
-    
-    # Selector Regional
-    region = st.radio(
-        "Filtro de Análisis Regional:",
-        ["Global", "EE.UU.", "Europa", "China"],
-        horizontal=True
-    )
-    
-    # Mapeo de sufijos para buscar en el Excel
-    sufijo_finanzas = "Global" if region == "Global" else region
-    sufijo_mercado = "global" if region == "Global" else region
-
-    # --- LÓGICA DE INGRESO REGIONAL ---
-    if region in ["EE.UU.", "China"]:
-        nombre_metrica_ventas = 'Beneficio de Ventas Totales'
-    else:
-        nombre_metrica_ventas = 'Ingresos por ventas'
-
-    ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
-    ven_val = extraer_kpi(df, equipo_seleccionado, nombre_metrica_ventas, f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
-    
-    share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
-    share_val = round(share_val, 1) if share_val != 0 else 0
-    
-    if region == "Global":
-        margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
-        titulo_margen = "Margen ROS"
-    else:
-        margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
-        margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
-        titulo_margen = "Margen Contrib. (Combustión)"
-        
-    margen_val = round(margen_val, 1) if margen_val != 0 else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    
-    col1.metric(f"Beneficio Neto ({region})", f"${ben_val / 1000000:.2f}M")
-    col2.metric(f"Ingresos ({region})", f"${ven_val / 1000000:.2f}M")
-    col3.metric(f"Cuota de Mercado ({region})", f"{share_val}%")
-    col4.metric(titulo_margen, f"{margen_val}%")
-    
-    st.markdown("---")
-    st.info("Espacio reservado para Gráficos de barra apiladas comparativos.")
-
-import plotly.express as px
 
 with tab2:
     st.subheader("Elasticidad y Posicionamiento Estratégico")
@@ -329,3 +260,72 @@ with tab2:
                 yaxis=dict(range=[0, 35])
             )
             st.plotly_chart(fig_caract, use_container_width=True)
+
+
+with tab3:
+    st.subheader("Estados Financieros")
+    st.write("Cuenta de resultados, Balance General y Flujo de Efectivo desglosados.")
+
+with tab4:
+    st.subheader("Ratios y Valuación de Mercado")
+    st.write("WACC, múltiplos EV/EBITDA, apalancamiento y calificación crediticia.")
+
+with tab5:
+    st.subheader("Informes de Mercado")
+    st.write("Demanda, precios, características y gasto en promoción por región (EE.UU., Europa, China).")
+
+with tab6:
+    st.subheader("Producción, Logística y Costos")
+    st.write("Capacidad de plantas, inventarios, aranceles y costos unitarios.")
+
+with tab7:
+    st.subheader("RRHH y Sostenibilidad (ESG)")
+    st.write("Dotación, salarios, capacitación y huella ambiental.")
+
+with tab8:
+    st.subheader("Clasificación General de la Industria")
+    st.write("Ranking oficial de la ronda actual frente a toda la competencia.")
+    
+    # Selector Regional
+    region = st.radio(
+        "Filtro de Análisis Regional:",
+        ["Global", "EE.UU.", "Europa", "China"],
+        horizontal=True
+    )
+    
+    # Mapeo de sufijos para buscar en el Excel
+    sufijo_finanzas = "Global" if region == "Global" else region
+    sufijo_mercado = "global" if region == "Global" else region
+
+    # --- LÓGICA DE INGRESO REGIONAL ---
+    if region in ["EE.UU.", "China"]:
+        nombre_metrica_ventas = 'Beneficio de Ventas Totales'
+    else:
+        nombre_metrica_ventas = 'Ingresos por ventas'
+
+    ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    ven_val = extraer_kpi(df, equipo_seleccionado, nombre_metrica_ventas, f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    
+    share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
+    share_val = round(share_val, 1) if share_val != 0 else 0
+    
+    if region == "Global":
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
+        titulo_margen = "Margen ROS"
+    else:
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
+        margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
+        titulo_margen = "Margen Contrib. (Combustión)"
+        
+    margen_val = round(margen_val, 1) if margen_val != 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    
+    col1.metric(f"Beneficio Neto ({region})", f"${ben_val / 1000000:.2f}M")
+    col2.metric(f"Ingresos ({region})", f"${ven_val / 1000000:.2f}M")
+    col3.metric(f"Cuota de Mercado ({region})", f"{share_val}%")
+    col4.metric(titulo_margen, f"{margen_val}%")
+    
+    st.markdown("---")
+    st.info("Espacio reservado para Gráficos de barra apiladas comparativos.")
+
