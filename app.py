@@ -75,7 +75,7 @@ st.sidebar.title("🎛️ Controles")
 equipo_seleccionado = st.sidebar.selectbox("Seleccionar Equipo", ["CADIZ", "CEOS", "CHIEF", "CLAVE", "CUORE", "FOCUS", "TOKIO"])
 ronda_seleccionada = 1 
 
-# --- 4. EXTRACCIÓN SEGURA DE KPIs ---
+# --- 4. EXTRACCIÓN SEGURA DE KPIs (Versión Inteligente Regional) ---
 def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
     filtro = df_datos[
         (df_datos['Equipo'] == equipo) & 
@@ -94,34 +94,36 @@ tab1, tab2, tab3, tab4 = st.tabs(["🚀 High-Level KPIs", "🌍 Dinámica de Mer
 with tab1:
     st.subheader("Indicadores Críticos del Negocio")
     
-    # --- SELECTOR REGIONAL ---
+    # Selector Regional
     region = st.radio(
         "Filtro de Análisis Regional:",
         ["Global", "EE.UU.", "Europa", "China"],
         horizontal=True
     )
     
-    # Mapeo de sufijos para buscar en las secciones del Excel
+    # Mapeo de sufijos para buscar en el Excel
     sufijo_finanzas = "Global" if region == "Global" else region
     sufijo_mercado = "global" if region == "Global" else region
 
-    # Cálculos dinámicos basados en la región elegida
+    # --- LÓGICA DE INGRESO REGIONAL ---
+    if region in ["EE.UU.", "China"]:
+        nombre_metrica_ventas = 'Beneficio de Ventas Totales'
+    else:
+        nombre_metrica_ventas = 'Ingresos por ventas'
+
     ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
-    ven_val = extraer_kpi(df, equipo_seleccionado, 'Ingresos por ventas', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    ven_val = extraer_kpi(df, equipo_seleccionado, nombre_metrica_ventas, f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
     
     share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
     share_val = round(share_val, 1) if share_val != 0 else 0
     
-    # El ROS siempre se extrae de 'Ratios' para la visión Global. 
-    # Para la visión regional, usamos el Margen de Contribución de Combustión como proxy rápido (luego se puede complejizar)
     if region == "Global":
         margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
         titulo_margen = "Margen ROS"
     else:
         margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
-        # Convertimos el margen absoluto a % sobre las ventas regionales
         margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
-        titulo_margen = "Margen Contribución (Combustión)"
+        titulo_margen = "Margen Contrib. (Combustión)"
         
     margen_val = round(margen_val, 1) if margen_val != 0 else 0
 
