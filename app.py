@@ -181,53 +181,53 @@ import plotly.express as px
 with tab2:
     st.subheader("Elasticidad y Posicionamiento Estratégico")
     
-    # Controles dinámicos para aislar el análisis
     col_ctrl1, col_ctrl2 = st.columns(2)
     region_merc = col_ctrl1.selectbox("Región a analizar", ["EE.UU.", "Europa", "China"], key="reg_merc")
     tec_merc = col_ctrl2.selectbox("Tecnología", ["Combustión", "Híbrido", "Eléctrico", "Hidrógeno"], key="tec_merc")
     
     st.markdown("---")
     
-    # 1. Extracción de Precios
     df_precio = df[(df['Sección'].str.contains(f'Informe de mercado, {region_merc}', case=False, na=False)) & 
                    (df['Métrica'].str.contains('Precio de venta', case=False, na=False)) &
                    (df['Grupo'] == tec_merc)].copy()
     df_precio = df_precio.rename(columns={'Valor': 'Precio'})
     
-    # 2. Extracción de Características
     df_caract = df[(df['Sección'].str.contains(f'Informe de mercado, {region_merc}', case=False, na=False)) & 
                    (df['Métrica'].str.contains('Cantidad de características', case=False, na=False)) &
                    (df['Grupo'] == tec_merc)].copy()
     df_caract = df_caract.rename(columns={'Valor': 'Características'})
     
-    # 3. Extracción de Cuota de Mercado
     df_share_tec = df[(df['Sección'].str.contains(f'Informe de mercado, {region_merc}', case=False, na=False)) & 
                       (df['Métrica'] == tec_merc) &
                       (df['Grupo'].str.contains('cuotas de mercado', case=False, na=False))].copy()
     df_share_tec = df_share_tec.rename(columns={'Valor': 'Cuota de Mercado (%)'})
     
-    # Validación: ¿Hay datos para graficar?
     if df_precio.empty or df_share_tec.empty:
         st.warning(f"No hay datos registrados para {tec_merc} en {region_merc} durante esta ronda.")
     else:
-        # Cruce de bases por Equipo
         df_plot = pd.merge(df_precio[['Equipo', 'Precio']], df_share_tec[['Equipo', 'Cuota de Mercado (%)']], on='Equipo')
         df_plot = pd.merge(df_plot, df_caract[['Equipo', 'Características']], on='Equipo')
         
-        # Resaltado visual (Tu equipo vs. Competencia)
-        df_plot['Color'] = df_plot['Equipo'].apply(lambda x: '#00E676' if x == equipo_seleccionado else '#555555')
+        # Color: Verde para CADIZ, Gris visible ("#94A3B8") para la competencia
+        df_plot['Color'] = df_plot['Equipo'].apply(lambda x: '#00E676' if x == equipo_seleccionado else '#94A3B8')
         
         col_graf1, col_graf2 = st.columns(2)
         
         with col_graf1:
             fig_precio = px.scatter(
                 df_plot, x='Precio', y='Cuota de Mercado (%)', text='Equipo',
-                color='Color', color_discrete_map="identity", size_max=10,
+                color='Color', color_discrete_map="identity",
                 title=f"Elasticidad Precio ({tec_merc} - {region_merc})"
             )
-            fig_precio.update_traces(textposition='top center', marker=dict(size=12))
-            fig_precio.update_layout(xaxis_title="Precio de Venta", yaxis_title="Cuota de Mercado (%)")
-            # Inversión lógica del eje X: a mayor precio, menor demanda
+            # Etiquetas visibles y marcadores con buen tamaño
+            fig_precio.update_traces(textposition='top center', marker=dict(size=14))
+            
+            # ESCALAS FIJAS: Eje Y siempre de 0 a 35% para estandarizar la lectura
+            fig_precio.update_layout(
+                xaxis_title="Precio de Venta", 
+                yaxis_title="Cuota de Mercado (%)",
+                yaxis=dict(range=[0, 35])
+            )
             fig_precio.update_xaxes(autorange="reversed")
             st.plotly_chart(fig_precio, use_container_width=True)
             
@@ -237,6 +237,13 @@ with tab2:
                 color='Color', color_discrete_map="identity",
                 title=f"Impacto de Características ({tec_merc} - {region_merc})"
             )
-            fig_caract.update_traces(textposition='top center', marker=dict(size=12))
-            fig_caract.update_layout(xaxis_title="Nivel de Características", yaxis_title="")
+            fig_caract.update_traces(textposition='top center', marker=dict(size=14))
+            
+            # ESCALAS FIJAS en ambos ejes (Características de 0 a 6, Cuota de 0 a 35%)
+            fig_caract.update_layout(
+                xaxis_title="Nivel de Características", 
+                yaxis_title="",
+                xaxis=dict(range=[0, 6]),
+                yaxis=dict(range=[0, 35])
+            )
             st.plotly_chart(fig_caract, use_container_width=True)
