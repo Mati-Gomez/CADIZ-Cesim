@@ -76,7 +76,7 @@ st.sidebar.title("🎛️ Controles")
 equipo_seleccionado = st.sidebar.selectbox("Seleccionar Equipo", ["CADIZ", "CEOS", "CHIEF", "CLAVE", "CUORE", "FOCUS", "TOKIO"])
 ronda_seleccionada = 1 
 
-# --- 4. EXTRACCIÓN SEGURA DE KPIs (Versión Inteligente Regional) ---
+# --- 4. EXTRACCIÓN SEGURA DE KPIs ---
 def extraer_kpi(df_datos, equipo, metrica, seccion_clave):
     filtro = df_datos[
         (df_datos['Equipo'] == equipo) & 
@@ -90,6 +90,7 @@ st.title(f"📊 Tablero Directivo - Bull Automotive (Foco: Valor Accionista)")
 st.markdown(f"**Equipo Activo:** {equipo_seleccionado} | **Métrica de Victoria:** Creación de Valor")
 st.divider()
 
+# Las 8 pestañas maestras organizadas
 tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🎯 1. Creación de Valor", 
     "🚀 2. Resumen Ejecutivo", 
@@ -101,21 +102,16 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "🏆 8. Clasificación"
 ])
 
-# --- RENDERIZADO DE LAS NUEVAS PESTAÑAS ---
-
+# --- PESTAÑA 1: CREACIÓN DE VALOR ---
 with tab1:
     st.subheader("🏆 Centro de Creación de Valor (Core Strategy)")
-    st.markdown("Desglose de la matriz de valor total creada por el equipo en la ronda.")
+    st.markdown("Desglose analítico de la matriz de valor generado para los accionistas y la cadena.")
     
-    # Extraemos la sección de Creación de valor
     df_valor = df[df['Sección'].str.contains('Creación de valor', case=False, na=False)].copy()
-    
     if df_valor.empty:
         st.info("No se encontraron registros de la sección 'Creación de valor' en el reporte actual.")
     else:
-        # Filtramos para el equipo activo
         df_valor_eq = df_valor[df_valor['Equipo'] == equipo_seleccionado].copy()
-        
         col_v1, col_v2 = st.columns([2, 1])
         with col_v1:
             fig_val = px.bar(
@@ -125,78 +121,79 @@ with tab1:
             )
             fig_val.update_layout(xaxis_title="USD", yaxis_title="", showlegend=False)
             st.plotly_chart(fig_val, use_container_width=True)
-            
         with col_v2:
             st.markdown("### 💡 Foco Directivo")
-            st.write("Esta vista te muestra quién se está quedando con el valor generado. El objetivo principal de la simulación es maximizar la porción correspondiente a los accionistas.")
+            st.write("El objetivo absoluto de la simulación es maximizar la porción de riqueza correspondiente a los accionistas.")
 
+# --- PESTAÑA 2: RESUMEN EJECUTIVO (Con selector regional y KPIs) ---
+with tab2:
+    st.subheader("Indicadores Críticos del Negocio")
+    
+    region = st.radio(
+        "Filtro de Análisis Regional:",
+        ["Global", "EE.UU.", "Europa", "China"],
+        horizontal=True,
+        key="reg_resumen"
+    )
+    
+    sufijo_finanzas = "Global" if region == "Global" else region
+    sufijo_mercado = "global" if region == "Global" else region
+
+    if region in ["EE.UU.", "China"]:
+        nombre_metrica_ventas = 'Beneficio de Ventas Totales'
+    else:
+        nombre_metrica_ventas = 'Ingresos por ventas'
+
+    ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    ven_val = extraer_kpi(df, equipo_seleccionado, nombre_metrica_ventas, f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
+    
+    share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
+    share_val = round(share_val, 1) if share_val != 0 else 0
+    
+    if region == "Global":
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
+        titulo_margen = "Margen ROS"
+    else:
+        margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
+        margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
+        titulo_margen = "Margen Contrib. (Combustión)"
+        
+    margen_val = round(margen_val, 1) if margen_val != 0 else 0
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(f"Beneficio Neto ({region})", f"${ben_val / 1000000:.2f}M")
+    col2.metric(f"Ingresos ({region})", f"${ven_val / 1000000:.2f}M")
+    col3.metric(f"Cuota de Mercado ({region})", f"{share_val}%")
+    col4.metric(titulo_margen, f"{margen_val}%")
+    
+    st.markdown("---")
+    st.info("Panel general de control operativo y financiero.")
+
+# --- PESTAÑA 3: ESTADOS FINANCIEROS ---
 with tab3:
     st.subheader("💰 Estados Financieros")
-    st.markdown("Cuenta de resultados resumida y flujos de caja operativos de la ronda.")
-    
-    df_fin = df[(df['Sección'].str.contains('Cuenta de resultados', case=False, na=False)) & 
-                (df['Equipo'] == equipo_seleccionado)].copy()
-                
+    df_fin = df[(df['Sección'].str.contains('Cuenta de resultados', case=False, na=False)) & (df['Equipo'] == equipo_seleccionado)].copy()
     if not df_fin.empty:
         st.dataframe(df_fin[['Sección', 'Métrica', 'Valor']], use_container_width=True, hide_index=True)
     else:
         st.warning("Sin datos financieros disponibles.")
 
+# --- PESTAÑA 4: RATIOS & VALUACIÓN ---
 with tab4:
     st.subheader("📈 Ratios & Valuación de Mercado")
-    st.markdown("Múltiplos de mercado, WACC, apalancamiento y calificación crediticia.")
-    
-    df_rat = df[(df['Sección'].str.contains('Ratios e indicadores|Valuación', case=False, na=False)) & 
-                (df['Equipo'] == equipo_seleccionado)].copy()
-                
+    df_rat = df[(df['Sección'].str.contains('Ratios e indicadores|Valuación', case=False, na=False)) & (df['Equipo'] == equipo_seleccionado)].copy()
     if not df_rat.empty:
         st.dataframe(df_rat[['Sección', 'Métrica', 'Valor']], use_container_width=True, hide_index=True)
     else:
         st.warning("Sin datos de ratios disponibles.")
 
+# --- PESTAÑA 5: MERCADO & PRECIOS (Scatter Plots con escalas fijas y grises sutiles) ---
 with tab5:
-    st.subheader("🌍 Informes de Mercado")
-    st.markdown("Análisis detallado de volúmenes, demanda insatisfecha y mix tecnológico.")
-    st.info("Utilice los gráficos de la pestaña 'Dinámica de Mercado' para el cruce de precios y características.")
-
-with tab6:
-    st.subheader("⚙️ Producción, Logística y Costos")
-    st.markdown("Control de capacidad instalada en plantas (EE.UU. y China), inventarios y aranceles de transporte.")
-    
-    df_prod = df[(df['Sección'].str.contains('Detalles de fabricación|Informe de costos|Detalles de logística', case=False, na=False)) & 
-                 (df['Equipo'] == equipo_seleccionado)].copy()
-                 
-    if not df_prod.empty:
-        # Mostramos una tabla resumen limpia con las métricas clave de costos y producción
-        st.dataframe(df_prod[['Sección', 'Métrica', 'Valor']].head(15), use_container_width=True, hide_index=True)
-    else:
-        st.warning("Sin datos operativos detallados en esta ronda.")
-
-with tab7:
-    st.subheader("👥 RRHH & Sostenibilidad (ESG)")
-    st.markdown("Métricas de dotación de personal, capacitaciones e impacto ambiental.")
-    st.info("Módulo en integración con los reportes de huella de carbono y personal.")
-
-with tab8:
-    st.subheader("🏆 Clasificación General de la Industria")
-    st.markdown("Ranking global de los equipos en función de su desempeño acumulado.")
-    
-    # Tabla comparativa general de Beneficio de la ronda para toda la industria
-    df_rank = df[df['Métrica'] == 'Beneficio de la ronda'].copy()
-    if not df_rank.empty:
-        df_rank = df_rank.sort_values(by='Valor', ascending=False).reset_index(drop=True)
-        st.dataframe(df_rank[['Equipo', 'Valor']].rename(columns={'Valor': 'Beneficio Neto'}), use_container_width=True, hide_index=True)
-
-with tab2:
-    st.subheader("Resumen Ejecutivo Global y Regional")
-
-
-with tab2:
     st.subheader("Elasticidad y Posicionamiento Estratégico")
     
     col_ctrl1, col_ctrl2 = st.columns(2)
-    region_merc = col_ctrl1.selectbox("Región a analizar", ["EE.UU.", "Europa", "China"], key="reg_merc")
-    tec_merc = col_ctrl2.selectbox("Tecnología", ["Combustión", "Híbrido", "Eléctrico", "Hidrógeno"], key="tec_merc")
+    region_merc = col_ctrl1.selectbox("Región a analizar", ["EE.UU.", "Europa", "China"], key="reg_merc_tab5")
+    tec_merc = col_ctrl2.selectbox("Tecnología", ["Combustión", "Híbrido", "Eléctrico", "Hidrógeno"], key="tec_merc_tab5")
     
     st.markdown("---")
     
@@ -221,7 +218,6 @@ with tab2:
         df_plot = pd.merge(df_precio[['Equipo', 'Precio']], df_share_tec[['Equipo', 'Cuota de Mercado (%)']], on='Equipo')
         df_plot = pd.merge(df_plot, df_caract[['Equipo', 'Características']], on='Equipo')
         
-        # Color: Verde para CADIZ, Gris visible ("#94A3B8") para la competencia
         df_plot['Color'] = df_plot['Equipo'].apply(lambda x: '#00E676' if x == equipo_seleccionado else '#94A3B8')
         
         col_graf1, col_graf2 = st.columns(2)
@@ -232,10 +228,7 @@ with tab2:
                 color='Color', color_discrete_map="identity",
                 title=f"Elasticidad Precio ({tec_merc} - {region_merc})"
             )
-            # Etiquetas visibles y marcadores con buen tamaño
             fig_precio.update_traces(textposition='top center', marker=dict(size=14))
-            
-            # ESCALAS FIJAS: Eje Y siempre de 0 a 35% para estandarizar la lectura
             fig_precio.update_layout(
                 xaxis_title="Precio de Venta", 
                 yaxis_title="Cuota de Mercado (%)",
@@ -251,8 +244,6 @@ with tab2:
                 title=f"Impacto de Características ({tec_merc} - {region_merc})"
             )
             fig_caract.update_traces(textposition='top center', marker=dict(size=14))
-            
-            # ESCALAS FIJAS en ambos ejes (Características de 0 a 6, Cuota de 0 a 35%)
             fig_caract.update_layout(
                 xaxis_title="Nivel de Características", 
                 yaxis_title="",
@@ -261,71 +252,24 @@ with tab2:
             )
             st.plotly_chart(fig_caract, use_container_width=True)
 
-
-with tab3:
-    st.subheader("Estados Financieros")
-    st.write("Cuenta de resultados, Balance General y Flujo de Efectivo desglosados.")
-
-with tab4:
-    st.subheader("Ratios y Valuación de Mercado")
-    st.write("WACC, múltiplos EV/EBITDA, apalancamiento y calificación crediticia.")
-
-with tab5:
-    st.subheader("Informes de Mercado")
-    st.write("Demanda, precios, características y gasto en promoción por región (EE.UU., Europa, China).")
-
+# --- PESTAÑA 6: PRODUCCIÓN & COSTOS ---
 with tab6:
-    st.subheader("Producción, Logística y Costos")
-    st.write("Capacidad de plantas, inventarios, aranceles y costos unitarios.")
+    st.subheader("⚙️ Producción, Logística y Costos")
+    df_prod = df[(df['Sección'].str.contains('Detalles de fabricación|Informe de costos|Detalles de logística', case=False, na=False)) & (df['Equipo'] == equipo_seleccionado)].copy()
+    if not df_prod.empty:
+        st.dataframe(df_prod[['Sección', 'Métrica', 'Valor']].head(15), use_container_width=True, hide_index=True)
+    else:
+        st.warning("Sin datos operativos detallados.")
 
+# --- PESTAÑA 7: RRHH & ESG ---
 with tab7:
-    st.subheader("RRHH y Sostenibilidad (ESG)")
-    st.write("Dotación, salarios, capacitación y huella ambiental.")
+    st.subheader("👥 RRHH & Sostenibilidad (ESG)")
+    st.info("Módulo en integración con los reportes de huella de carbono y personal.")
 
+# --- PESTAÑA 8: CLASIFICACIÓN ---
 with tab8:
-    st.subheader("Clasificación General de la Industria")
-    st.write("Ranking oficial de la ronda actual frente a toda la competencia.")
-    
-    # Selector Regional
-    region = st.radio(
-        "Filtro de Análisis Regional:",
-        ["Global", "EE.UU.", "Europa", "China"],
-        horizontal=True
-    )
-    
-    # Mapeo de sufijos para buscar en el Excel
-    sufijo_finanzas = "Global" if region == "Global" else region
-    sufijo_mercado = "global" if region == "Global" else region
-
-    # --- LÓGICA DE INGRESO REGIONAL ---
-    if region in ["EE.UU.", "China"]:
-        nombre_metrica_ventas = 'Beneficio de Ventas Totales'
-    else:
-        nombre_metrica_ventas = 'Ingresos por ventas'
-
-    ben_val = extraer_kpi(df, equipo_seleccionado, 'Beneficio de la ronda', f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
-    ven_val = extraer_kpi(df, equipo_seleccionado, nombre_metrica_ventas, f'Cuenta de resultados, miles USD, {sufijo_finanzas}')
-    
-    share_val = extraer_kpi(df, equipo_seleccionado, 'Total', f'Informe de mercado, {sufijo_mercado}')
-    share_val = round(share_val, 1) if share_val != 0 else 0
-    
-    if region == "Global":
-        margen_val = extraer_kpi(df, equipo_seleccionado, 'Rentabilidad de las ventas (ROS)', 'Ratios')
-        titulo_margen = "Margen ROS"
-    else:
-        margen_val = extraer_kpi(df, equipo_seleccionado, 'Margen de contribución', f'Desglose de margen por tec, miles USD, {region}')
-        margen_val = (margen_val / ven_val) * 100 if ven_val > 0 else 0
-        titulo_margen = "Margen Contrib. (Combustión)"
-        
-    margen_val = round(margen_val, 1) if margen_val != 0 else 0
-
-    col1, col2, col3, col4 = st.columns(4)
-    
-    col1.metric(f"Beneficio Neto ({region})", f"${ben_val / 1000000:.2f}M")
-    col2.metric(f"Ingresos ({region})", f"${ven_val / 1000000:.2f}M")
-    col3.metric(f"Cuota de Mercado ({region})", f"{share_val}%")
-    col4.metric(titulo_margen, f"{margen_val}%")
-    
-    st.markdown("---")
-    st.info("Espacio reservado para Gráficos de barra apiladas comparativos.")
-
+    st.subheader("🏆 Clasificación General de la Industria")
+    df_rank = df[df['Métrica'] == 'Beneficio de la ronda'].copy()
+    if not df_rank.empty:
+        df_rank = df_rank.sort_values(by='Valor', ascending=False).reset_index(drop=True)
+        st.dataframe(df_rank[['Equipo', 'Valor']].rename(columns={'Valor': 'Beneficio Neto'}), use_container_width=True, hide_index=True)
