@@ -1,13 +1,10 @@
-"""
-app.py — Tablero de Control Directivo, CÁDIZ Automotive
-"""
 import glob
 import os
 import re
-
 import numpy as np
-import pandas as pd"""
-app.py — Tablero de Control Directivo, CÁDIZ Automotive
+import pandas as pd
+# ... resto del código
+""" app.py — Tablero de Control Directivo, CÁDIZ Automotive
 """
 import glob
 import os
