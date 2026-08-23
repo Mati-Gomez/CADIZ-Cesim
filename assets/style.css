@@ -1,157 +1,71 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════════════════════════
-   VARIABLES DE MARCA — CADIZ
-   Streamlit ya expone --primary-color, --background-color,
-   --secondary-background-color y --text-color, y estas cambian
-   solas según el modo Light/Dark que elija el usuario en
-   Configuración > Settings. Acá solo agregamos las nuestras.
+   VARIABLES DE MARCA — CÁDIZ AUTOMOTIVE
    ══════════════════════════════════════════════════════════════ */
 :root {
-    --brand-accent: #D9FF50;
-    --brand-accent-ink: #1A1A2E;      /* texto sobre el verde */
-    --border-soft: rgba(128, 128, 128, 0.18);
-    --border-hover: rgba(26, 26, 46, 0.35);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.06);
-    --shadow-lg: 0 10px 28px rgba(0, 0, 0, 0.08);
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
+    --brand-accent: #B3261E;      /* Rojo CÁDIZ */
+    --brand-dark: #1A1714;        /* Negro/Grafito */
+    --brand-light: #F5F2ED;       /* Crema */
+    --brand-secondary: #7A1913;   /* Rojo oscuro */
+    
+    --border-soft: rgba(128, 128, 128, 0.15);
+    --radius-sm: 4px;             /* Bordes más duros/industriales */
+    --radius-md: 6px;
 }
 
 /* ══ BASE Y TIPOGRAFÍA ═════════════════════════════════════════ */
 html, body, .stApp {
-    font-family: 'Inter', sans-serif !important;
-    letter-spacing: -0.01em;
+    font-family: 'JetBrains Mono', monospace !important;
 }
-.block-container { padding-top: 2.5rem !important; max-width: 1200px; }
-h1 {
-    font-weight: 700 !important;
-    letter-spacing: -0.02em !important;
-    color: var(--text-color) !important;
-}
-h2, h3, h4 {
-    font-weight: 600 !important;
-    letter-spacing: -0.01em !important;
-    color: var(--text-color) !important;
-}
-p, span, label, .stMarkdown { color: var(--text-color); }
-.stCaption, [data-testid="stCaptionContainer"] p {
-    opacity: 0.62 !important;
-    font-size: 0.82rem !important;
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Oswald', sans-serif !important;
+    text-transform: uppercase;
+    letter-spacing: 0.02em !important;
 }
 
 /* ══ SIDEBAR ═══════════════════════════════════════════════════ */
 section[data-testid="stSidebar"] h3 {
     border-bottom: 3px solid var(--brand-accent);
-    padding-bottom: 8px;
+    padding-bottom: 4px;
     display: inline-block;
 }
 
-/* ══ RADIO / TOGGLE (navegación de secciones, modo oscuro) ═══════ */
-div[role="radiogroup"] label {
+/* ══ CARDS DE GRÁFICOS Y MÉTRICAS (Flat SaaS Design) ═══════════ */
+div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stMetric"] {
+    background-color: transparent !important;
+    border: 1px solid var(--border-soft) !important;
     border-radius: var(--radius-sm) !important;
-    transition: background-color 0.15s ease !important;
+    box-shadow: none !important; /* Eliminamos el relieve */
 }
-div[role="radiogroup"] label:hover { background-color: rgba(217, 255, 80, 0.08) !important; }
+
+div[data-testid="stMetric"] {
+    border-left: 3px solid var(--brand-accent) !important;
+    padding: 1rem !important;
+}
+
+div[data-testid="stMetricValue"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-weight: 700 !important;
+}
+div[data-testid="stMetricLabel"] {
+    font-family: 'Oswald', sans-serif !important;
+    text-transform: uppercase;
+    opacity: 0.7;
+}
+
+/* ══ TABS Y CONTROLES ══════════════════════════════════════════ */
+.stTabs [data-baseweb="tab-highlight"] { background-color: var(--brand-accent) !important; }
+.stTabs [aria-selected="true"] { font-weight: 700 !important; }
+
+div[role="radiogroup"] label:hover { background-color: rgba(179, 38, 30, 0.08) !important; }
 [data-testid="stToggle"] label div[data-checked="true"] {
     background-color: var(--brand-accent) !important;
 }
-
-/* ══ SELECT SLIDER (línea cronológica de rondas) ══════════════════ */
-div[data-testid="stSliderTickBarMax"], div[data-testid="stSliderTickBarMin"] {
-    font-size: 0.72rem !important; opacity: 0.6 !important;
-}
-div[data-baseweb="slider"] div[role="slider"] {
-    background-color: var(--brand-accent) !important;
+div[data-baseweb="slider"] div[role="slider"], div[data-baseweb="slider"] > div > div { 
+    background-color: var(--brand-accent) !important; 
     border-color: var(--brand-accent) !important;
-    box-shadow: var(--shadow-sm) !important;
 }
-div[data-baseweb="slider"] > div > div { background: var(--brand-accent) !important; }
-
-/* ══ TABS ══════════════════════════════════════════════════════ */
-.stTabs [data-baseweb="tab-highlight"] { background-color: var(--brand-accent) !important; }
-.stTabs [aria-selected="true"] { font-weight: 600 !important; }
-
-/* ══ CARDS DE GRÁFICOS (st.container(border=True)) ════════════════
-   Esto separa cada gráfico del fondo de la página — la pieza que
-   pediste. Streamlit ya le pone data-testid a los contenedores con
-   borde; acá solo los vestimos. */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: var(--radius-md) !important;
-    background-color: var(--secondary-background-color) !important;
-    border: 1px solid var(--border-soft) !important;
-    box-shadow: var(--shadow-sm) !important;
-    padding: 0.5rem 0.25rem !important;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
-    margin-bottom: 0.75rem !important;
-}
-div[data-testid="stVerticalBlockBorderWrapper"]:hover {
-    border-color: var(--brand-accent) !important;
-    box-shadow: var(--shadow-md) !important;
-}
-
-/* ══ MÉTRICAS ══════════════════════════════════════════════════ */
-div[data-testid="stMetric"] {
-    background-color: var(--secondary-background-color) !important;
-    border: 1px solid var(--border-soft) !important;
-    border-left: 3px solid var(--brand-accent) !important;
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0 !important;
-    padding: 0.9rem 1.1rem !important;
-    box-shadow: var(--shadow-sm) !important;
-    transition: box-shadow 0.2s ease, transform 0.2s ease !important;
-}
-div[data-testid="stMetric"]:hover {
-    box-shadow: var(--shadow-md) !important;
-    transform: translateY(-2px) !important;
-}
-div[data-testid="stMetricValue"] { font-weight: 700 !important; }
-div[data-testid="stMetricLabel"] { font-weight: 500 !important; opacity: 0.75; }
-
-/* ══ EXPANDERS ════════════════════════════════════════════════ */
-details[data-testid="stExpander"] {
-    border: 1px solid var(--border-soft) !important;
-    border-radius: var(--radius-md) !important;
-    overflow: hidden !important;
-    background-color: var(--secondary-background-color) !important;
-    box-shadow: var(--shadow-sm) !important;
-}
-details[data-testid="stExpander"] summary { font-weight: 600 !important; padding: 0.75rem 1rem !important; }
-
-/* ══ SELECT / INPUTS ═══════════════════════════════════════════ */
-.stTextInput input,
-.stNumberInput input,
-div[data-baseweb="select"] > div {
-    border-radius: var(--radius-sm) !important;
-    border: 1px solid var(--border-soft) !important;
-    background-color: var(--background-color) !important;
-    transition: border-color 0.15s ease !important;
-}
-.stTextInput input:focus,
-.stNumberInput input:focus,
-div[data-baseweb="select"]:focus-within > div {
-    border-color: var(--brand-accent) !important;
-    box-shadow: 0 0 0 3px rgba(217, 255, 80, 0.25) !important;
-}
-
-/* ══ TABLAS / DATAFRAMES ══════════════════════════════════════ */
-div[data-testid="stDataFrame"], div[data-testid="stTable"] {
-    border: 1px solid var(--border-soft) !important;
-    border-radius: var(--radius-sm) !important;
-    box-shadow: var(--shadow-sm) !important;
-    overflow: hidden !important;
-}
-
-/* ══ ALERTAS (success / error / warning / info) ═══════════════ */
-div[data-testid="stAlert"] {
-    border-radius: var(--radius-sm) !important;
-    border: 1px solid var(--border-soft) !important;
-    box-shadow: var(--shadow-sm) !important;
-}
-
-/* ══ DIVISOR ══════════════════════════════════════════════════ */
-hr { border-color: var(--text-color) !important; margin: 0.5rem 0 1.5rem !important; opacity: 0.12; }
-
-/* ══ OCULTAR FIRMA DE STREAMLIT ═══════════════════════════════ */
-footer { visibility: hidden; }
