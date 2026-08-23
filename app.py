@@ -1,7 +1,20 @@
-File "/mount/src/cadiz-cesim/app.py", line 5
-  import os"""
-           ^
-SyntaxError: invalid syntax
+import glob
+import os
+import re
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+
+from cesim_parser import build_historico
+
+# --- IDENTIDAD Y PALETA SEMÁNTICA ---
+MY_COMPANY = 'CADIZ'
+COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
+
+# ... (ACÁ SIGUE EL RESTO DEL CÓDIGO) ...
 
 BRAND_ACCENT = '#B3261E'       # Rojo CÁDIZ
 COLOR_POSITIVE = '#94D02D'     # Verde Lima
