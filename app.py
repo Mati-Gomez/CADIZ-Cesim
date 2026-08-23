@@ -278,60 +278,47 @@ def seccion_resultado():
 # SECCIÓN 2 — MERCADO
 # =================================================================
 def seccion_mercado():
-    tab1, tab2 = st.tabs(['Mapa de posicionamiento', 'Mix tecnológico'])
+    tab1, tab2 = st.tabs(['Precio vs. Ventas', 'Características vs. Ventas'])
     tecnologias = ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno']
 
-    with tab1:
+    def scatter_posicionamiento(eje_x_metrica, eje_x_label, key_prefix):
         c1, c2 = st.columns(2)
-        pais_sel = c1.selectbox('País', ['EE.UU.', 'China', 'Europa'], key='pais_mercado_pos')
-        tech_sel = c2.selectbox('Tecnología', tecnologias, key='tech_mercado_pos')
+        pais_sel = c1.selectbox('País', ['EE.UU.', 'China', 'Europa'], key=f'pais_{key_prefix}')
+        tech_sel = c2.selectbox('Tecnología', tecnologias, key=f'tech_{key_prefix}')
         estado_pais = f'Informe de mercado, {pais_sel}'
         sub = df[(df['Estado'] == estado_pais) & (df['Seccion'] == tech_sel) & (df['Ronda'] == ronda_snapshot)]
-        precio = sub[sub['Metrica'].str.contains('Precio de venta', na=False)][['Empresa', 'Valor']].rename(columns={'Valor': 'Precio'})
+        eje_x = sub[sub['Metrica'] == eje_x_metrica][['Empresa', 'Valor']].rename(columns={'Valor': eje_x_label})
         ventas = sub[sub['Metrica'] == 'Ventas, miles unidades'][['Empresa', 'Valor']].rename(columns={'Valor': 'Ventas'})
-        pos = precio.merge(ventas, on='Empresa', how='inner')
-        pos['Precio'] = num(pos['Precio'])
+        pos = eje_x.merge(ventas, on='Empresa', how='inner')
+        pos[eje_x_label] = num(pos[eje_x_label])
         pos['Ventas'] = num(pos['Ventas'])
-        pos = pos.dropna(subset=['Precio', 'Ventas'])
+        pos = pos.dropna(subset=[eje_x_label, 'Ventas'])
         pos = pos[pos['Ventas'] > 0]
         if pos.empty:
             st.info(f'Ningún equipo vendió {tech_sel} en {pais_sel} en {ronda_snapshot}.')
-        else:
-            fig = px.scatter(pos, x='Precio', y='Ventas', color='Empresa', color_discrete_map=COLOR_MAP,
-                              size=pos['Ventas'].abs(), text='Empresa',
-                              title=f'Precio vs. Ventas — {tech_sel}, {pais_sel}, {ronda_snapshot}')
-            fig.update_traces(textposition='top center', showlegend=False)
-            fig.update_layout(plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
+            return
+        fig = px.scatter(pos, x=eje_x_label, y='Ventas', color='Empresa', color_discrete_map=COLOR_MAP,
+                          size=pos['Ventas'].abs(), text='Empresa',
+                          title=f'{eje_x_label} vs. Ventas — {tech_sel}, {pais_sel}, {ronda_snapshot}')
+        fig.update_traces(textposition='top center', showlegend=False)
+        fig.update_layout(plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab1:
+        scatter_posicionamiento('Precio de venta, USD', 'Precio (USD)', 'mercado_precio')
 
     with tab2:
-        pais_sel2 = st.selectbox('País', ['EE.UU.', 'China', 'Europa'], key='pais_mix')
-        estado_pais = f'Informe de mercado, {pais_sel2}'
-        sub = df[(df['Estado'] == estado_pais) & (df['Empresa'] == empresa_analisis) &
-                 (df['Seccion'].isin(tecnologias)) & (df['Metrica'] == 'Ventas, miles unidades')].copy()
-        sub['Valor'] = num(sub['Valor']).abs()
-        if sub.empty:
-            st.info('Sin datos de ventas por tecnología para esta combinación.')
-        else:
-            piv = sub.pivot_table(index=['Ronda', 'Ronda_Orden'], columns='Seccion', values='Valor', aggfunc='sum').reset_index()
-            piv = piv.sort_values('Ronda_Orden')
-            tech_cols = [t for t in tecnologias if t in piv.columns]
-            piv[tech_cols] = piv[tech_cols].div(piv[tech_cols].sum(axis=1), axis=0) * 100
-            fig = go.Figure()
-            for t in tech_cols:
-                fig.add_trace(go.Bar(x=piv['Ronda'], y=piv[t], name=t))
-            fig.update_layout(barmode='stack', title=f'Mix tecnológico — {empresa_analisis}, {pais_sel2} (% de ventas)',
-                               plot_bgcolor='rgba(0,0,0,0)', yaxis_title='%')
-            st.plotly_chart(fig, use_container_width=True)
+        scatter_posicionamiento('Cantidad de características ofrecidas', 'Características ofrecidas', 'mercado_caract')
 
 
 # =================================================================
 # SECCIÓN 3 — OPERACIONES Y COSTOS
 # =================================================================
 def seccion_operaciones():
-    tab1, tab2, tab3, tab4 = st.tabs(['Capacidad instalada', 'Puente de inventario', 'Estructura de costos', 'Mapa de flujos'])
+    tab1, tab2, tab3 = st.tabs(['Capacidad y stock', 'Estructura de costos', 'Mapa de flujos'])
 
     with tab1:
+        st.subheader('Capacidad instalada')
         cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') &
                   (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
                   (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
@@ -349,10 +336,11 @@ def seccion_operaciones():
                         gauge={'axis': {'range': [0, 100]},
                                'bar': {'color': BRAND_ACCENT},
                                'steps': [{'range': [0, 70], 'color': '#EAEAF2'}, {'range': [70, 100], 'color': '#D8D8E8'}]}))
-                    fig.update_layout(height=280)
+                    fig.update_layout(height=260, margin=dict(t=60, b=10))
                     st.plotly_chart(fig, use_container_width=True)
 
-    with tab2:
+        st.divider()
+        st.subheader('Puente de inventario')
         pais_sel = st.selectbox('País', ['EE.UU.', 'China', 'Europa'], key='pais_inventario')
         log = df[(df['Estado'] == 'Detalles de logística') & (df['Empresa'] == empresa_analisis) &
                  (df['Subgrupo'] == pais_sel)].copy()
@@ -363,31 +351,46 @@ def seccion_operaciones():
         if log_b.empty:
             st.info('Sin datos de logística para esta combinación.')
         else:
-            piv = log_b.pivot_table(index=['Ronda', 'Ronda_Orden'], columns='Metrica', values='Valor', aggfunc='sum').reset_index().sort_values('Ronda_Orden')
-            fig = go.Figure()
-            for m in metricas_bridge:
-                if m in piv.columns:
-                    fig.add_trace(go.Bar(x=piv['Ronda'], y=piv[m], name=m))
-            fig.update_layout(barmode='group', title=f'Producción vs. ventas vs. stock — {empresa_analisis}, {pais_sel}',
-                               plot_bgcolor='rgba(0,0,0,0)')
+            d = log_b[log_b['Ronda'] == ronda_snapshot].set_index('Metrica')['Valor']
+            fig = go.Figure(go.Bar(
+                x=metricas_bridge, y=[d.get(m, 0) for m in metricas_bridge],
+                text=[f'{d.get(m, 0):,.0f}' for m in metricas_bridge], textposition='outside',
+                marker_color=[BRAND_ACCENT if m == f'Ventas en {pais_sel}' else '#8C8FA3' for m in metricas_bridge]))
+            fig.update_layout(title=f'Producción vs. ventas vs. stock — {empresa_analisis}, {pais_sel}, {ronda_snapshot}',
+                               plot_bgcolor='rgba(0,0,0,0)', bargap=0.35, height=420)
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        pl = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
+                (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
+
+        def g(metrica):
+            r = pl[pl['Metrica'] == metrica]['Valor']
+            return pd.to_numeric(r.iloc[0], errors='coerce') if len(r) else 0.0
+
+        ingresos = g('Ingresos por ventas')
+        etapas = [
+            ('Ingresos', ingresos),
+            ('- Fabricación interna', ingresos - g('Costos de fabricación interna')),
+        ]
+        etapas.append(('- Característica', etapas[-1][1] - g('Costos de la característica')))
+        etapas.append(('- Fabricación contratada', etapas[-1][1] - g('Costos de fabricación contratada')))
+        etapas.append(('- Transporte y aranceles', etapas[-1][1] - g('Costos de transporte y aranceles')))
+        etapas.append(('- I+D, Promoción, Admin.', etapas[-1][1] - g('I+D') - g('Promoción') - g('Administración')))
+        etapas.append(('= EBITDA', etapas[-1][1]))
+
+        if ingresos == 0:
+            st.info('No hay datos de cuenta de resultados para esta combinación.')
+        else:
+            labels = [e[0] for e in etapas]
+            valores = [e[1] for e in etapas]
+            fig = go.Figure(go.Funnel(
+                y=labels, x=valores, textposition='inside', textinfo='value+percent initial',
+                marker={'color': [BRAND_DARK] + [MUTED_PALETTE[i % len(MUTED_PALETTE)] for i in range(len(labels) - 2)] + [BRAND_ACCENT]}))
+            fig.update_layout(title=f'Estructura de costos (funnel) — {empresa_analisis}, {ronda_snapshot}', height=480)
             st.plotly_chart(fig, use_container_width=True)
 
     with tab3:
-        pl = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis)].copy()
-        pl['Valor'] = num(pl['Valor'])
-        items = ['Costos de fabricación interna', 'Costos de la característica', 'Costos de fabricación contratada', 'Costos de transporte y aranceles']
-        piv = pl[pl['Metrica'].isin(items)].pivot_table(index=['Ronda', 'Ronda_Orden'], columns='Metrica', values='Valor', aggfunc='sum').reset_index().sort_values('Ronda_Orden')
-        if piv.empty:
-            st.info('Sin datos de costos.')
-        else:
-            fig = go.Figure()
-            for it in items:
-                if it in piv.columns:
-                    fig.add_trace(go.Bar(x=piv['Ronda'], y=piv[it], name=it))
-            fig.update_layout(barmode='stack', title=f'Estructura de costos — {empresa_analisis}', plot_bgcolor='rgba(0,0,0,0)')
-            st.plotly_chart(fig, use_container_width=True)
-
-    with tab4:
         st.info('Mapa de flujos (Sankey planta → mercado) — próximo paso, se arma sobre "Origen de productos vendidos en" '
                 'de Detalles de logística en cuanto tengamos más de una ronda para que valga la pena visualizarlo.')
 
@@ -396,20 +399,16 @@ def seccion_operaciones():
 # SECCIÓN 4 — FINANZAS
 # =================================================================
 def seccion_finanzas():
-    tab1, tab2 = st.tabs(['Radar vs. industria', 'Beneficio vs. deuda'])
+    tab1, tab2 = st.tabs(['Desempeño vs. industria', 'Beneficio vs. deuda'])
 
     with tab1:
+        st.caption(f'{empresa_analisis} — {ronda_snapshot}. Delta = variación % contra el promedio de los 7 equipos.')
+        pl_ronda = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Ronda'] == ronda_snapshot)].copy()
+        pl_ronda['Valor'] = num(pl_ronda['Valor'])
         ratios_ronda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)].copy()
         ratios_ronda['Valor'] = num(ratios_ronda['Valor'])
         val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)].copy()
         val_ronda['Valor'] = num(val_ronda['Valor'])
-
-        ejes = {
-            'Margen bruto': 'Margen bruto',
-            'ROS': 'Rentabilidad de las ventas (ROS)',
-            'ROE': 'Rendimiento de los Fondos Propios (ROE)',
-            'Apalancamiento': 'Endeudamiento neto/patrimonio (apalancamiento)',
-        }
 
         def wacc_por_empresa(empresa):
             de = valor_de(val_ronda, metrica='Deuda a patrimonio', empresa=empresa)
@@ -421,34 +420,30 @@ def seccion_finanzas():
             d_w = de / (1 + de)
             return e_w * re_ + d_w * rd
 
-        datos = {}
-        for eje, metrica in ejes.items():
-            vals = {emp: valor_de(ratios_ronda, metrica=metrica, empresa=emp) for emp in COMPANIES}
-            datos[eje] = vals
-        datos['WACC'] = {emp: wacc_por_empresa(emp) for emp in COMPANIES}
+        tarjetas = [
+            ('EBITDA, miles USD', {emp: valor_de(pl_ronda, metrica='Beneficio operativo antes de depreciación (EBITDA)', empresa=emp) for emp in COMPANIES}, ',.0f'),
+            ('Beneficio de la ronda, miles USD', {emp: valor_de(pl_ronda, metrica='Beneficio de la ronda', empresa=emp) for emp in COMPANIES}, ',.0f'),
+            ('Margen bruto, %', {emp: valor_de(ratios_ronda, metrica='Margen bruto', empresa=emp) for emp in COMPANIES}, '.1f'),
+            ('ROS, %', {emp: valor_de(ratios_ronda, metrica='Rentabilidad de las ventas (ROS)', empresa=emp) for emp in COMPANIES}, '.1f'),
+            ('ROE, %', {emp: valor_de(ratios_ronda, metrica='Rendimiento de los Fondos Propios (ROE)', empresa=emp) for emp in COMPANIES}, '.1f'),
+            ('Apalancamiento (deuda/patrimonio)', {emp: valor_de(ratios_ronda, metrica='Endeudamiento neto/patrimonio (apalancamiento)', empresa=emp) for emp in COMPANIES}, '.1f'),
+            ('WACC, %', {emp: wacc_por_empresa(emp) for emp in COMPANIES}, '.1f'),
+        ]
 
-        ejes_finales = [e for e in datos if any(v is not None for v in datos[e].values())]
-        if not ejes_finales:
-            st.info('Sin datos de ratios para esta ronda.')
-        else:
-            industria = {e: np.nanmean([v for v in datos[e].values() if v is not None]) for e in ejes_finales}
-            empresa_idx = []
-            promedio_idx = []
-            for e in ejes_finales:
-                v = datos[e].get(empresa_analisis)
-                prom = industria[e]
-                empresa_idx.append(100.0 if (v is None or prom in (0, None)) else v / prom * 100)
-                promedio_idx.append(100.0)
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(r=promedio_idx + promedio_idx[:1], theta=ejes_finales + ejes_finales[:1],
-                                           fill='toself', name='Promedio industria', line=dict(color='#B7B9C6')))
-            fig.add_trace(go.Scatterpolar(r=empresa_idx + empresa_idx[:1], theta=ejes_finales + ejes_finales[:1],
-                                           fill='toself', name=empresa_analisis, line=dict(color=BRAND_ACCENT)))
-            fig.update_layout(title=f'{empresa_analisis} vs. promedio industria (100 = promedio) — {ronda_snapshot}',
-                               polar=dict(radialaxis=dict(visible=True)))
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption('WACC calculado a partir de Beta, Deuda a Patrimonio, Rendimiento esperado del patrimonio y '
-                       'Costo de la deuda después de impuestos (Cesim no lo exporta como campo directo).')
+        cols = st.columns(4)
+        for i, (nombre, vals, fmt) in enumerate(tarjetas):
+            validos = [v for v in vals.values() if v is not None]
+            if not validos:
+                continue
+            promedio = np.nanmean(validos)
+            v_empresa = vals.get(empresa_analisis)
+            with cols[i % 4]:
+                if v_empresa is None:
+                    st.metric(nombre, '—')
+                else:
+                    delta_pct = ((v_empresa - promedio) / promedio * 100) if promedio not in (0, None) else None
+                    st.metric(nombre, f'{v_empresa:{fmt}}',
+                              delta=f'{delta_pct:+.1f}% vs. industria' if delta_pct is not None else None)
 
     with tab2:
         c1, c2 = st.columns(2)
@@ -488,15 +483,16 @@ def seccion_rrhh_sostenibilidad():
 
     with tab2:
         pais_sel = st.selectbox('País', ['EE.UU.', 'China'], key='pais_ambiental')
-        amb = df[(df['Estado'] == 'Informe ESG') & (df['Seccion'] == f'Impacto ambiental, {pais_sel}') &
-                 (df['Ronda'] == ronda_snapshot)].copy()
-        opciones = sorted(amb['Subgrupo'].unique())
-        if not opciones:
-            st.info('Sin datos ambientales para este país.')
-        else:
-            sub_sel = st.selectbox('Indicador', opciones, key='indicador_ambiental')
-            sub_amb = amb[(amb['Subgrupo'] == sub_sel) & (amb['Metrica'].str.contains('Total', na=False))]
-            chart_comparacion_equipos(sub_amb, f'{sub_sel} — {pais_sel}', ronda=ronda_snapshot)
+        indicadores = {
+            'Emisiones de CO2': 'Total, toneladas métricas',
+            'Consumo de energía': 'Total, MWh',
+            'Consumo de agua': 'Total, miles de m3',
+        }
+        sub_sel = st.selectbox('Indicador', list(indicadores.keys()), key='indicador_ambiental')
+        metrica_real = indicadores[sub_sel]
+        sub_amb = df[(df['Estado'] == 'Informe ESG') & (df['Seccion'] == f'Impacto ambiental, {pais_sel}') &
+                     (df['Metrica'] == metrica_real) & (df['Ronda'] == ronda_snapshot)]
+        chart_comparacion_equipos(sub_amb, f'{sub_sel} ({metrica_real}) — {pais_sel}', ronda=ronda_snapshot)
 
     with tab3:
         st.caption('Lectura exploratoria: cruza el puntaje ESG de los 7 equipos contra sus ventas en cada región, '
