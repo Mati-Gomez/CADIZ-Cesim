@@ -401,7 +401,7 @@ def seccion_finanzas():
     ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
     margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
     ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
-    caja_val = valor_de(val_ronda, 'Caja y equivalentes de efectivo', empresa_analisis) # Métrica clave de caja
+    caja_val = valor_de(val_ronda, 'Caja y equivalentes de efectivo', empresa_analisis)
 
     with c_cp1: st.metric('EBITDA (USD)', format_num(ebitda_val))
     with c_cp2: st.metric('Margen Bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
@@ -435,8 +435,8 @@ def seccion_finanzas():
             fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[1], line_width=2), showlegend=False))
             if vcadiz is not None:
                 fig_rango.add_trace(go.Scatter(x=[pos(vcadiz)], y=[i], mode='markers', marker=dict(size=14, color=BRAND_ACCENT), showlegend=False))
-            fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=COLOR_REF_LINE))
-            fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=COLOR_REF_LINE))
+            fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color='rgba(255,255,255,0.5)'))
+            fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color='rgba(255,255,255,0.5)'))
             
         fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-10, 110]), height=250, title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
         mostrar(fig_rango, ocultar_eje_valores='x')
