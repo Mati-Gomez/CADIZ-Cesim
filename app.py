@@ -137,7 +137,7 @@ filtro_tipo = st.sidebar.radio('Ecosistema', ['Práctica', 'Oficial'], horizonta
 
 rondas_timeline = ['Práctica 1', 'Práctica 2', 'Práctica 3'] if filtro_tipo == 'Práctica' else [f'Ronda {i}' for i in range(1, 13)]
 ronda_snapshot = st.sidebar.select_slider('Ronda de análisis', options=rondas_timeline, value=rondas_timeline[0])
-empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0)
+empresa_analisis = st.sidebar.selectbox('Equipo in foco', COMPANIES, index=0)
 
 st.sidebar.divider()
 modo_oscuro = st.sidebar.toggle('Modo oscuro', value=True, key='modo_oscuro')
@@ -368,7 +368,6 @@ def seccion_operaciones():
             ventas = abs(d.get(f'Ventas en {pais_sel}', 0) or 0)
             exp = sum(abs(v) for k, v in d.items() if k.startswith('Exportado a') and pd.notna(v))
             inv_fin = d.get('Inventario final', 0) or 0
-            demanda_insat = d.get('Demanda insatisfecha', 0) or 0
             fig_inv = go.Figure(go.Waterfall(
                 orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'relative', 'total'],
                 x=['Inv Inicial', '+ Prod', '+ Import', '- Ventas', '- Export', '= Inv Final'],
@@ -379,6 +378,34 @@ def seccion_operaciones():
             ))
             fig_inv.update_layout(title='Puente de Inventario Físico')
             mostrar(fig_inv, ocultar_eje_valores='y')
+
+        st.divider()
+        log_tech = df[(df['Estado'] == 'Detalles de logística') & (df['Empresa'] == empresa_analisis) & (df['Seccion'] == f'{tech_sel}, miles unidades') & (df['Ronda'] == ronda_snapshot)]
+        def val_log(planta, metrica):
+            r = log_tech[(log_tech['Subgrupo'] == planta) & (log_tech['Metrica'] == metrica)]['Valor']
+            return abs(pd.to_numeric(r.iloc[0], errors='coerce')) if len(r) else 0.0
+
+        destinos = ['EE.UU.', 'China', 'Europa']
+        matriz = pd.DataFrame(0.0, index=['EE.UU.', 'China', 'Subcontratado'], columns=destinos)
+        for planta in ['EE.UU.', 'China']:
+            interna, contratada = val_log(planta, 'Producción interna'), val_log(planta, 'Producción contratada')
+            tot = interna + contratada
+            flows = {dst: val_log(planta, f'Ventas en {planta}' if dst == planta else f'Exportado a {dst}') for dst in destinos}
+            if tot > 0:
+                for dst in destinos:
+                    matriz.loc[planta, dst] += flows[dst] * (interna/tot)
+                    matriz.loc['Subcontratado', dst] += flows[dst] * (contratada/tot)
+
+        if matriz.sum().sum() > 0:
+            fig3 = px.imshow(matriz.values, x=destinos, y=matriz.index, text_auto='.0f', aspect='auto', color_continuous_scale=[[0, BRAND_LIGHT], [1, BRAND_ACCENT]])
+            fig3.update_coloraxes(showscale=False)
+            fig3.update_xaxes(title_text='Destino (Mercado)')
+            fig3.update_yaxes(title_text='Origen (Planta)')
+            fig3.update_traces(xgap=3, ygap=3) 
+            fig3.update_layout(title='Matriz Logística (Heatmap Origen -> Destino)')
+            mostrar(fig3)
+        else:
+            st.info(f"Sin flujos logísticos de {tech_sel} para mostrar en esta ronda.")
 
 # =================================================================
 # SECCIÓN 4 — FINANZAS (Corto y Largo Plazo)
@@ -401,12 +428,14 @@ def seccion_finanzas():
     ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
     margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
     ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
-    caja_val = valor_de(val_ronda, 'Caja y equivalentes de efectivo', empresa_analisis)
+    
+    # Búsqueda robusta para Caja Final (busca CUALQUIER métrica que contenga la palabra 'caja')
+    caja_val = valor_fuzzy(val_ronda, 'Caja')
 
     with c_cp1: st.metric('EBITDA (USD)', format_num(ebitda_val))
     with c_cp2: st.metric('Margen Bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
     with c_cp3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
-    with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val))
+    with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
 
     st.divider()
 
@@ -480,17 +509,20 @@ def seccion_rrhh_sostenibilidad():
         salario = rrhh[rrhh['Metrica'] == 'Salario mensual, USD'].sort_values('Ronda_Orden')
         rotacion = rrhh[rrhh['Metrica'] == 'Rotación de personal, %'].sort_values('Ronda_Orden')
         if not salario.empty and not rotacion.empty:
-            fig = go.Figure()
-            # Si hay una sola ronda, usamos 'markers' para evitar el error de trazo de línea
-            modo_trazo = 'lines+markers' if len(salario) > 1 else 'markers'
-            fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode=modo_trazo, line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
-            fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode=modo_trazo, line=dict(color=COLOR_POSITIVE, width=2, dash='dash'), yaxis='y2'))
-            max_rot = max(15, rotacion['Valor'].max() * 1.2 if not rotacion['Valor'].empty else 15)
-            fig.update_layout(title='Evolución: Salario vs Rotación',
-                              yaxis=dict(title='Salario (USD)', rangemode='tozero', side='left'),
-                              yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
-                              legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-            mostrar(fig)
+            # Si hay 1 sola ronda, mostramos métricas ejecutivas directas limpias para evitar puntos flotantes deformes
+            if len(salario) == 1:
+                st.metric("Salario Mensual Actual", f"${salario['Valor'].iloc[0]:,.0f}")
+                st.metric("Rotación de Personal Actual", f"{rotacion['Valor'].iloc[0]:,.1f}%")
+            else:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode='lines+markers', line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
+                fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers', line=dict(color=COLOR_POSITIVE, width=2, dash='dash'), yaxis='y2'))
+                max_rot = max(15, rotacion['Valor'].max() * 1.2)
+                fig.update_layout(title='Evolución: Salario vs Rotación',
+                                  yaxis=dict(title='Salario (USD)', rangemode='tozero', side='left'),
+                                  yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
+                                  legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                mostrar(fig)
 
     with col_b:
         st.subheader('IMPACTO AMBIENTAL')
