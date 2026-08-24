@@ -388,9 +388,65 @@ def seccion_finanzas():
     with c_cp3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
     with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
     st.divider()
+
+    # Subsección 1.5: Deuda y Liquidez — "¿tuvimos que salir a pedir plata de apuro?"
+    st.subheader('Deuda y Liquidez')
+    bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
+    deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
+    deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
+    calif_val = valor_de(ratios_ronda, 'Calificación crediticia', empresa_analisis)
+    prom_deuda_cp = np.nanmean([v for v in deuda_cp_vals.values() if v is not None]) if any(v is not None for v in deuda_cp_vals.values()) else None
+    val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
+
+    c_dl1, c_dl2, c_dl3 = st.columns(3)
+    with c_dl1:
+        delta_cp = ((val_deuda_cp - prom_deuda_cp) / prom_deuda_cp * 100) if prom_deuda_cp and val_deuda_cp is not None else None
+        st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
+                   delta=f'{delta_cp:+.1f}% vs Prom' if delta_cp is not None else None, delta_color='inverse')
+    with c_dl2:
+        st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
+    with c_dl3:
+        st.metric('Calificación crediticia', calif_val if calif_val else '—')
+    if val_deuda_cp and val_deuda_cp > 0:
+        st.caption(f'⚠️ {empresa_analisis} tomó {format_num(val_deuda_cp)} USD de deuda de corto plazo NO planificada en {ronda_snapshot} '
+                   '— es el sobregiro automático de Cesim cuando la caja no alcanza para cubrir obligaciones, y suele venir con tasa de interés penal.')
+
+    col_dl_a, col_dl_b = st.columns(2)
+    with col_dl_a:
+        deuda_cp_sub = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Metrica'] == 'Deudas a corto plazo (no planificadas)')]
+        chart_evolucion(deuda_cp_sub, 'Deuda CP no planificada (USD)')
+    with col_dl_b:
+        ranking_deuda = pd.DataFrame(list(deuda_cp_vals.items()), columns=['Empresa', 'Valor']).dropna().sort_values('Valor', ascending=False)
+        if not ranking_deuda.empty and ranking_deuda['Valor'].sum() > 0:
+            fig_dcp = px.bar(ranking_deuda, x='Empresa', y='Valor', color='Empresa', color_discrete_map=COLOR_MAP,
+                              title=f'Deuda CP no planificada — {ronda_snapshot}')
+            fig_dcp.update_traces(text=ranking_deuda['Valor'].apply(format_num), textposition='outside', cliponaxis=False, showlegend=False)
+            mostrar(fig_dcp, ocultar_eje_valores='y')
+        else:
+            st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
+
+    st.divider()
     # Subsección 2: Largo Plazo (Estructura, Retorno y Rangos)
     st.subheader('Largo Plazo: Estructura, Retorno y Competencia')
-    
+
+    st.markdown('**Costo de la deuda por mercado**')
+    tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
+                       'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
+    tasas_rows = []
+    for etiqueta, metrica in tasas_metricas.items():
+        val_emp = valor_de(ratios_ronda, metrica, empresa_analisis)
+        prom = np.nanmean([valor_de(ratios_ronda, metrica, e) for e in COMPANIES if valor_de(ratios_ronda, metrica, e) is not None])
+        if val_emp is not None:
+            tasas_rows.append({'Mercado': etiqueta, empresa_analisis: val_emp, 'Promedio industria': prom})
+    if tasas_rows:
+        tasas_df = pd.DataFrame(tasas_rows).melt(id_vars='Mercado', var_name='Serie', value_name='Tasa, %')
+        fig_tasas = px.bar(tasas_df, x='Mercado', y='Tasa, %', color='Serie', barmode='group',
+                            color_discrete_map={empresa_analisis: BRAND_ACCENT, 'Promedio industria': MUTED_PALETTE[0]},
+                            title=f'Tasa de interés por mercado y plazo — {empresa_analisis} vs. industria, {ronda_snapshot}')
+        fig_tasas.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+        mostrar(fig_tasas)
+        st.caption('Tasas más altas en general reflejan menor calificación crediticia — se pueden comparar directo contra la calificación de arriba.')
+
     datos_lp = {
         'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
         'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
@@ -459,27 +515,84 @@ def seccion_finanzas():
 # SECCIÓN 5 — RRHH Y SOSTENIBILIDAD
 # =================================================================
 def seccion_rrhh_sostenibilidad():
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.subheader('SALARIOS VS ROTACIÓN')
+    bloque_rrhh, bloque_sost = st.tabs(['Personal y Talento', 'Sostenibilidad'])
+
+    with bloque_rrhh:
         rrhh = df_all[(df_all['Estado'] == 'Informe de RRHH') & (df_all['Empresa'] == empresa_analisis)].copy()
         rrhh['Valor'] = num(rrhh['Valor'])
-        salario = rrhh[rrhh['Metrica'] == 'Salario mensual, USD'].sort_values('Ronda_Orden')
-        rotacion = rrhh[rrhh['Metrica'] == 'Rotación de personal, %'].sort_values('Ronda_Orden')
-        if not salario.empty and not rotacion.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode='lines+markers', line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
-            fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers', line=dict(color=COLOR_POSITIVE, width=2, dash='dash'), yaxis='y2'))
-            
-            max_rot = max(20, rotacion['Valor'].max() * 1.3 if not rotacion['Valor'].empty else 20)
-            max_sal = max(6000, salario['Valor'].max() * 1.2 if not salario['Valor'].empty else 6000)
-            
-            fig.update_layout(title='Evolución: Salario vs Rotación',
-                              yaxis=dict(title='Salario (USD)', range=[0, max_sal], rangemode='tozero', side='left'),
-                              yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
-                              legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-            mostrar(fig)
-    with col_b:
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader('SALARIO VS ROTACIÓN')
+            salario = rrhh[rrhh['Metrica'] == 'Salario mensual, USD'].sort_values('Ronda_Orden')
+            rotacion = rrhh[rrhh['Metrica'] == 'Rotación de personal, %'].sort_values('Ronda_Orden')
+            if not salario.empty and not rotacion.empty:
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode='lines+markers', line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
+                fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers', line=dict(color=COLOR_POSITIVE, width=2, dash='dash'), yaxis='y2'))
+                max_rot = max(20, rotacion['Valor'].max() * 1.3 if not rotacion['Valor'].empty else 20)
+                max_sal = max(6000, salario['Valor'].max() * 1.2 if not salario['Valor'].empty else 6000)
+                fig.update_layout(title='Evolución: Salario vs Rotación',
+                                  yaxis=dict(title='Salario (USD)', range=[0, max_sal], rangemode='tozero', side='left'),
+                                  yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
+                                  legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                mostrar(fig)
+        with col_b:
+            st.subheader('ROTACIÓN VS CONTRATACIONES')
+            st.caption('Cuántas contrataciones netas hizo falta hacer, en la misma ronda en que se dio la rotación.')
+            contrat = rrhh[rrhh['Metrica'] == 'Contrataciones + / despidos -'].sort_values('Ronda_Orden')
+            if not salario.empty and not contrat.empty and not rotacion.empty:
+                fig_ch = go.Figure()
+                fig_ch.add_trace(go.Bar(x=contrat['Ronda'], y=contrat['Valor'], name='Contrataciones netas (personas)',
+                                         marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                fig_ch.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers',
+                                             line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                fig_ch.update_layout(title='Rotación vs. Contrataciones netas',
+                                      yaxis=dict(title='Personas', side='left', rangemode='tozero'),
+                                      yaxis2=dict(title='Rotación, %', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
+                                      legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                mostrar(fig_ch)
+
+        st.divider()
+        col_c, col_d = st.columns(2)
+        with col_c:
+            st.subheader('INVERSIÓN EN I+D')
+            idn = rrhh[rrhh['Metrica'] == 'Número de personal de I+D, esta ronda'].sort_values('Ronda_Orden')
+            idc = rrhh[rrhh['Metrica'] == 'Otros costos variables de I + D'].sort_values('Ronda_Orden')
+            if not idn.empty and not idc.empty:
+                fig_id = go.Figure()
+                fig_id.add_trace(go.Bar(x=idc['Ronda'], y=idc['Valor'], name='Costo variable I+D (USD)',
+                                         marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                fig_id.add_trace(go.Scatter(x=idn['Ronda'], y=idn['Valor'], name='Personal I+D (headcount)', mode='lines+markers',
+                                             line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                fig_id.update_layout(title='Inversión en I+D: costo vs. dotación',
+                                      yaxis=dict(title='Costo variable, USD', side='left', rangemode='tozero'),
+                                      yaxis2=dict(title='Personal I+D', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
+                                      legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                mostrar(fig_id)
+            else:
+                st.info('Sin datos de I+D para este equipo.')
+        with col_d:
+            st.subheader('CAPACITACIÓN: INVERSIÓN VS. IMPACTO')
+            capac = rrhh[rrhh['Metrica'] == 'Presupuesto mensual para capacitación, USD'].sort_values('Ronda_Orden')
+            efic = rrhh[rrhh['Metrica'] == 'Multiplicador de la eficiencia de RRHH'].sort_values('Ronda_Orden')
+            if not capac.empty and not efic.empty:
+                fig_cap = go.Figure()
+                fig_cap.add_trace(go.Bar(x=capac['Ronda'], y=capac['Valor'], name='Presupuesto capacitación (USD)',
+                                          marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                fig_cap.add_trace(go.Scatter(x=efic['Ronda'], y=efic['Valor'], name='Multiplicador eficiencia RRHH', mode='lines+markers',
+                                              line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                fig_cap.update_layout(title='Capacitación vs. eficiencia de RRHH',
+                                       yaxis=dict(title='Presupuesto, USD', side='left', rangemode='tozero'),
+                                       yaxis2=dict(title='Multiplicador eficiencia', overlaying='y', side='right', showgrid=False),
+                                       legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                mostrar(fig_cap)
+                st.caption('Con una sola ronda esto es un punto de referencia — el "impacto" real de la capacitación se lee '
+                           'en la pendiente entre rondas, no en un valor aislado.')
+            else:
+                st.info('Sin datos de capacitación para este equipo.')
+
+    with bloque_sost:
         st.subheader('IMPACTO AMBIENTAL')
         c1, c2 = st.columns(2)
         pais_esg = c1.selectbox('País', ['EE.UU.', 'China'], key='pais_esg_rrhh')
@@ -487,20 +600,21 @@ def seccion_rrhh_sostenibilidad():
         dicc = {'Emisiones de CO2': 'Total, toneladas métricas', 'Consumo de energía': 'Total, MWh', 'Consumo de agua': 'Total, miles de m3'}
         sub_amb = df[(df['Estado'] == 'Informe ESG') & (df['Seccion'] == f'Impacto ambiental, {pais_esg}') & (df['Metrica'] == dicc[ind])]
         chart_comparacion_equipos(sub_amb, f'{ind} — {pais_esg}')
-    st.divider()
-    st.subheader('REPUTACIÓN ESG VS MARKET SHARE')
-    esg = df[(df['Estado'] == 'Informe ESG') & (df['Subgrupo'] == 'Puntuación final') & (df['Metrica'] == 'Reputación ESG') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].copy()
-    esg['Valor'] = num(esg['Valor'])
-    cols = st.columns(3)
-    for i, pais in enumerate(['EE.UU.', 'China', 'Europa']):
-        with cols[i]:
-            mkt = df[(df['Estado'] == f'Informe de mercado, {pais}') & (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'].str.strip() == 'Total') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'Share'})
-            mkt['Share'] = num(mkt['Share'])
-            d = esg.merge(mkt, on='Empresa').dropna()
-            if len(d) > 1:
-                fig2 = px.scatter(d, x='Valor', y='Share', color='Empresa', color_discrete_map=COLOR_MAP, text='Empresa', title=f'ESG vs Share - {pais}')
-                fig2.update_traces(textposition='top center', showlegend=False)
-                mostrar(fig2)
+
+        st.divider()
+        st.subheader('REPUTACIÓN ESG VS MARKET SHARE')
+        esg = df[(df['Estado'] == 'Informe ESG') & (df['Subgrupo'] == 'Puntuación final') & (df['Metrica'] == 'Reputación ESG') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].copy()
+        esg['Valor'] = num(esg['Valor'])
+        cols = st.columns(3)
+        for i, pais in enumerate(['EE.UU.', 'China', 'Europa']):
+            with cols[i]:
+                mkt = df[(df['Estado'] == f'Informe de mercado, {pais}') & (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'].str.strip() == 'Total') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'Share'})
+                mkt['Share'] = num(mkt['Share'])
+                d = esg.merge(mkt, on='Empresa').dropna()
+                if len(d) > 1:
+                    fig2 = px.scatter(d, x='Valor', y='Share', color='Empresa', color_discrete_map=COLOR_MAP, text='Empresa', title=f'ESG vs Share - {pais}')
+                    fig2.update_traces(textposition='top center', showlegend=False)
+                    mostrar(fig2)
 # ---------------- Router ----------------
 st.title(seccion)
 if seccion == SECCIONES[0]: seccion_resultado()
