@@ -366,164 +366,151 @@ def seccion_operaciones():
 # SECCIÓN 4 — FINANZAS (Corto y Largo Plazo)
 # =================================================================
 def seccion_finanzas():
-    bloque_cp, bloque_lp = st.tabs(['Corto Plazo', 'Larzo Plazo'])
     pl_ronda = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
-    
     def wacc(emp):
         de = valor_de(val_ronda, 'Deuda a patrimonio', emp)
         re_ = valor_de(val_ronda, 'Rendimiento esperado del patrimonio, %', emp)
         rd = valor_de(val_ronda, 'Costo de la deuda después de impuestos, %', emp)
         if None in (de, re_, rd): return None
         return (1/(1+de))*re_ + (de/(1+de))*rd
+    # Subsección 1: Corto Plazo (Liquidez y Operación)
+    st.subheader('Corto Plazo: Liquidez y Operación')
+    c_cp1, c_cp2, c_cp3, c_cp4 = st.columns(4)
+    ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
+    margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
+    ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
+    caja_val = valor_de(df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)],
+                         'Efectivo y equivalentes de efectivo', empresa_analisis)
+    with c_cp1: st.metric('EBITDA (USD)', format_num(ebitda_val))
+    with c_cp2: st.metric('Margen Bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
+    with c_cp3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
+    with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
+    st.divider()
 
-    with bloque_cp:
-        # Subsección 1: Corto Plazo (Liquidez y Operación)
-        st.subheader('Corto Plazo: Liquidez y Operación')
-        c_cp1, c_cp2, c_cp3, c_cp4 = st.columns(4)
-        ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
-        margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
-        ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
-        caja_val = valor_de(df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)],
-                             'Efectivo y equivalentes de efectivo', empresa_analisis)
-        
-        with c_cp1: st.metric('EBITDA (USD)', format_num(ebitda_val))
-        with c_cp2: st.metric('Margen Bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
-        with c_cp3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
-        with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
-        
-        st.divider()
+    # Subsección 1.5: Deuda y Liquidez — "¿tuvimos que salir a pedir plata de apuro?"
+    st.subheader('Deuda y Liquidez')
+    bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
+    deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
+    deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
+    calif_val = valor_de(ratios_ronda, 'Calificación crediticia', empresa_analisis)
+    prom_deuda_cp = np.nanmean([v for v in deuda_cp_vals.values() if v is not None]) if any(v is not None for v in deuda_cp_vals.values()) else None
+    val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
 
-        # Subsección 1.5: Deuda y Liquidez
-        st.subheader('Deuda y Liquidez')
-        bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
-        deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
-        deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
-        calif_val = valor_de(ratios_ronda, 'Calificación crediticia', empresa_analisis)
-        
-        prom_deuda_cp = np.nanmean([v for v in deuda_cp_vals.values() if v is not None]) if any(v is not None for v in deuda_cp_vals.values()) else None
-        val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
+    c_dl1, c_dl2, c_dl3 = st.columns(3)
+    with c_dl1:
+        delta_cp = ((val_deuda_cp - prom_deuda_cp) / prom_deuda_cp * 100) if prom_deuda_cp and val_deuda_cp is not None else None
+        st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
+                   delta=f'{delta_cp:+.1f}% vs Prom' if delta_cp is not None else None, delta_color='inverse')
+    with c_dl2:
+        st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
+    with c_dl3:
+        st.metric('Calificación crediticia', calif_val if calif_val else '—')
+    if val_deuda_cp and val_deuda_cp > 0:
+        st.caption(f'⚠️ {empresa_analisis} tomó {format_num(val_deuda_cp)} USD de deuda de corto plazo NO planificada en {ronda_snapshot} '
+                   '— es el sobregiro automático de Cesim cuando la caja no alcanza para cubrir obligaciones, y suele venir con tasa de interés penal.')
 
-        c_dl1, c_dl2, c_dl3 = st.columns(3)
-        with c_dl1:
-            delta_cp = ((val_deuda_cp - prom_deuda_cp) / prom_deuda_cp * 100) if prom_deuda_cp and val_deuda_cp is not None else None
-            st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
-                       delta=f'{delta_cp:+.1f}% vs Prom' if delta_cp is not None else None, delta_color='inverse')
-        with c_dl2:
-            st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
-        with c_dl3:
-            st.metric('Calificación crediticia', calif_val if calif_val else '—')
+    col_dl_a, col_dl_b = st.columns(2)
+    with col_dl_a:
+        deuda_cp_sub = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Metrica'] == 'Deudas a corto plazo (no planificadas)')]
+        chart_evolucion(deuda_cp_sub, 'Deuda CP no planificada (USD)')
+    with col_dl_b:
+        ranking_deuda = pd.DataFrame(list(deuda_cp_vals.items()), columns=['Empresa', 'Valor']).dropna().sort_values('Valor', ascending=False)
+        if not ranking_deuda.empty and ranking_deuda['Valor'].sum() > 0:
+            fig_dcp = px.bar(ranking_deuda, x='Empresa', y='Valor', color='Empresa', color_discrete_map=COLOR_MAP,
+                              title=f'Deuda CP no planificada — {ronda_snapshot}')
+            fig_dcp.update_traces(text=ranking_deuda['Valor'].apply(format_num), textposition='outside', cliponaxis=False, showlegend=False)
+            mostrar(fig_dcp, ocultar_eje_valores='y')
+        else:
+            st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
+
+    st.divider()
+    # Subsección 2: Largo Plazo (Estructura, Retorno y Rangos)
+    st.subheader('Largo Plazo: Estructura, Retorno y Competencia')
+
+    st.markdown('**Costo de la deuda por mercado**')
+    tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
+                       'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
+    tasas_rows = []
+    for etiqueta, metrica in tasas_metricas.items():
+        val_emp = valor_de(ratios_ronda, metrica, empresa_analisis)
+        prom = np.nanmean([valor_de(ratios_ronda, metrica, e) for e in COMPANIES if valor_de(ratios_ronda, metrica, e) is not None])
+        if val_emp is not None:
+            tasas_rows.append({'Mercado': etiqueta, empresa_analisis: val_emp, 'Promedio industria': prom})
+    if tasas_rows:
+        tasas_df = pd.DataFrame(tasas_rows).melt(id_vars='Mercado', var_name='Serie', value_name='Tasa, %')
+        fig_tasas = px.bar(tasas_df, x='Mercado', y='Tasa, %', color='Serie', barmode='group',
+                            color_discrete_map={empresa_analisis: BRAND_ACCENT, 'Promedio industria': MUTED_PALETTE[0]},
+                            title=f'Tasa de interés por mercado y plazo — {empresa_analisis} vs. industria, {ronda_snapshot}')
+        fig_tasas.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+        mostrar(fig_tasas)
+        st.caption('Tasas más altas en general reflejan menor calificación crediticia — se pueden comparar directo contra la calificación de arriba.')
+
+    datos_lp = {
+        'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
+        'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
+        'Apalancamiento': {e: valor_de(ratios_ronda, 'Endeudamiento neto/patrimonio (apalancamiento)', e) for e in COMPANIES},
+        'WACC': {e: wacc(e) for e in COMPANIES},
+    }
+    ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
+    if ejes_validos:
+        color_ref = 'rgba(255,255,255,0.5)' if st.session_state.get('modo_oscuro', True) else 'rgba(26,23,20,0.5)'
+        fig_rango = go.Figure()
+        for i, (nombre, vals) in enumerate(ejes_validos.items()):
+            valores = sorted(v for v in vals.values() if pd.notna(v))
+            vmin, vmax, vmed = valores[0], valores[-1], np.median(valores)
+            vcadiz = vals.get(empresa_analisis)
+            rango = (vmax - vmin) or 1
+            pos = lambda x: (x - vmin) / rango * 100
+            suf = "%" if nombre in ['ROCE', 'ROE', 'WACC'] else "x"
             
-        if val_deuda_cp and val_deuda_cp > 0:
-            st.caption(f'⚠️ {empresa_analisis} tomó {format_num(val_deuda_cp)} USD de deuda de corto plazo NO planificada en {ronda_snapshot} '
-                       '— es el sobregiro automático de Cesim cuando la caja no alcanza para cubrir obligaciones, y suele venir con tasa de interés penal.')
-
-        col_dl_a, col_dl_b = st.columns(2)
-        with col_dl_a:
-            deuda_cp_sub = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Metrica'] == 'Deudas a corto plazo (no planificadas)')]
-            chart_evolucion(deuda_cp_sub, 'Deuda CP no planificada (USD)')
-        with col_dl_b:
-            ranking_deuda = pd.DataFrame(list(deuda_cp_vals.items()), columns=['Empresa', 'Valor']).dropna().sort_values('Valor', ascending=False)
-            if not ranking_deuda.empty and ranking_deuda['Valor'].sum() > 0:
-                fig_dcp = px.bar(ranking_deuda, x='Empresa', y='Valor', color='Empresa', color_discrete_map=COLOR_MAP,
-                                  title=f'Deuda CP no planificada — {ronda_snapshot}')
-                fig_dcp.update_traces(text=ranking_deuda['Valor'].apply(format_num), textposition='outside', cliponaxis=False, showlegend=False)
-                mostrar(fig_dcp, ocultar_eje_valores='y')
-            else:
-                st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
-
-    with bloque_lp:
-        # Subsección 2: Largo Plazo (Estructura, Retorno y Rangos)
-        st.subheader('Largo Plazo: Estructura, Retorno y Competencia')
-
-        st.markdown('**Costo de la deuda por mercado**')
-        tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
-                          'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
-        tasas_rows = []
-        for etiqueta, metrica in tasas_metricas.items():
-            val_emp = valor_de(ratios_ronda, metrica, empresa_analisis)
-            prom = np.nanmean([valor_de(ratios_ronda, metrica, e) for e in COMPANIES if valor_de(ratios_ronda, metrica, e) is not None])
-            if val_emp is not None:
-                tasas_rows.append({'Mercado': etiqueta, empresa_analisis: val_emp, 'Promedio industria': prom})
-                
-        if tasas_rows:
-            tasas_df = pd.DataFrame(tasas_rows).melt(id_vars='Mercado', var_name='Serie', value_name='Tasa, %')
-            fig_tasas = px.bar(tasas_df, x='Mercado', y='Tasa, %', color='Serie', barmode='group',
-                                color_discrete_map={empresa_analisis: BRAND_ACCENT, 'Promedio industria': MUTED_PALETTE[0]},
-                                title=f'Tasa de interés por mercado y plazo — {empresa_analisis} vs. industria, {ronda_snapshot}')
-            fig_tasas.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
-            mostrar(fig_tasas)
-            st.caption('Tasas más altas en general reflejan menor calificación crediticia — se pueden comparar directo contra la calificación del Corto Plazo.')
-
-        st.divider()
-
-        datos_lp = {
-            'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
-            'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
-            'Apalancamiento': {e: valor_de(ratios_ronda, 'Endeudamiento neto/patrimonio (apalancamiento)', e) for e in COMPANIES},
-            'WACC': {e: wacc(e) for e in COMPANIES},
-        }
-        
-        ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
-        if ejes_validos:
-            color_ref = 'rgba(255,255,255,0.5)' if st.session_state.get('modo_oscuro', True) else 'rgba(26,23,20,0.5)'
-            fig_rango = go.Figure()
-            for i, (nombre, vals) in enumerate(ejes_validos.items()):
-                valores = sorted(v for v in vals.values() if pd.notna(v))
-                vmin, vmax, vmed = valores[0], valores[-1], np.median(valores)
-                vcadiz = vals.get(empresa_analisis)
-                rango = (vmax - vmin) or 1
-                pos = lambda x: (x - vmin) / rango * 100
-                suf = "%" if nombre in ['ROCE', 'ROE', 'WACC'] else "x"
-                
-                fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
-                fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[1], line_width=2), showlegend=False))
-                
-                if vcadiz is not None:
-                    val_str = f"{vcadiz:,.1f}{suf}"
-                    fig_rango.add_trace(go.Scatter(
-                        x=[pos(vcadiz)], y=[i], 
-                        mode='markers+text', 
-                        text=[val_str], 
-                        textposition="top center", 
-                        textfont=dict(color=BRAND_ACCENT, size=12, family="JetBrains Mono"),
-                        marker=dict(size=14, color=BRAND_ACCENT), 
-                        showlegend=False
-                    ))
-                
-                fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=color_ref))
-                fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=color_ref))
-                
-            fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), height=280, title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
-            mostrar(fig_rango, ocultar_eje_valores='x')
-
-        st.divider()
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            rr = pd.DataFrame({'Empresa': COMPANIES, 'Apalancamiento': [datos_lp['Apalancamiento'].get(e) for e in COMPANIES], 'ROE': [datos_lp['ROE'].get(e) for e in COMPANIES]}).dropna()
-            if len(rr) > 1:
-                fig = px.scatter(rr, x='Apalancamiento', y='ROE', color='Empresa', color_discrete_map=COLOR_MAP, text='Empresa', title='Matriz Riesgo / Retorno')
-                fig.update_traces(textposition='top center', showlegend=False)
-                linea_media(fig, rr['Apalancamiento'].mean(), eje='x')
-                linea_media(fig, rr['ROE'].mean(), eje='y')
-                mostrar(fig)
-        with col_f2:
-            ben = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Metrica'] == 'Beneficio de la ronda')].copy()
-            deuda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Endeudamiento neto/patrimonio (apalancamiento)')].copy()
-            ben['Valor'] = num(ben['Valor'])
-            deuda['Valor'] = num(deuda['Valor'])
-            ben = ben[ben['Empresa'] == empresa_analisis].sort_values('Ronda_Orden')
-            deuda = deuda[deuda['Empresa'] == empresa_analisis].sort_values('Ronda_Orden')
-            if not ben.empty and not deuda.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(x=ben['Ronda'], y=ben['Valor'], name='Beneficio (USD)', marker_color=COLOR_POSITIVE, yaxis='y1', width=0.15))
-                fig.add_trace(go.Scatter(x=deuda['Ronda'], y=deuda['Valor'], name='Apalancamiento (x)', mode='lines+markers', line=dict(color=MUTED_PALETTE[1], width=3), yaxis='y2'))
-                fig.update_layout(title='Beneficio Neto vs. Nivel de Deuda',
-                                  yaxis=dict(title='Beneficio (USD)', side='left', rangemode='tozero'),
-                                  yaxis2=dict(title='Apalancamiento (x)', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                  legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-                mostrar(fig)
+            fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
+            fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[1], line_width=2), showlegend=False))
+            
+            if vcadiz is not None:
+                val_str = f"{vcadiz:,.1f}{suf}"
+                fig_rango.add_trace(go.Scatter(
+                    x=[pos(vcadiz)], y=[i], 
+                    mode='markers+text', 
+                    text=[val_str], 
+                    textposition="top center", 
+                    textfont=dict(color=BRAND_ACCENT, size=12, family="JetBrains Mono"),
+                    marker=dict(size=14, color=BRAND_ACCENT), 
+                    showlegend=False
+                ))
+            
+            fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=color_ref))
+            fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=color_ref))
+            
+        fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), height=280, title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
+        mostrar(fig_rango, ocultar_eje_valores='x')
+    st.divider()
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        rr = pd.DataFrame({'Empresa': COMPANIES, 'Apalancamiento': [datos_lp['Apalancamiento'].get(e) for e in COMPANIES], 'ROE': [datos_lp['ROE'].get(e) for e in COMPANIES]}).dropna()
+        if len(rr) > 1:
+            fig = px.scatter(rr, x='Apalancamiento', y='ROE', color='Empresa', color_discrete_map=COLOR_MAP, text='Empresa', title='Matriz Riesgo / Retorno')
+            fig.update_traces(textposition='top center', showlegend=False)
+            linea_media(fig, rr['Apalancamiento'].mean(), eje='x')
+            linea_media(fig, rr['ROE'].mean(), eje='y')
+            mostrar(fig)
+    with col_f2:
+        ben = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Metrica'] == 'Beneficio de la ronda')].copy()
+        deuda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Endeudamiento neto/patrimonio (apalancamiento)')].copy()
+        ben['Valor'] = num(ben['Valor'])
+        deuda['Valor'] = num(deuda['Valor'])
+        ben = ben[ben['Empresa'] == empresa_analisis].sort_values('Ronda_Orden')
+        deuda = deuda[deuda['Empresa'] == empresa_analisis].sort_values('Ronda_Orden')
+        if not ben.empty and not deuda.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=ben['Ronda'], y=ben['Valor'], name='Beneficio (USD)', marker_color=COLOR_POSITIVE, yaxis='y1', width=0.15))
+            fig.add_trace(go.Scatter(x=deuda['Ronda'], y=deuda['Valor'], name='Apalancamiento (x)', mode='lines+markers', line=dict(color=MUTED_PALETTE[1], width=3), yaxis='y2'))
+            fig.update_layout(title='Beneficio Neto vs. Nivel de Deuda',
+                              yaxis=dict(title='Beneficio (USD)', side='left', rangemode='tozero'),
+                              yaxis2=dict(title='Apalancamiento (x)', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
+                              legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+            mostrar(fig)
 # =================================================================
 # SECCIÓN 5 — RRHH Y SOSTENIBILIDAD
 # =================================================================
