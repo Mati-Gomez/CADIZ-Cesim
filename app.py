@@ -366,6 +366,7 @@ def seccion_operaciones():
 # SECCIÓN 4 — FINANZAS (Corto y Largo Plazo)
 # =================================================================
 def seccion_finanzas():
+    bloque_cp, bloque_lp = st.tabs(['Corto Plazo', 'Larzo Plazo'])
     pl_ronda = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
@@ -375,6 +376,8 @@ def seccion_finanzas():
         rd = valor_de(val_ronda, 'Costo de la deuda después de impuestos, %', emp)
         if None in (de, re_, rd): return None
         return (1/(1+de))*re_ + (de/(1+de))*rd
+
+    with bloque_cp
     # Subsección 1: Corto Plazo (Liquidez y Operación)
     st.subheader('Corto Plazo: Liquidez y Operación')
     c_cp1, c_cp2, c_cp3, c_cp4 = st.columns(4)
@@ -425,6 +428,7 @@ def seccion_finanzas():
         else:
             st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
 
+    with bloque_lp
     st.divider()
     # Subsección 2: Largo Plazo (Estructura, Retorno y Rangos)
     st.subheader('Largo Plazo: Estructura, Retorno y Competencia')
