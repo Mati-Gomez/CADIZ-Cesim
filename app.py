@@ -144,40 +144,44 @@ except FileNotFoundError:
 # =================================================================
 def seccion_resultado():
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
-    cv_ronda = df[(df['Modulo'] == 'Creación de valor') & (df['Metrica'] == 'Valor total creado') & (df['Ronda'] == ronda_snapshot)]
-    cv_vals = {emp: num(cv_ronda[cv_ronda['Empresa'] == emp]['Valor']).sum() for emp in COMPANIES}
+    ratios_ronda_r1 = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
 
-    # Acumulado: suma de "Valor total creado" en TODAS las rondas jugadas hasta la seleccionada
-    # (Cesim define al ganador por creación de valor acumulada, no por una ronda aislada).
-    orden_actual = df[df['Ronda'] == ronda_snapshot]['Ronda_Orden'].iloc[0] if not df[df['Ronda'] == ronda_snapshot].empty else None
-    cv_hist = df[(df['Modulo'] == 'Creación de valor') & (df['Metrica'] == 'Valor total creado') &
-                 (df['Ronda_Orden'] <= orden_actual)].copy() if orden_actual is not None else df.iloc[0:0]
-    cv_hist['Valor'] = num(cv_hist['Valor'])
-    cv_acum_vals = cv_hist.groupby('Empresa')['Valor'].sum().to_dict()
-    cv_acum_vals = {emp: cv_acum_vals.get(emp) for emp in COMPANIES}
+    # "Accionistas, Total" en la tabla de Creación de Valor = Beneficio de la ronda: es el valor
+    # generado PARA EL ACCIONISTA en esa ronda puntual (no confundir con "Valor total creado", que
+    # suma también lo pagado a Proveedores/Personal/Gobierno — no es plata del accionista).
+    acc_ronda = df[(df['Modulo'] == 'Creación de valor') & (df['Seccion'] == 'Accionistas') &
+                   (df['Metrica'] == 'Total') & (df['Ronda'] == ronda_snapshot)]
+    cv_vals = {emp: valor_de(acc_ronda, 'Total', emp) for emp in COMPANIES}
+
+    # Acumulado: Cesim ya reporta este campo pre-acumulado desde el inicio del juego — no hay que
+    # sumarlo nosotros ronda a ronda. Es el criterio real de "creación de valor para el accionista".
+    retorno_acum_vals = {emp: valor_de(ratios_ronda_r1, 'Retorno total acumulado del accionista (p.a.), %', emp) for emp in COMPANIES}
 
     cap_vals = {emp: valor_de(val_ronda, 'Capitalización de mercado, miles USD', emp) for emp in COMPANIES}
     st.subheader('KPIs de Valor')
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        prom_cv_acum = np.nanmean([v for v in cv_acum_vals.values() if v is not None]) if any(v is not None for v in cv_acum_vals.values()) else None
-        val_cv_acum = cv_acum_vals.get(empresa_analisis)
-        delta_cv_acum = ((val_cv_acum - prom_cv_acum) / prom_cv_acum * 100) if prom_cv_acum and val_cv_acum is not None else None
-        st.metric('Creación de Valor — ACUMULADO (USD)', format_num(val_cv_acum),
-                   delta=f'{delta_cv_acum:+.1f}% vs Prom' if delta_cv_acum is not None else None)
+        prom_ret_acum = np.nanmean([v for v in retorno_acum_vals.values() if v is not None]) if any(v is not None for v in retorno_acum_vals.values()) else None
+        val_ret_acum = retorno_acum_vals.get(empresa_analisis)
+        delta_ret_acum = ((val_ret_acum - prom_ret_acum) / abs(prom_ret_acum) * 100) if prom_ret_acum and val_ret_acum is not None else None
+        st.metric('Retorno del Accionista — ACUMULADO', f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
+                   delta=f'{delta_ret_acum:+.1f}% vs Prom' if delta_ret_acum is not None else None)
     with c2:
-        ranking_acum = sorted([e for e in cv_acum_vals if cv_acum_vals.get(e) is not None], key=cv_acum_vals.get, reverse=True)
+        ranking_acum = sorted([e for e in retorno_acum_vals if retorno_acum_vals.get(e) is not None], key=retorno_acum_vals.get, reverse=True)
         pos = ranking_acum.index(empresa_analisis) + 1 if empresa_analisis in ranking_acum else '-'
         st.metric('Posición ACUMULADA', f'{pos}° de {len(COMPANIES)}')
     with c3:
-        prom_cv = np.nanmean(list(cv_vals.values())) if cv_vals else None
-        delta_cv = ((cv_vals.get(empresa_analisis, 0) - prom_cv)/prom_cv*100) if prom_cv else None
-        st.metric(f'Creación de Valor — {ronda_snapshot} (USD)', format_num(cv_vals.get(empresa_analisis)), delta=f'{delta_cv:+.1f}% vs Prom' if delta_cv else None)
+        prom_cv = np.nanmean([v for v in cv_vals.values() if v is not None]) if any(v is not None for v in cv_vals.values()) else None
+        val_cv = cv_vals.get(empresa_analisis)
+        delta_cv = ((val_cv - prom_cv)/prom_cv*100) if prom_cv and val_cv is not None else None
+        st.metric(f'Beneficio del Accionista — {ronda_snapshot} (USD)', format_num(val_cv), delta=f'{delta_cv:+.1f}% vs Prom' if delta_cv is not None else None)
     with c4: 
         prom_cap = np.nanmean([v for v in cap_vals.values() if v is not None]) if any(v is not None for v in cap_vals.values()) else None
         val_cap = cap_vals.get(empresa_analisis)
         delta_cap = ((val_cap - prom_cap)/prom_cap*100) if prom_cap and val_cap else None
         st.metric('Market Cap (USD)', format_num(val_cap), delta=f'{delta_cap:+.1f}% vs Prom' if delta_cap else None)
+    st.caption('"Retorno acumulado" y "Beneficio del accionista" miden solo lo que le corresponde al accionista '
+               '(no incluyen lo pagado a proveedores, personal o gobierno).')
     st.divider()
     col_a, col_b = st.columns(2)
     with col_a:
@@ -199,11 +203,12 @@ def seccion_resultado():
             fig.update_layout(title=f'Puente de Beneficio Neto — {empresa_analisis}')
             mostrar(fig, ocultar_eje_valores='y')
     with col_b:
-        vista_ranking = st.radio('Vista del ranking', ['Acumulado', f'Solo {ronda_snapshot}'], horizontal=True, key='vista_ranking_cv')
-        datos_ranking = cv_acum_vals if vista_ranking == 'Acumulado' else cv_vals
-        titulo_ranking = 'Ranking: Creación de Valor Acumulada' if vista_ranking == 'Acumulado' else f'Ranking: Creación de Valor — {ronda_snapshot}'
+        vista_ranking = st.radio('Vista del ranking', ['Acumulado (Retorno del Accionista, %)', f'Solo {ronda_snapshot} (USD)'], horizontal=True, key='vista_ranking_cv')
+        es_acumulado = vista_ranking.startswith('Acumulado')
+        datos_ranking = retorno_acum_vals if es_acumulado else cv_vals
+        titulo_ranking = 'Ranking: Retorno Acumulado del Accionista, %' if es_acumulado else f'Ranking: Beneficio del Accionista — {ronda_snapshot}'
         ranking = pd.DataFrame(list(datos_ranking.items()), columns=['Empresa', 'Valor']).sort_values('Valor', ascending=True).dropna()
-        ranking['Etiqueta'] = ranking['Valor'].apply(format_num)
+        ranking['Etiqueta'] = ranking['Valor'].apply(lambda v: f'{v:,.1f}%') if es_acumulado else ranking['Valor'].apply(format_num)
         fig = px.bar(ranking, x='Valor', y='Empresa', orientation='h', color='Empresa', color_discrete_map=COLOR_MAP, text='Etiqueta')
         fig.update_traces(textposition='outside', cliponaxis=False, showlegend=False)
         fig.update_layout(title=titulo_ranking, xaxis=dict(range=[0, ranking['Valor'].max() * 1.25]))
@@ -211,11 +216,10 @@ def seccion_resultado():
     st.divider()
     col_c, col_d = st.columns(2)
     with col_c:
-        cv_all = df[(df['Modulo'] == 'Creación de valor') & (df['Metrica'] == 'Valor total creado')].copy()
-        cv_all['Valor'] = num(cv_all['Valor'])
-        puestos = cv_all.groupby(['Ronda', 'Ronda_Orden', 'Empresa'])['Valor'].sum().reset_index().sort_values('Ronda_Orden')
-        puestos['Acumulado'] = puestos.groupby('Empresa')['Valor'].cumsum()
-        puestos['Puesto'] = puestos.groupby('Ronda')['Acumulado'].rank(ascending=False, method='min')
+        ret_all = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Retorno total acumulado del accionista (p.a.), %')].copy()
+        ret_all['Valor'] = num(ret_all['Valor'])
+        puestos = ret_all.groupby(['Ronda', 'Ronda_Orden', 'Empresa'])['Valor'].sum().reset_index().sort_values('Ronda_Orden')
+        puestos['Puesto'] = puestos.groupby('Ronda')['Valor'].rank(ascending=False, method='min')
         fig2 = px.line(puestos[puestos['Empresa'] == MY_COMPANY].sort_values('Ronda_Orden'), x='Ronda', y='Puesto', markers=True,
                         title=f'Evolución de Posición ACUMULADA — {MY_COMPANY}')
         fig2.update_yaxes(autorange='reversed', dtick=1)
@@ -252,38 +256,22 @@ def seccion_mercado():
     with col_a: scatter_posicionamiento('Precio', 'Precio Promedio')
     with col_b: scatter_posicionamiento('Cantidad de características', 'Características')
     st.divider()
-    st.subheader('Eficiencia Comercial y Evolución')
-    col_c, col_d = st.columns(2)
-    with col_c:
-        mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Seccion'] == tech_sel) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
-        if mkt_sub.empty:
-            mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
-        mkt_df = mkt_sub[['Empresa', 'Valor']].rename(columns={'Valor': 'Marketing (USD)'}).dropna()
-        mkt_df['Marketing (USD)'] = num(mkt_df['Marketing (USD)'])
-        if not vol_df.empty and not mkt_df.empty:
-            efi = vol_df.merge(mkt_df, on='Empresa').dropna()
-            if not efi.empty:
-                fig_efi = px.scatter(efi, x='Marketing (USD)', y='Volumen', color='Empresa', color_discrete_map=COLOR_MAP, size='Volumen', text='Empresa', title='Marketing vs. Retorno en Ventas')
-                fig_efi.update_traces(textposition='top center', showlegend=False)
-                linea_media(fig_efi, efi['Volumen'].mean(), eje='y')
-                linea_media(fig_efi, efi['Marketing (USD)'].mean(), eje='x')
-                mostrar(fig_efi)
-            else: st.info("Sin datos consolidados de Marketing.")
-        else: st.info("Sin datos de Marketing para analizar eficiencia.")
-    with col_d:
-        share_hist = df[(df['Estado'] == estado_pais) & (df['Seccion'] == f'{pais_sel} cuotas de mercado, %') & (df['Metrica'].str.strip() == 'Total')].copy()
-        share_hist['Valor'] = num(share_hist['Valor'])
-        share_hist = share_hist.dropna().sort_values('Ronda_Orden')
-        if not share_hist.empty:
-            fig_hist = go.Figure()
-            for emp in COMPANIES:
-                d_emp = share_hist[share_hist['Empresa'] == emp]
-                fig_hist.add_trace(go.Scatter(x=d_emp['Ronda'], y=d_emp['Valor'], mode='lines+markers', name=emp,
-                                          line=dict(color=COLOR_MAP[emp], width=4 if emp == MY_COMPANY else 1.5),
-                                          marker=dict(size=6 if emp == MY_COMPANY else 0)))
-            fig_hist.update_layout(title=f'Evolución de Market Share', yaxis_title='% Share', legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
-            mostrar(fig_hist)
-        else: st.info("Sin datos históricos de cuota de mercado.")
+    st.subheader('Eficiencia Comercial')
+    mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Seccion'] == tech_sel) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
+    if mkt_sub.empty:
+        mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
+    mkt_df = mkt_sub[['Empresa', 'Valor']].rename(columns={'Valor': 'Marketing (USD)'}).dropna()
+    mkt_df['Marketing (USD)'] = num(mkt_df['Marketing (USD)'])
+    if not vol_df.empty and not mkt_df.empty:
+        efi = vol_df.merge(mkt_df, on='Empresa').dropna()
+        if not efi.empty:
+            fig_efi = px.scatter(efi, x='Marketing (USD)', y='Volumen', color='Empresa', color_discrete_map=COLOR_MAP, size='Volumen', text='Empresa', title='Marketing vs. Retorno en Ventas')
+            fig_efi.update_traces(textposition='top center', showlegend=False)
+            linea_media(fig_efi, efi['Volumen'].mean(), eje='y')
+            linea_media(fig_efi, efi['Marketing (USD)'].mean(), eje='x')
+            mostrar(fig_efi)
+        else: st.info("Sin datos consolidados de Marketing.")
+    else: st.info("Sin datos de Marketing para analizar eficiencia.")
 # =================================================================
 # SECCIÓN 3 — OPERACIONES
 # =================================================================
@@ -292,6 +280,10 @@ def seccion_operaciones():
     with bloque1:
         cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) & (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
         cap['Valor'] = num(cap['Valor'])
+        # Cesim reporta la capacidad usada POR TECNOLOGÍA dentro de cada país (ej. Combustión 45% +
+        # Híbrido 40% en EE.UU. = 85% de la planta) — hay que sumarlas para tener el % real de la planta,
+        # si no, cada tecnología aparecía como una gauge separada.
+        cap = cap.dropna(subset=['Valor']).groupby('Subgrupo', as_index=False)['Valor'].sum()
         if not cap.empty:
             cols = st.columns(len(cap))
             for col, (_, row) in zip(cols, cap.iterrows()):
@@ -460,6 +452,38 @@ def seccion_finanzas():
     with tab_lp:
         # Subsección 2: Largo Plazo (Estructura, Retorno y Rangos)
 
+        st.markdown('**Estructura del Balance: Activo vs. Pasivo + Patrimonio Neto**')
+        bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
+
+        def gb(metrica):
+            return valor_de(bal_ronda, metrica, empresa_analisis) or 0.0
+
+        activo_items = {'Efectivo y equivalentes': gb('Efectivo y equivalentes de efectivo'),
+                         'Cuentas por cobrar': gb('Cuentas por Cobrar'), 'Inventario': gb('Inventario'),
+                         'Activo fijo': gb('Activo fijo')}
+        pasivo_pn_items = {'Cuentas por pagar': gb('Cuentas por pagar'),
+                            'Deudas CP no planificadas': gb('Deudas a corto plazo (no planificadas)'),
+                            'Deudas LP': gb('Deudas a largo plazo'),
+                            'Capital social + adicional': gb('Capital social') + gb('Capital adicional desembolsado'),
+                            'Ganancias acumuladas + de la ronda': gb('Ganancias acumuladas') + gb('Beneficio de la ronda')}
+        if sum(activo_items.values()) > 0:
+            fig_bal = go.Figure()
+            colores_activo = [BRAND_ACCENT] + MUTED_PALETTE[:3]
+            colores_pasivo = MUTED_PALETTE[:3] + [BRAND_ACCENT, MUTED_PALETTE[4]]
+            for (nombre, val), color in zip(activo_items.items(), colores_activo):
+                fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
+                                          text=format_num(val), textposition='inside'))
+            for (nombre, val), color in zip(pasivo_pn_items.items(), colores_pasivo):
+                fig_bal.add_trace(go.Bar(x=['Pasivo + PN'], y=[val], name=nombre, marker_color=color,
+                                          text=format_num(val), textposition='inside'))
+            fig_bal.update_layout(barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
+                                   legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
+            mostrar(fig_bal, ocultar_eje_valores='y')
+            st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
+        else:
+            st.info('Sin datos de balance para esta combinación.')
+
+        st.divider()
         st.markdown('**Costo de la deuda por mercado**')
         tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
                            'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
