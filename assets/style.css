@@ -1,6 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
-
 /* ══════════════════════════════════════════════════════════════
    VARIABLES DE MARCA — CÁDIZ AUTOMOTIVE
    ══════════════════════════════════════════════════════════════ */
@@ -14,25 +13,44 @@
     --radius-sm: 4px;             /* Bordes más duros/industriales */
     --radius-md: 6px;
 }
-
 /* ══ BASE Y TIPOGRAFÍA ═════════════════════════════════════════ */
 html, body, .stApp {
     font-family: 'JetBrains Mono', monospace !important;
 }
-
-h1, h2, h3, h4, h5, h6 {
+h1 {
     font-family: 'Oswald', sans-serif !important;
     text-transform: uppercase;
     letter-spacing: 0.02em !important;
+    font-weight: 700 !important;
 }
-
+/* Sobriedad: los subtítulos NO van en mayúscula-grito — solo el título de página (h1) es "marca".
+   El resto usa Oswald con peso medio y sin uppercase, más cerca de un dashboard SaaS que de un cartel. */
+h2, h3, h4, h5, h6 {
+    font-family: 'Oswald', sans-serif !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-weight: 500 !important;
+    opacity: 0.88;
+}
+h3 { font-size: 1.05rem !important; }
+.block-container { padding-top: 2.25rem !important; max-width: 1200px; }
+.stCaption, [data-testid="stCaptionContainer"] p { opacity: 0.55 !important; font-size: 0.8rem !important; }
+hr { opacity: 0.12 !important; margin: 0.5rem 0 1.25rem !important; }
+footer { visibility: hidden; }
+#MainMenu { visibility: hidden; }
+/* Negritas usadas como sub-subtítulo (st.markdown('**Texto**')) — mismo tratamiento sobrio */
+.stMarkdown strong { font-family: 'Oswald', sans-serif; font-weight: 500; opacity: 0.85; }
 /* ══ SIDEBAR ═══════════════════════════════════════════════════ */
 section[data-testid="stSidebar"] h3 {
     border-bottom: 3px solid var(--brand-accent);
     padding-bottom: 4px;
     display: inline-block;
+    text-transform: uppercase !important;
+    letter-spacing: 0.02em !important;
+    font-weight: 700 !important;
+    opacity: 1 !important;
+    font-size: 1rem !important;
 }
-
 /* ══ CARDS DE GRÁFICOS Y MÉTRICAS (Flat SaaS Design) ═══════════ */
 div[data-testid="stVerticalBlockBorderWrapper"],
 div[data-testid="stMetric"] {
@@ -41,12 +59,11 @@ div[data-testid="stMetric"] {
     border-radius: var(--radius-sm) !important;
     box-shadow: none !important; /* Eliminamos el relieve */
 }
-
 div[data-testid="stMetric"] {
     border-left: 3px solid var(--brand-accent) !important;
     padding: 1rem !important;
+    min-height: 92px; /* cards parejas dentro de la misma fila de KPIs */
 }
-
 div[data-testid="stMetricValue"] {
     font-family: 'JetBrains Mono', monospace !important;
     font-weight: 700 !important;
@@ -56,11 +73,9 @@ div[data-testid="stMetricLabel"] {
     text-transform: uppercase;
     opacity: 0.7;
 }
-
 /* ══ TABS Y CONTROLES ══════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-highlight"] { background-color: var(--brand-accent) !important; }
 .stTabs [aria-selected="true"] { font-weight: 700 !important; }
-
 div[role="radiogroup"] label:hover { background-color: rgba(179, 38, 30, 0.08) !important; }
 [data-testid="stToggle"] label div[data-checked="true"] {
     background-color: var(--brand-accent) !important;
