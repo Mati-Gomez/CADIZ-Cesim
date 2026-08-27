@@ -1,9 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 /* ══════════════════════════════════════════════════════════════
    VARIABLES DE MARCA — CÁDIZ AUTOMOTIVE
-   Inspirado en el dashboard de Geodefender (Grupo Randazzo): tipografía
-   limpia, cards redondeadas, jerarquía clara — con nuestra paleta
-   roja/grafito en vez del verde lima de esa plataforma.
    ══════════════════════════════════════════════════════════════ */
 :root {
     --brand-accent: #B3261E;      /* Rojo CÁDIZ */
@@ -37,7 +34,6 @@ h3 { font-size: 1.05rem !important; }
 .stCaption, [data-testid="stCaptionContainer"] p { opacity: 0.55 !important; font-size: 0.8rem !important; }
 hr { opacity: 0.1 !important; margin: 0.5rem 0 1.25rem !important; }
 footer { visibility: hidden; }
-/* OJO: NO ocultar #MainMenu — ahí vive el selector nativo de tema (Light/Dark/Sistema) de Streamlit. */
 .stMarkdown strong { font-weight: 600; opacity: 0.9; }
 
 /* ══ SIDEBAR ═══════════════════════════════════════════════════ */
@@ -51,9 +47,7 @@ section[data-testid="stSidebar"] h3 {
     font-size: 1rem !important;
 }
 
-/* ══ CARDS DE GRÁFICOS Y MÉTRICAS ═══════════════════════════════
-   Cards más redondeadas y con sombra sutil, como en Geodefender —
-   se despegan un poco más del fondo que el look "flat" anterior. */
+/* ══ CARDS DE GRÁFICOS Y MÉTRICAS ═══════════════════════════════ */
 div[data-testid="stVerticalBlockBorderWrapper"],
 div[data-testid="stMetric"] {
     background-color: var(--secondary-background-color) !important;
@@ -64,7 +58,7 @@ div[data-testid="stMetric"] {
 div[data-testid="stMetric"] {
     border-left: 4px solid var(--brand-accent) !important;
     padding: 1rem 1.1rem !important;
-    min-height: 100px; /* cards parejas dentro de la misma fila de KPIs, con o sin delta */
+    min-height: 100px; 
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -73,16 +67,20 @@ div[data-testid="stMetricValue"] { font-weight: 700 !important; font-size: 1.5re
 div[data-testid="stMetricLabel"] { font-weight: 600 !important; opacity: 0.62; font-size: 0.8rem !important; text-transform: uppercase; letter-spacing: 0.02em; }
 div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 500 !important; }
 
-/* ══ TABS — pill style, como los botones de filtro de Geodefender ══ */
+/* ══ TABS — pill style ═════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-list"] { gap: 4px; }
 .stTabs [data-baseweb="tab"] {
     border-radius: 999px !important;
     padding: 6px 16px !important;
+    transition: all 0.2s ease-in-out;
 }
 .stTabs [aria-selected="true"] {
-    background-color: var(--brand-accent) !important;
-    color: white !important;
+    background-color: rgba(179, 38, 30, 0.12) !important; 
+    color: var(--brand-accent) !important;
     font-weight: 600 !important;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    background-color: rgba(179, 38, 30, 0.05) !important;
 }
 .stTabs [data-baseweb="tab-highlight"] { background-color: transparent !important; }
 .stTabs [data-baseweb="tab-border"] { display: none !important; }
@@ -95,8 +93,6 @@ div[data-baseweb="slider"] div[role="slider"], div[data-baseweb="slider"] > div 
     border-color: var(--brand-accent) !important;
 }
 
-/* ══ ALERTAS — más redondeadas, en línea con el resto ══════════ */
+/* ══ ALERTAS Y EXPANDERS ═══════════════════════════════════════ */
 div[data-testid="stAlert"] { border-radius: var(--radius-sm) !important; }
-
-/* ══ EXPANDERS ═══════════════════════════════════════════════════ */
 details[data-testid="stExpander"] { border-radius: var(--radius-md) !important; border: 1px solid var(--border-soft) !important; }
