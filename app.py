@@ -69,19 +69,35 @@ def valor_fuzzy(sub_df, keyword, empresa=None):
     d = sub_df[sub_df['Metrica'].str.contains(rf'{keyword}', case=False, na=False)]
     if empresa: d = d[d['Empresa'] == empresa]
     return pd.to_numeric(d['Valor'].iloc[0], errors='coerce') if not d.empty else None
+def es_modo_oscuro():
+    """Fuente de verdad única: el tema REAL de Streamlit (nativo, el que el usuario elige en
+    Settings o 'usar el del sistema'), no un toggle casero desconectado del resto de la UI."""
+    try:
+        return st.context.theme.type == 'dark'
+    except Exception:
+        return True
 def mostrar(fig, ocultar_eje_valores=None, en_card=True, **kwargs):
-    # Si la figura ya trae un height propio (ej. bullet chart, funnel), lo respeta; si no, aplica el estándar.
-    altura = fig.layout.height or CHART_HEIGHT
-    fig.update_layout(template='plotly_dark' if st.session_state.get('modo_oscuro', True) else 'plotly_white', 
+    oscuro = es_modo_oscuro()
+    # Si la figura ya trae leyenda propia posicionada abajo (y<0), necesita más alto/margen
+    # para que la leyenda no quede tapando el gráfico.
+    leyenda_abajo = False
+    for ln in ('legend', 'legend2'):
+        leg = getattr(fig.layout, ln, None)
+        if leg is not None and leg.y is not None and leg.y < 0:
+            leyenda_abajo = True
+    altura = fig.layout.height or (CHART_HEIGHT + 70 if leyenda_abajo else CHART_HEIGHT)
+    margen_b = 75 if leyenda_abajo else 20
+    color_linea_eje = '#4A4642' if oscuro else '#D8D3CC'
+    fig.update_layout(template='plotly_dark' if oscuro else 'plotly_white',
                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                       font=dict(color=BRAND_LIGHT if st.session_state.get('modo_oscuro', True) else BRAND_DARK, family='JetBrains Mono, monospace'),
-                       title_font=dict(family='Oswald, sans-serif', size=14),
-                       margin=dict(l=20, r=20, t=45, b=20),
+                       font=dict(color=BRAND_LIGHT if oscuro else BRAND_DARK, family='Inter, sans-serif'),
+                       title_font=dict(family='Inter, sans-serif', size=14, weight=600),
+                       margin=dict(l=20, r=20, t=45, b=margen_b),
                        height=altura,
-                       bargap=0.4) 
-    fig.update_xaxes(showgrid=False, zeroline=False, showline=True, linewidth=2, linecolor='#3F3F46')
-    fig.update_yaxes(showgrid=False, zeroline=False, showline=True, linewidth=2, linecolor='#3F3F46')
-    
+                       bargap=0.4)
+    fig.update_xaxes(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor=color_linea_eje)
+    fig.update_yaxes(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor=color_linea_eje)
+
     if ocultar_eje_valores == 'y': fig.update_yaxes(showticklabels=False, title=None)
     elif ocultar_eje_valores == 'x': fig.update_xaxes(showticklabels=False, title=None)
     
@@ -90,7 +106,7 @@ def mostrar(fig, ocultar_eje_valores=None, en_card=True, **kwargs):
     else: st.plotly_chart(fig, use_container_width=True, **kwargs)
 def linea_media(fig, valor, eje='y', etiqueta='Promedio'):
     if pd.isna(valor): return
-    color_ref = 'rgba(255,255,255,0.35)' if st.session_state.get('modo_oscuro', True) else 'rgba(26,23,20,0.35)'
+    color_ref = 'rgba(255,255,255,0.35)' if es_modo_oscuro() else 'rgba(26,23,20,0.35)'
     kwargs = dict(line_dash='dash', line_color=color_ref, line_width=1.5,
                   annotation_text=etiqueta, annotation_font_size=10, annotation_font_color=color_ref)
     if eje == 'y': fig.add_hline(y=valor, **kwargs)
@@ -120,7 +136,7 @@ def chart_evolucion(sub: pd.DataFrame, titulo: str):
                                   marker=dict(size=6 if es_cadiz else 4), opacity=1.0 if es_cadiz else 0.5))
     promedio_x_ronda = ev.groupby('Ronda_Orden').agg(Ronda=('Ronda', 'first'), Valor=('Valor', 'mean')).sort_index()
     if len(promedio_x_ronda) > 0:
-        color_ref = 'rgba(255,255,255,0.35)' if st.session_state.get('modo_oscuro', True) else 'rgba(26,23,20,0.35)'
+        color_ref = 'rgba(255,255,255,0.35)' if es_modo_oscuro() else 'rgba(26,23,20,0.35)'
         fig.add_trace(go.Scatter(x=promedio_x_ronda['Ronda'], y=promedio_x_ronda['Valor'], mode='lines+markers',
                                   name='Promedio', line=dict(color=color_ref, width=1, dash='dash'), marker=dict(size=4)))
     fig.update_layout(title=f'Evolución — {titulo}')
@@ -132,7 +148,6 @@ rondas_timeline = ['Práctica 1', 'Práctica 2', 'Práctica 3'] if filtro_tipo =
 ronda_snapshot = st.sidebar.select_slider('Ronda de análisis', options=rondas_timeline, value=rondas_timeline[0], key='slider_rondas')
 empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0, key='select_equipo')
 st.sidebar.divider()
-modo_oscuro = st.sidebar.toggle('Modo oscuro', value=True, key='modo_oscuro')
 SECCIONES = ['Resultados', 'Mercado', 'Operaciones', 'Finanzas', 'RRHH y Sostenibilidad']
 seccion = st.sidebar.radio('Sección', SECCIONES, key='select_seccion_router')
 df_all = get_data(filtro_tipo)
@@ -212,6 +227,7 @@ def seccion_resultado():
     st.caption('"Retorno acumulado" es per-annum y no es aditivo entre rondas — no lo restes vos mismo para ver "cómo fue esta ronda". '
                'Para eso usá "Retorno de la Acción" (variación simple de precio, sí comparable ronda a ronda).')
     st.divider()
+    vista_ranking = st.radio('Vista del ranking (columna derecha)', ['Acumulado (Retorno del Accionista, %)', f'Solo {ronda_snapshot} (USD)'], horizontal=True, key='vista_ranking_cv')
     col_a, col_b = st.columns(2)
     with col_a:
         pl = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
@@ -232,7 +248,6 @@ def seccion_resultado():
             fig.update_layout(title=f'Puente de Beneficio Neto — {empresa_analisis}')
             mostrar(fig, ocultar_eje_valores='y')
     with col_b:
-        vista_ranking = st.radio('Vista del ranking', ['Acumulado (Retorno del Accionista, %)', f'Solo {ronda_snapshot} (USD)'], horizontal=True, key='vista_ranking_cv')
         es_acumulado = vista_ranking.startswith('Acumulado')
         datos_ranking = retorno_acum_vals if es_acumulado else cv_vals
         titulo_ranking = 'Ranking: Retorno Acumulado del Accionista, %' if es_acumulado else f'Ranking: Beneficio del Accionista — {ronda_snapshot}'
@@ -317,12 +332,13 @@ def seccion_mercado():
                  (df['Metrica'] == 'Enfoque de la estrategia de marketing') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']]
         if not est.empty:
             estrategias = ['Precio bajo', 'Equilibrado', 'Marca', 'Características', 'Precio alto']
-            est_map = {e: i for i, e in enumerate(estrategias)}
-            est = est.copy()
-            est['Cod'] = est['Valor'].map(est_map)
-            est = est.dropna(subset=['Cod']).sort_values('Empresa')
+            # Mapa de color FIJO por estrategia (antes usaba el color automático de Plotly, que
+            # reasigna colores según el orden de aparición en cada gráfico — por eso "Marca"
+            # salía de un color acá y de otro allá).
+            estrategia_colores = dict(zip(estrategias, [BRAND_ACCENT, MUTED_PALETTE[0], MUTED_PALETTE[1], MUTED_PALETTE[2], MUTED_PALETTE[3]]))
+            est = est.copy().sort_values('Empresa')
             fig_est = px.bar(est, x='Empresa', y=[1] * len(est), color='Valor',
-                              category_orders={'Valor': estrategias},
+                              category_orders={'Valor': estrategias}, color_discrete_map=estrategia_colores,
                               title=f'Estrategia elegida — {tech_pan}, {pais_pan}, {ronda_snapshot}')
             fig_est.update_traces(text=est['Valor'], textposition='inside')
             mostrar(fig_est, ocultar_eje_valores='y')
@@ -330,20 +346,41 @@ def seccion_mercado():
             st.info('Sin datos de estrategia para esta combinación.')
 
         st.divider()
-        st.markdown('**Mix tecnológico de la industria**')
+        st.markdown('**Mix tecnológico**')
+        col_mix1, col_mix2 = st.columns(2)
         mix_rows = []
         for tech in tecnologias:
             v = df[(df['Estado'] == estado_pan) & (df['Seccion'] == tech) & (df['Metrica'] == 'Ventas, miles unidades') & (df['Ronda'] == ronda_snapshot)]['Valor']
             mix_rows.append({'Tecnología': tech, 'Ventas': num(v).sum()})
         mix_df = pd.DataFrame(mix_rows)
         mix_df = mix_df[mix_df['Ventas'] > 0]
-        if not mix_df.empty:
-            fig_mix = px.pie(mix_df, names='Tecnología', values='Ventas', hole=0.5,
-                              color_discrete_sequence=[BRAND_ACCENT] + MUTED_PALETTE,
-                              title=f'Mix tecnológico de toda la industria — {pais_pan}, {ronda_snapshot}')
-            mostrar(fig_mix)
-        else:
-            st.info('Sin ventas registradas en esta combinación.')
+        with col_mix1:
+            if not mix_df.empty:
+                fig_mix = px.pie(mix_df, names='Tecnología', values='Ventas', hole=0.5,
+                                  color_discrete_sequence=[BRAND_ACCENT] + MUTED_PALETTE,
+                                  title=f'Toda la industria — {pais_pan}, {ronda_snapshot}')
+                mostrar(fig_mix)
+            else:
+                st.info('Sin ventas registradas en esta combinación.')
+        with col_mix2:
+            mix_emp_rows = []
+            for tech in tecnologias:
+                sub_tech = df[(df['Estado'] == estado_pan) & (df['Seccion'] == tech) & (df['Metrica'] == 'Ventas, miles unidades') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']]
+                sub_tech['Valor'] = num(sub_tech['Valor'])
+                for _, r in sub_tech.iterrows():
+                    mix_emp_rows.append({'Empresa': r['Empresa'], 'Tecnología': tech, 'Ventas': r['Valor']})
+            mix_emp_df = pd.DataFrame(mix_emp_rows).dropna(subset=['Ventas'])
+            mix_emp_df = mix_emp_df[mix_emp_df['Ventas'] > 0]
+            if not mix_emp_df.empty:
+                totales = mix_emp_df.groupby('Empresa')['Ventas'].transform('sum')
+                mix_emp_df['Pct'] = mix_emp_df['Ventas'] / totales * 100
+                fig_mix_emp = px.bar(mix_emp_df, x='Empresa', y='Pct', color='Tecnología', barmode='stack',
+                                      color_discrete_sequence=[BRAND_ACCENT] + MUTED_PALETTE,
+                                      title=f'Por equipo — {pais_pan}, {ronda_snapshot}')
+                fig_mix_emp.update_layout(yaxis_title='% de ventas')
+                mostrar(fig_mix_emp)
+            else:
+                st.info('Sin ventas por equipo en esta combinación.')
 
     with tab_evo:
         pais_evo = st.selectbox('Mercado', ['EE.UU.', 'China', 'Europa'], key='sel_evo_pais')
@@ -448,17 +485,24 @@ def seccion_operaciones():
                                   title=f'Fábricas por equipo — {ronda_snapshot}')
                 fig_fab.update_traces(textposition='inside')
                 mostrar(fig_fab, ocultar_eje_valores='y')
-                fab_futuro = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
-                                (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
-                                (df['Subgrupo'] == 'Después de la próxima ronda')].copy()
-                fab_futuro['Valor'] = num(fab_futuro['Valor'])
-                fab_actual_cadiz = fab_piv[fab_piv['Empresa'] == empresa_analisis]['Valor'].sum()
-                fab_futuro_total = fab_futuro['Valor'].sum()
-                if fab_futuro_total > fab_actual_cadiz:
-                    st.caption(f'📈 {empresa_analisis} tiene planificado pasar de {fab_actual_cadiz:.0f} a {fab_futuro_total:.0f} '
-                               'fábricas en las próximas 2 rondas.')
             else:
                 st.info('Sin datos de fábricas para esta ronda.')
+
+        # Alerta de expansión: chequea a los 7 equipos, no solo a CADIZ — quién tiene
+        # planificado abrir fábricas nuevas en las próximas 2 rondas.
+        fab_futuro_all = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
+                            (df['Ronda'] == ronda_snapshot) & (df['Subgrupo'] == 'Después de la próxima ronda')].copy()
+        fab_futuro_all['Valor'] = num(fab_futuro_all['Valor'])
+        fab_futuro_piv = fab_futuro_all.groupby('Empresa')['Valor'].sum()
+        fab_actual_piv = fab_piv.groupby('Empresa')['Valor'].sum() if not fab_piv.empty else pd.Series(dtype=float)
+        expansiones = []
+        for emp in COMPANIES:
+            actual, futuro = fab_actual_piv.get(emp, 0), fab_futuro_piv.get(emp, 0)
+            if futuro > actual:
+                expansiones.append(f'**{emp}**: {actual:.0f} → {futuro:.0f}')
+        if expansiones:
+            propia = any(e.startswith(f'**{empresa_analisis}**') for e in expansiones)
+            (st.warning if propia else st.info)('🏭 **Expansión de capacidad planificada (próximas 2 rondas):** ' + ' · '.join(expansiones))
 
         st.divider()
         pl = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
@@ -479,9 +523,10 @@ def seccion_operaciones():
 
         st.divider()
         st.markdown('**Costos de proveedores — composición**')
+        st.caption('No incluye Fabricación contratada — eso ya se ve arriba, en Producción propia vs. contratada.')
         prov = df[(df['Modulo'] == 'Creación de valor') & (df['Seccion'] == 'Proveedores') &
                   (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
-                  (df['Metrica'] != 'Total') & (df['Metrica'] != 'Valor total creado')].copy()
+                  (~df['Metrica'].isin(['Total', 'Valor total creado', 'Costos de fabricación contratada']))].copy()
         prov['Valor'] = num(prov['Valor'])
         prov = prov.dropna(subset=['Valor'])
         if not prov.empty:
@@ -675,12 +720,17 @@ def seccion_finanzas():
             colores_pasivo = MUTED_PALETTE[:3] + [BRAND_ACCENT, MUTED_PALETTE[4]]
             for (nombre, val), color in zip(activo_items.items(), colores_activo):
                 fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
-                                          text=format_num(val), textposition='inside'))
+                                          text=format_num(val), textposition='inside', legend='legend'))
             for (nombre, val), color in zip(pasivo_pn_items.items(), colores_pasivo):
                 fig_bal.add_trace(go.Bar(x=['Pasivo + PN'], y=[val], name=nombre, marker_color=color,
-                                          text=format_num(val), textposition='inside'))
-            fig_bal.update_layout(barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
-                                   legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
+                                          text=format_num(val), textposition='inside', legend='legend2'))
+            fig_bal.update_layout(
+                barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
+                # Dos leyendas separadas, cada una pegada a la barra que le corresponde —
+                # antes una sola leyenda combinada hacía difícil saber qué color era de qué lado.
+                legend=dict(orientation='v', title='Activo', x=0.12, y=0.5, xanchor='center', yanchor='middle'),
+                legend2=dict(orientation='v', title='Pasivo + PN', x=0.88, y=0.5, xanchor='center', yanchor='middle'),
+                height=CHART_HEIGHT + 20)
             mostrar(fig_bal, ocultar_eje_valores='y')
             st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
         else:
@@ -688,6 +738,8 @@ def seccion_finanzas():
 
         st.divider()
         st.markdown('**Costo de la deuda por mercado**')
+        calif_val_lp = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
+        st.metric('Calificación crediticia', calif_val_lp if calif_val_lp else '—')
         tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
                            'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
         tasas_rows = []
@@ -703,7 +755,7 @@ def seccion_finanzas():
                                 title=f'Tasa de interés por mercado y plazo — {empresa_analisis} vs. industria, {ronda_snapshot}')
             fig_tasas.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             mostrar(fig_tasas)
-            st.caption('Tasas más altas en general reflejan menor calificación crediticia — se pueden comparar directo contra la calificación de arriba.')
+            st.caption('Tasas más altas en general reflejan menor calificación crediticia (la tarjeta de arriba).')
 
         datos_lp = {
             'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
@@ -713,7 +765,7 @@ def seccion_finanzas():
         }
         ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
         if ejes_validos:
-            color_ref = 'rgba(255,255,255,0.5)' if st.session_state.get('modo_oscuro', True) else 'rgba(26,23,20,0.5)'
+            color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
             fig_rango = go.Figure()
             for i, (nombre, vals) in enumerate(ejes_validos.items()):
                 valores = sorted(v for v in vals.values() if pd.notna(v))
