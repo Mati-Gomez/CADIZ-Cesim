@@ -30,7 +30,9 @@ COLOR_METRICA = {
 COLOR_MAP = {MY_COMPANY: BRAND_ACCENT}
 for i, c in enumerate([c for c in COMPANIES if c != MY_COMPANY]):
     COLOR_MAP[c] = MUTED_PALETTE[i % len(MUTED_PALETTE)]
-CHART_HEIGHT = 260  # alto estándar para la mayoría de los gráficos, más chico que antes
+CHART_HEIGHT = 260      # alto del área de ploteo de referencia
+ALTURA_TARJETA = 370    # alto FIJO de toda tarjeta de gráfico, con o sin leyenda abajo:
+                        # es lo que garantiza que dos gráficos en columnas queden parejos
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'raw')
 st.set_page_config(page_title='CÁDIZ | Tablero Directivo', layout='wide')
@@ -95,8 +97,12 @@ def mostrar(fig, ocultar_eje_valores=None, en_card=True, **kwargs):
         leg = getattr(fig.layout, ln, None)
         if leg is not None and leg.y is not None and leg.y < 0:
             leyenda_abajo = True
-    altura = fig.layout.height or (CHART_HEIGHT + 70 if leyenda_abajo else CHART_HEIGHT)
-    margen_b = 75 if leyenda_abajo else 20
+    # Altura ÚNICA para todos los gráficos del tablero. Antes cada figura podía traer la suya
+    # (CHART_HEIGHT, +20, +60, 280) y las que tenían leyenda abajo crecían: dos gráficos en
+    # columnas contiguas terminaban de distinto alto. Ahora la tarjeta siempre mide lo mismo y
+    # lo único que cambia es cuánto de ese alto se reserva abajo para la leyenda.
+    altura = ALTURA_TARJETA
+    margen_b = 110 if leyenda_abajo else 20
     color_linea_eje = '#4A4642' if oscuro else '#D8D3CC'
     fig.update_layout(template='plotly_dark' if oscuro else 'plotly_white',
                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -196,57 +202,77 @@ def evaluar_alertas():
     bal = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
     ratios = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
 
-    # --- Liquidez: el sobregiro automático de Cesim es la señal más cara de ignorar
+    # --- Liquidez: el sobregiro automático de Cesim es un hecho del reporte, no un umbral nuestro
     deuda_cp = valor_de(bal, 'Deudas a corto plazo (no planificadas)', empresa_analisis)
     if deuda_cp and deuda_cp > 0:
         alertas.append(('critico', 'Sobregiro automático',
-                        f'{format_num(deuda_cp)} USD de deuda de corto plazo NO planificada: la caja no alcanzó para cubrir obligaciones.'))
-    caja = valor_de(bal, 'Efectivo y equivalentes de efectivo', empresa_analisis)
-    activo_total = valor_de(bal, 'Activo total', empresa_analisis)
-    if caja is not None and activo_total and activo_total > 0 and (caja / activo_total) < 0.05:
-        alertas.append(('aviso', 'Caja ajustada',
-                        f'El efectivo es el {caja/activo_total*100:.1f}% del activo — margen fino para la próxima ronda.'))
+                        f'{format_num(deuda_cp)} USD de deuda de corto plazo NO planificada: la caja no alcanzó '
+                        'para cubrir obligaciones. Suele venir con tasa de interés penal.'))
 
-    # --- Capacidad: tan malo pasarse como tener la planta parada
-    cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') &
-             (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
-             (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
-    if not cap.empty:
-        cap['Valor'] = num(cap['Valor'])
-        for planta, uso in cap.dropna(subset=['Valor']).groupby('Subgrupo')['Valor'].sum().items():
-            if uso > 95:
-                alertas.append(('aviso', f'Planta {planta} al límite', f'Capacidad empleada {uso:.0f}% — sin margen para crecer.'))
-            elif uso < 60:
-                alertas.append(('aviso', f'Planta {planta} ociosa', f'Capacidad empleada {uso:.0f}% — activo fijo sin usar.'))
-
-    # --- Tendencias: dos rondas seguidas en la misma dirección ya son una señal, no ruido
     orden_hoy = df[df['Ronda'] == ronda_snapshot]['Ronda_Orden'].iloc[0] if not df[df['Ronda'] == ronda_snapshot].empty else None
 
-    def cae_dos_rondas(estado, metrica, etiqueta, detalle, invertido=False):
-        serie = serie_metrica(estado, metrica, empresa_analisis, hasta_orden=orden_hoy)
+    # --- Tendencias: dos rondas seguidas en la misma dirección. No hay número inventado acá,
+    #     es la propia serie del reporte la que define si viene cayendo o subiendo.
+    def dos_rondas_seguidas(estado, metrica, etiqueta, detalle, subiendo=False, seccion=None):
+        serie = serie_metrica(estado, metrica, empresa_analisis, hasta_orden=orden_hoy, seccion=seccion)
         serie = [v for v in serie if v is not None and not pd.isna(v)]
         if len(serie) < 3: return
         d1, d2 = serie[-1] - serie[-2], serie[-2] - serie[-3]
-        empeora = (d1 < 0 and d2 < 0) if not invertido else (d1 > 0 and d2 > 0)
-        if empeora:
+        if (d1 > 0 and d2 > 0) if subiendo else (d1 < 0 and d2 < 0):
             alertas.append(('aviso', etiqueta, detalle.format(a=serie[-3], b=serie[-1])))
 
-    cae_dos_rondas('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %',
-                   'Retorno del accionista en baja', 'Cayó dos rondas seguidas: de {a:,.1f}% a {b:,.1f}%.')
-    cae_dos_rondas('Hoja de Balance, miles USD, Global', 'Inventario',
-                   'Inventario acumulándose', 'Creció dos rondas seguidas — capital inmovilizado.', invertido=True)
+    dos_rondas_seguidas('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %',
+                        'Retorno del accionista en baja', 'Cayó dos rondas seguidas: de {a:,.1f}% a {b:,.1f}%.')
+    dos_rondas_seguidas('Hoja de Balance, miles USD, Global', 'Inventario',
+                        'Inventario acumulándose', 'Creció dos rondas seguidas — capital inmovilizado.', subiendo=True)
 
-    # --- Posición competitiva
-    ret_all = {emp: valor_de(ratios, 'Retorno total acumulado del accionista (p.a.), %', emp) for emp in COMPANIES}
-    ranking = sorted([e for e in ret_all if ret_all.get(e) is not None], key=ret_all.get, reverse=True)
-    if empresa_analisis in ranking:
-        pos = ranking.index(empresa_analisis) + 1
-        if pos > len(COMPANIES) / 2:
-            alertas.append(('aviso', f'Posición {pos}° de {len(COMPANIES)}', 'Mitad de tabla para abajo en retorno del accionista.'))
+    # --- Cambios vs. la ronda anterior: se compara el dato de una ronda contra el de la otra,
+    #     sin definir qué valor es "bueno" o "malo".
+    ordenes = sorted(df['Ronda_Orden'].dropna().unique())
+    orden_prev = None
+    if orden_hoy in ordenes:
+        i = ordenes.index(orden_hoy)
+        orden_prev = ordenes[i - 1] if i > 0 else None
 
-    calif = valor_texto(ratios, 'Calificación crediticia', empresa_analisis)
-    if isinstance(calif, str) and calif.strip() and calif.strip()[0] in ('B', 'C', 'D'):
-        alertas.append(('critico', 'Calificación crediticia deteriorada', f'Cesim la bajó a {calif} — encarece la deuda futura.'))
+    if orden_prev is not None:
+        ronda_prev = df[df['Ronda_Orden'] == orden_prev]['Ronda'].iloc[0]
+        ratios_prev = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda_Orden'] == orden_prev)]
+
+        # Posición en el ranking de retorno del accionista
+        def puesto(tabla):
+            vals = {e: valor_de(tabla, 'Retorno total acumulado del accionista (p.a.), %', e) for e in COMPANIES}
+            rk = sorted([e for e in vals if vals.get(e) is not None], key=vals.get, reverse=True)
+            return rk.index(empresa_analisis) + 1 if empresa_analisis in rk else None
+        p_hoy, p_ant = puesto(ratios), puesto(ratios_prev)
+        if p_hoy is not None and p_ant is not None and p_hoy != p_ant:
+            nivel = 'aviso' if p_hoy > p_ant else 'ok'
+            verbo = 'Bajó' if p_hoy > p_ant else 'Subió'
+            alertas.append((nivel, f'{verbo} del {p_ant}° al {p_hoy}° puesto',
+                            f'Ranking de retorno del accionista, contra {ronda_prev}.'))
+
+        # Calificación crediticia: se reporta el cambio, sin juzgar qué letra es aceptable
+        calif_hoy = valor_texto(ratios, 'Calificación crediticia', empresa_analisis)
+        calif_ant = valor_texto(ratios_prev, 'Calificación crediticia', empresa_analisis)
+        if calif_hoy and calif_ant and str(calif_hoy).strip() != str(calif_ant).strip():
+            alertas.append(('aviso', 'Cambió la calificación crediticia',
+                            f'De {str(calif_ant).strip()} a {str(calif_hoy).strip()} respecto de {ronda_prev}.'))
+
+    # --- Expansión de capacidad de la industria: Cesim publica las fábricas que va a haber
+    #     después de la próxima ronda, así que se sabe de antemano quién está por agrandarse.
+    # OJO con la forma del reporte: Cesim pone el PAÍS en 'Metrica' (EE.UU. / China) y el
+    # HORIZONTE en 'Subgrupo' (Ronda actual / Próxima ronda / Después de la próxima ronda).
+    # Filtrando al revés no matchea nada y el conteo actual daba 0.
+    fab = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
+             (df['Ronda'] == ronda_snapshot)].copy()
+    if not fab.empty:
+        fab['Valor'] = num(fab['Valor'])
+        act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby('Empresa')['Valor'].sum()
+        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby('Empresa')['Valor'].sum()
+        expansiones = [f'{e}: {act.get(e, 0):.0f} → {fut.get(e, 0):.0f}'
+                       for e in COMPANIES if fut.get(e, 0) > act.get(e, 0)]
+        if expansiones:
+            alertas.append(('aviso', 'Expansión de capacidad planificada (próximas 2 rondas)',
+                            ' · '.join(expansiones)))
     return alertas
 
 def panel_alertas():
@@ -256,11 +282,13 @@ def panel_alertas():
                     f'<span class="detalle">— nada fuera de rango en {ronda_snapshot} para {empresa_analisis}.</span></div>',
                     unsafe_allow_html=True)
         return
-    criticas = [a for a in alertas if a[0] == 'critico']
-    resto = [a for a in alertas if a[0] != 'critico']
-    for nivel, titulo, detalle in criticas + resto:
-        icono = '🔴' if nivel == 'critico' else '🟠'
-        clase = 'alerta-fila' if nivel == 'critico' else 'alerta-fila aviso'
+    # Orden: primero lo que hay que resolver, después lo informativo, al final las mejoras.
+    orden = {'critico': 0, 'aviso': 1, 'ok': 2}
+    iconos = {'critico': '🔴', 'aviso': '🟠', 'ok': '🟢'}
+    clases = {'critico': 'alerta-fila', 'aviso': 'alerta-fila aviso', 'ok': 'alerta-fila ok'}
+    for nivel, titulo, detalle in sorted(alertas, key=lambda a: orden.get(a[0], 1)):
+        icono = iconos.get(nivel, '🟠')
+        clase = clases.get(nivel, 'alerta-fila aviso')
         st.markdown(f'<div class="{clase}">{icono} <b>{titulo}</b> <span class="detalle">— {detalle}</span></div>',
                     unsafe_allow_html=True)
 
@@ -319,6 +347,10 @@ def seccion_resultado():
             retorno_ronda_vals[emp] = ((p_act - p_ant) / p_ant * 100) if (p_act is not None and p_ant not in (None, 0)) else None
 
     cap_vals = {emp: valor_de(val_ronda, 'Capitalización de mercado, miles USD', emp) for emp in COMPANIES}
+    with st.container(border=True):
+        st.markdown(f'**Alertas — {empresa_analisis}, {ronda_snapshot}**')
+        panel_alertas()
+    st.write('')
     st.subheader('KPIs de Valor')
     # Títulos cortos: los largos se cortaban con puntos suspensivos y no se entendía qué métrica era.
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -574,7 +606,7 @@ def seccion_mercado():
             fig_traj.update_layout(title=f'{empresa_analisis} — {tech_traj}, {pais_evo}',
                                     yaxis=dict(title='Precio, USD', side='left', rangemode='tozero'),
                                     yaxis2=dict(title='Características', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
+                                    legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
             mostrar(fig_traj)
         else:
             st.info(f'{empresa_analisis} no tiene datos de {tech_traj} en {pais_evo}.')
@@ -598,21 +630,19 @@ def seccion_operaciones():
                 # El semicírculo gastaba media pantalla para mostrar un solo número, y el
                 # "gauge+number" recortaba el valor con height=220. Una barra horizontal
                 # comunica lo mismo, entra en un tercio del espacio y deja leer el número.
-                if uso > 95:   color_uso, lectura = BRAND_ACCENT, 'al límite'
-                elif uso < 60: color_uso, lectura = COLOR_METRICA['riesgo'], 'ociosa'
-                else:          color_uso, lectura = COLOR_METRICA['eficiencia'], 'en rango'
+                # Sin semáforo: no hay un rango "sano" publicado por Cesim, así que poner
+                # umbrales propios sería inventar un criterio que el reporte no da.
                 with col:
                     with st.container(border=True):
                         st.markdown(f'**Capacidad empleada — {titulo}**')
                         st.markdown(
                             f'<div style="display:flex;align-items:baseline;gap:10px;margin:2px 0 8px">'
-                            f'<span style="font-size:1.9rem;font-weight:700;color:{color_uso}">{uso:,.1f}%</span>'
-                            f'<span style="opacity:0.6;font-size:0.85rem">{lectura}</span></div>'
+                            f'<span style="font-size:1.9rem;font-weight:700;color:{BRAND_ACCENT}">{uso:,.1f}%</span>'
+                            f'<span style="opacity:0.6;font-size:0.85rem">de la capacidad instalada</span></div>'
                             f'<div style="background:rgba(128,128,128,0.18);border-radius:999px;height:10px;width:100%">'
-                            f'<div style="background:{color_uso};border-radius:999px;height:10px;'
+                            f'<div style="background:{BRAND_ACCENT};border-radius:999px;height:10px;'
                             f'width:{min(uso, 100):.1f}%"></div></div>',
                             unsafe_allow_html=True)
-                        st.caption('Rango sano: 60–95%. Por encima no hay margen para crecer; por debajo hay activo fijo sin usar.')
         st.divider()
         st.markdown('**Producción: propia vs. contratada, y fábricas**')
         prod = df[(df['Estado'] == 'Detalles de fabricación') &
@@ -649,21 +679,8 @@ def seccion_operaciones():
             else:
                 st.info('Sin datos de fábricas para esta ronda.')
 
-        # Alerta de expansión: chequea a los 7 equipos, no solo a CADIZ — quién tiene
-        # planificado abrir fábricas nuevas en las próximas 2 rondas.
-        fab_futuro_all = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
-                            (df['Ronda'] == ronda_snapshot) & (df['Subgrupo'] == 'Después de la próxima ronda')].copy()
-        fab_futuro_all['Valor'] = num(fab_futuro_all['Valor'])
-        fab_futuro_piv = fab_futuro_all.groupby('Empresa')['Valor'].sum()
-        fab_actual_piv = fab_piv.groupby('Empresa')['Valor'].sum() if not fab_piv.empty else pd.Series(dtype=float)
-        expansiones = []
-        for emp in COMPANIES:
-            actual, futuro = fab_actual_piv.get(emp, 0), fab_futuro_piv.get(emp, 0)
-            if futuro > actual:
-                expansiones.append(f'**{emp}**: {actual:.0f} → {futuro:.0f}')
-        if expansiones:
-            propia = any(e.startswith(f'**{empresa_analisis}**') for e in expansiones)
-            (st.warning if propia else st.info)('🏭 **Expansión de capacidad planificada (próximas 2 rondas):** ' + ' · '.join(expansiones))
+        # La alerta de expansión de capacidad se movió al panel de alertas de Resultados,
+        # para no tener avisos importantes desparramados por el tablero.
 
         st.divider()
         pl = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
@@ -679,7 +696,7 @@ def seccion_operaciones():
             etapas.append(('= EBITDA', ebitda))
             colores = [COLOR_POSITIVE] + [MUTED_PALETTE[2]]*(len(etapas)-2) + [COLOR_POSITIVE if ebitda > 0 else BRAND_ACCENT]
             fig = go.Figure(go.Funnel(y=[e[0] for e in etapas], x=[e[1] for e in etapas], textinfo='value+percent initial', marker={'color': colores}))
-            fig.update_layout(title='Estructura Macro de Costos (Funnel)', height=CHART_HEIGHT + 60)
+            fig.update_layout(title='Estructura Macro de Costos (Funnel)')
             mostrar(fig, ocultar_eje_valores='x')
 
         st.divider()
@@ -761,7 +778,7 @@ def seccion_operaciones():
                 d_m = log_hist[log_hist['Metrica'] == metrica]
                 fig_gap.add_trace(go.Bar(x=d_m['Ronda'], y=d_m['Valor'], name=nombre, marker_color=color))
             fig_gap.update_layout(barmode='group', title=f'Faltante vs. sobrante — {empresa_analisis}, {tech_sel}, {pais_sel}',
-                                   legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
+                                   legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
             mostrar(fig_gap)
         else:
             st.info('Sin datos suficientes para esta combinación.')
@@ -804,44 +821,35 @@ def seccion_finanzas():
         rd = valor_de(val_ronda, 'Costo de la deuda después de impuestos, %', emp)
         if None in (de, re_, rd): return None
         return (1/(1+de))*re_ + (de/(1+de))*rd
-    # Subsección 1: Corto Plazo (Liquidez y Operación)
+    # Estos 7 KPIs describen la foto financiera de la ronda, no son de corto ni de largo plazo:
+    # quedan fijos arriba y las pestañas subdividen solamente el análisis.
+    bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
+    ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
+    margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
+    ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
+    caja_val = valor_de(bal_ronda, 'Efectivo y equivalentes de efectivo', empresa_analisis)
+    deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
+    deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
+    val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
+    calif_val = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
+
+    f1, f2, f3, f4 = st.columns(4)
+    with f1: st.metric('EBITDA (USD)', format_num(ebitda_val))
+    with f2: st.metric('Margen bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
+    with f3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
+    with f4: st.metric('Caja final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
+    f5, f6, f7, _f8 = st.columns(4)
+    with f5: st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—')
+    with f6: st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
+    with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
+    st.write('')
+
     tab_cp, tab_lp = st.tabs(['Corto Plazo: Liquidez y Operación', 'Largo Plazo: Estructura, Retorno y Competencia'])
 
     with tab_cp:
-        c_cp1, c_cp2, c_cp3, c_cp4 = st.columns(4)
-        ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
-        margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
-        ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
-        caja_val = valor_de(df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)],
-                             'Efectivo y equivalentes de efectivo', empresa_analisis)
-        with c_cp1: st.metric('EBITDA (USD)', format_num(ebitda_val))
-        with c_cp2: st.metric('Margen Bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
-        with c_cp3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
-        with c_cp4: st.metric('Caja Final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
-        st.divider()
-
-        # Subsección 1.5: Deuda y Liquidez — "¿tuvimos que salir a pedir plata de apuro?"
-        st.subheader('Deuda y Liquidez')
-        bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
-        deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
-        deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
-        calif_val = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
-        prom_deuda_cp = np.nanmean([v for v in deuda_cp_vals.values() if v is not None]) if any(v is not None for v in deuda_cp_vals.values()) else None
-        val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
-
-        c_dl1, c_dl2, c_dl3 = st.columns(3)
-        with c_dl1:
-            delta_cp = ((val_deuda_cp - prom_deuda_cp) / prom_deuda_cp * 100) if prom_deuda_cp and val_deuda_cp is not None else None
-            st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
-                       delta=f'{delta_cp:+.1f}% vs Prom' if delta_cp is not None else None, delta_color='inverse')
-        with c_dl2:
-            st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
-        with c_dl3:
-            st.metric('Calificación crediticia', calif_val if calif_val else '—')
-        if val_deuda_cp and val_deuda_cp > 0:
-            st.caption(f'⚠️ {empresa_analisis} tomó {format_num(val_deuda_cp)} USD de deuda de corto plazo NO planificada en {ronda_snapshot} '
-                       '— es el sobregiro automático de Cesim cuando la caja no alcanza para cubrir obligaciones, y suele venir con tasa de interés penal.')
-
+        # El detalle del sobregiro ya lo levanta el panel de alertas en Resultados: acá va
+        # solamente cómo evoluciona y cómo se compara contra la industria.
+        st.subheader('Deuda y liquidez')
         col_dl_a, col_dl_b = st.columns(2)
         with col_dl_a:
             deuda_cp_sub = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Metrica'] == 'Deudas a corto plazo (no planificadas)')]
@@ -884,28 +892,40 @@ def seccion_finanzas():
             colores_pasivo = ['#C9922E', '#B3261E', '#8C6D3F', '#6E8C6E', '#A8A29A']  # cálidos = quién lo financia
             for (nombre, val), color in zip(activo_items.items(), colores_activo):
                 fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
-                                          text=format_num(val), textposition='inside', legend='legend'))
+                                          text=format_num(val), textposition='inside', showlegend=False))
             for (nombre, val), color in zip(pasivo_pn_items.items(), colores_pasivo):
                 fig_bal.add_trace(go.Bar(x=['Pasivo + PN'], y=[val], name=nombre, marker_color=color,
-                                          text=format_num(val), textposition='inside', legend='legend2'))
+                                          text=format_num(val), textposition='inside', showlegend=False))
             fig_bal.update_layout(
                 barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
                 # Dos leyendas separadas, cada una pegada a la barra que le corresponde —
                 # antes una sola leyenda combinada hacía difícil saber qué color era de qué lado.
-                # Estaban en x=0.12 / x=0.88, o sea DENTRO del área de ploteo: tapaban las barras.
-                # Van abajo, una a cada lado, que además es donde mostrar() ya reserva margen.
-                legend=dict(orientation='h', title='Activo', x=0.0, y=-0.18, xanchor='left', yanchor='top'),
-                legend2=dict(orientation='h', title='Pasivo + PN', x=1.0, y=-0.18, xanchor='right', yanchor='top'),
-                height=CHART_HEIGHT + 90)
+                showlegend=False)
             mostrar(fig_bal, ocultar_eje_valores='y')
+            # La leyenda de Plotly, aun puesta afuera, mezclaba los conceptos de los dos lados en
+            # una sola tira. Se dibuja a mano en dos columnas, cada una bajo su barra, para que
+            # se vea de una qué compone el Activo y qué compone el Pasivo + PN.
+            def bloque_leyenda(titulo, items, colores):
+                filas = ''.join(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:0.82rem">'
+                    f'<span style="width:11px;height:11px;border-radius:3px;background:{c};flex:none"></span>'
+                    f'<span style="flex:1">{n}</span>'
+                    f'<span style="opacity:0.65">{format_num(v)}</span></div>'
+                    for (n, v), c in zip(items.items(), colores))
+                return (f'<div style="font-weight:600;font-size:0.8rem;opacity:0.7;text-transform:uppercase;'
+                        f'letter-spacing:0.02em;margin-bottom:4px">{titulo}</div>{filas}')
+            col_leg_a, col_leg_p = st.columns(2)
+            with col_leg_a:
+                st.markdown(bloque_leyenda('Activo', activo_items, colores_activo), unsafe_allow_html=True)
+            with col_leg_p:
+                st.markdown(bloque_leyenda('Pasivo + PN', pasivo_pn_items, colores_pasivo), unsafe_allow_html=True)
             st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
         else:
             st.info('Sin datos de balance para esta combinación.')
 
         st.divider()
         st.markdown('**Costo de la deuda por mercado**')
-        calif_val_lp = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
-        st.metric('Calificación crediticia', calif_val_lp if calif_val_lp else '—')
+        # La calificación crediticia se muestra una sola vez, en los KPIs fijos de la sección.
         tasas_metricas = {'EE.UU. (corto)': 'EE.UU., corto', 'EE.UU. (largo)': 'EE.UU., largo',
                            'China (corto)': 'China, corto', 'Europa (corto)': 'Europa, corto'}
         tasas_rows = []
@@ -959,7 +979,7 @@ def seccion_finanzas():
                 fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=color_ref))
                 fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=color_ref))
             
-            fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), height=280, title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
+            fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
             mostrar(fig_rango, ocultar_eje_valores='x')
         st.divider()
         col_f1, col_f2 = st.columns(2)
@@ -985,7 +1005,7 @@ def seccion_finanzas():
                 fig.update_layout(title='Beneficio Neto vs. Nivel de Deuda',
                                   yaxis=dict(title='Beneficio (USD)', side='left', rangemode='tozero'),
                                   yaxis2=dict(title='Apalancamiento (x)', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                  legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                  legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
                 mostrar(fig)
     # =================================================================
     # SECCIÓN 5 — RRHH Y SOSTENIBILIDAD
@@ -1012,11 +1032,10 @@ def seccion_rrhh_sostenibilidad():
                 fig.update_layout(title='Evolución: Salario vs Rotación',
                                   yaxis=dict(title='Salario (USD)', range=[0, max_sal], rangemode='tozero', side='left'),
                                   yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
-                                  legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                  legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
                 mostrar(fig)
         with col_b:
             st.subheader('Rotación y contrataciones')
-            st.caption('Cuántas contrataciones netas hizo falta hacer, en la misma ronda en que se dio la rotación.')
             contrat = rrhh[rrhh['Metrica'] == 'Contrataciones + / despidos -'].sort_values('Ronda_Orden')
             if not salario.empty and not contrat.empty and not rotacion.empty:
                 fig_ch = go.Figure()
@@ -1027,8 +1046,9 @@ def seccion_rrhh_sostenibilidad():
                 fig_ch.update_layout(title='Rotación vs. Contrataciones netas',
                                       yaxis=dict(title='Personas', side='left', rangemode='tozero'),
                                       yaxis2=dict(title='Rotación, %', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                      legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                      legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
                 mostrar(fig_ch)
+                st.caption('Cuántas contrataciones netas hizo falta hacer, en la misma ronda en que se dio la rotación.')
 
         st.divider()
         col_c, col_d = st.columns(2)
@@ -1045,7 +1065,7 @@ def seccion_rrhh_sostenibilidad():
                 fig_id.update_layout(title='Inversión en I+D: costo vs. dotación',
                                       yaxis=dict(title='Costo variable, USD', side='left', rangemode='tozero'),
                                       yaxis2=dict(title='Personal I+D', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                      legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                      legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
                 mostrar(fig_id)
             else:
                 st.info('Sin datos de I+D para este equipo.')
@@ -1062,7 +1082,7 @@ def seccion_rrhh_sostenibilidad():
                 fig_cap.update_layout(title='Capacitación vs. eficiencia de RRHH',
                                        yaxis=dict(title='Presupuesto, USD', side='left', rangemode='tozero'),
                                        yaxis2=dict(title='Multiplicador eficiencia', overlaying='y', side='right', showgrid=False),
-                                       legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
+                                       legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
                 mostrar(fig_cap)
                 st.caption('Ojo con leer una relación directa: el efecto de la capacitación no es instantáneo, así que el '
                            'presupuesto de una ronda y el multiplicador de esa MISMA ronda no se explican entre sí. '
@@ -1095,12 +1115,6 @@ def seccion_rrhh_sostenibilidad():
                     mostrar(fig2)
 # ---------------- Router ----------------
 st.title(seccion)
-# El panel corre en TODAS las secciones: la idea es enterarse de que algo se rompió sin
-# tener que recorrer el tablero entero ni abrir el Excel de proyección.
-with st.container(border=True):
-    st.markdown(f'**Alertas — {empresa_analisis}, {ronda_snapshot}**')
-    panel_alertas()
-st.write('')
 if seccion == SECCIONES[0]: seccion_resultado()
 elif seccion == SECCIONES[1]: seccion_mercado()
 elif seccion == SECCIONES[2]: seccion_operaciones()
