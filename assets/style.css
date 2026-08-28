@@ -1,328 +1,3 @@
-
-Gemini
-
-Chatear
-
-Spark
-beta
-Nueva conversación
-Buscar conversaciones
-Imágenes
-Vídeos
-Biblioteca
-Gems
-Nuevo cuaderno
-Gestión de Productos Digitales y Estrategia de Datos TISI
-Inspired: La biblia del Product Management
-Todos los cuadernos
-Mails
-Planificación de Decisiones por Secciones
-Hertz 2
-Power BI, Streamlit y Datos Locales
-Costo Reforma Vivienda La Plata
-Finanzas
-Análisis Técnico y de Negocio de Dashboard
-Desconfianza y conflicto en la pareja
-Arquitectura Web: Estrategia y Diseño
-Contexto personal y cv
-Procesamiento de Archivos de Infracciones Vehiculares
-Revisión de Resumen Académico con Bibliografía
-Vista de Costos Generales de Construcción
-Resumen de Estudio para Parcial de Tecnología
-Estrategia de Marketing y Diseño GSIX
-Estrategia de Contenido Meta Ads G-SIX
-Campaña de Meta Ads para Teatro
-Marketing para Concesionaria de Motos
-Estrategia de Lanzamiento: Lead Gen y Contenido
-Hertz
-Ingles
-Identidad para constructora de arquitectos
-Rebranding Febrero: Estrategia de Marketing
-Restricción de Contenido de Terceros
-Marketing digital
-Red Bull Wingfinder: Fortalezas y Resultados
-Dojo: Estadística y SQL Avanzado
-Arquitectura Comercial y Estrategia de Marca
-Conversación con Gemini
-finanzas
-
-En la pestaña de Finanzas, las variables accionables para esta ronda son estrictamente de estructura de capital y liquidez inter-compañía:
-
-Deuda a largo plazo: Aumentar (+) o disminuir (-) el capital (en miles de USD).
-
-Capital social:
-
-Emisión de acciones (millones de acciones).
-
-Recompra de acciones (millones de acciones).
-
-Pago de dividendos (miles de USD).
-
-Préstamos internos: Transferencia de liquidez entre filiales:
-
-EE.UU. ↔ China (+ para enviar a China, - para repatriar a EE.UU.).
-
-EE.UU. ↔ Europa (+ para enviar a Europa, - para repatriar a EE.UU.).
-
-A continuación, el mapa consolidado de todas las variables, estimaciones y decisiones duras que exige el modelo en esta ronda, estructurado por área:
-
-1. Demanda
-
-Estimaciones:
-
-Previsión de crecimiento del mercado total (%) para EE.UU., China y Europa.
-
-Cuota de mercado objetivo (%) por cada producto/tecnología activa en cada región.
-
-2. Producción
-
-Planificación:
-
-Estrategia de reciclabilidad (Directriz y compromiso).
-
-Asignación de producción interna: Qué tecnología fabricar y qué % de capacidad asignarle (Líneas 1 y 2 en EE.UU. y China).
-
-Cuota de utilización de energías renovables (%).
-
-Volumen de producción contratada (tercerizada) en miles de unidades.
-
-Inversiones operativas (activación on/off): Reducción de CO2, consumo de energía y consumo de agua.
-
-Inversiones (Capacidad instalada):
-
-Proyección de demanda futura (miles de unidades) para las Rondas 4 y 5 (define la necesidad de capacidad).
-
-Inversión en nuevas fábricas (+) o desinversión (-) en EE.UU. y China.
-
-3. Recursos Humanos (RRHH)
-
-Dotación de personal y costos:
-
-Estimación de rotación de personal (%).
-
-Plantilla objetivo (Personal durante esta ronda).
-
-Salario mensual (USD).
-
-Presupuesto mensual de capacitación por empleado (USD).
-
-Prioridades de formación: Activación (on/off) de políticas de formación básica, seguridad laboral, salud, no discriminación y ética.
-
-4. Investigación y Desarrollo (I+D)
-
-Desarrollo propio: Asignación de jornadas de trabajo por persona a cada tecnología (Combustión, Híbrido, Eléctrico, Hidrógeno).
-
-Adquisición externa: Compra directa de características o licencias tecnológicas por tipo de motor.
-
-Licenciamiento: Acuerdos de compra/venta de tecnología con otros equipos (definiendo equipo, tecnología y precio).
-
-5. Marketing (Replicable por región y tecnología)
-
-Cantidad de características del producto.
-
-Precio de venta final (USD).
-
-Presupuesto de promoción (miles de USD).
-
-Enfoque estratégico (Marca, Equilibrado, Precio, Características, Sostenibilidad).
-
-6. Logística
-
-Prioridades de distribución: Orden de prelación (1°, 2°, 3°) para abastecer a EE.UU., China y Europa desde cada planta (EE.UU. y China) y por cada tecnología.
-
-7. Impuestos
-
-Precios de transferencia: Multiplicador sobre el costo unitario para los movimientos de inventario internos (EE.UU. ↔ China, EE.UU. ↔ Europa, China ↔ Europa).
-
-8. Finanzas
-
-Movimientos de deuda a largo plazo, emisión/recompra de acciones, pago de dividendos y préstamos internos (detallados al inicio).
-
-Espera, volves a enumerar pero mas detalladamente? en marketing te falto que todos esos datos que pide es por tecnologia(combustion, hibrido, etc), no se si en alguna otra seccion hiciste lo mismo pero cheque y reenviame la enumeracion
-
-1. Demanda
-
-Previsión de crecimiento de mercado (%): Se define por mercado geográfico (EE.UU., China, Europa).
-
-Estimación de cuota de mercado (%): Se define por mercado geográfico y, dentro de cada uno, por cada tecnología específica que comercialices en esa región.
-
-2. Producción
-
-Planificación - Producción Interna: Se configura por planta (EE.UU. y China) y por Línea de ensamble (1 y 2). Para cada línea se debe definir qué tecnología fabricar y qué % de la capacidad total asignarle.
-
-Planificación - Producción Contratada: Volumen en miles de unidades, definido por región y por tecnología.
-
-Planificación - Sostenibilidad (Corporativo): Directriz de reciclabilidad, compromiso (On/Off), cuota de energías renovables (%), e inversiones en impacto (Activación On/Off para reducción de CO2, energía y agua).
-
-Inversiones - Proyección de demanda: Estimación de ventas (miles de unidades) para las Rondas 4 y 5, desglosado estrictamente por tecnología (Combustión, Híbrido, Eléctrico, Hidrógeno).
-
-Inversiones - Capacidad: Compra (+) o venta (-) de fábricas físicas, por región (EE.UU., China).
-
-3. Recursos Humanos (RRHH)
-
-Dotación de personal y costos: Estimación de rotación (%), tamaño de la plantilla para la ronda, salario mensual (USD) y presupuesto de capacitación (USD). Estos son inputs globales.
-
-Prioridades de formación: Activación de políticas (On/Off) de formación básica, seguridad, salud, ética y no discriminación.
-
-4. Investigación y Desarrollo (I+D)
-
-Desarrollo propio: Asignación de jornadas de trabajo por persona, desglosado por cada tecnología.
-
-Comprar tecnología/licencias: Adquisición directa de características o tecnologías base, desglosado por tipo de motor.
-
-Licenciamiento externo (B2B): Configuración de operaciones de compra/venta de I+D. Requiere definir: equipo contraparte, tecnología específica a transaccionar, y precio pactado.
-
-5. Marketing
-
-Decisiones tácticas (Características, Precio, Promoción, Enfoque): Se deben definir las 4 variables por mercado geográfico (EE.UU., China, Europa) y, dentro de cada uno, por cada tecnología comercializada (Combustión, Híbrido, etc.). Es la matriz más grande de inputs.
-
-6. Logística
-
-Prioridades de distribución: Orden de abastecimiento (1°, 2°, 3°) para los mercados de destino (EE.UU., China, Europa). Se debe configurar por planta de origen (Desde EE.UU. / Desde China) y por cada tecnología producida en esas plantas.
-
-7. Impuestos
-
-Precios de transferencia (Multiplicador): Se define por cada ruta unidireccional de movimiento de inventario (EE.UU. → China, EE.UU. → Europa, China → EE.UU., China → Europa).
-
-8. Finanzas
-
-Estructura de Capital: Aumento/Disminución de deuda a largo plazo (miles USD), emisión/recompra de acciones (millones), y pago de dividendos (miles USD).
-
-Liquidez inter-compañía (Préstamos internos): Movimientos de caja (+/- miles USD) para las rutas bidireccionales EE.UU. ↔ China y EE.UU. ↔ Europa.
-
-che, me ayudas a acomodar algunas cositas de mi web?
-
-Dale, pasame el problema o el código y lo desarmamos.
-
-¿Estamos ajustando la web de ARQCO (manteniendo el esquema de proyectos y servicios como páginas independientes) o estás tocando la plataforma que venías armando con React y Supabase?
-
-Tirame exactamente qué querés acomodar —estilos, ruteo, o lógica de datos— y le buscamos la vuelta.
-
-estoy trabajando con estos dos archivos y otros(requeriments,parser.py).
-
-Pero bueno queria primero que me ayudes a correrlo en stackblitz, pongo new project y no se que seleccionar ahi.
-
-Basicamente quiero hacer algunas modificaciones visuales y ya, ahora te digo cuales
-
-StackBlitz corre entornos Node.js en el navegador (WebContainers) y no tiene soporte nativo estable para ejecutar servidores de Python ni dependencias como streamlit, pandas o plotly de forma directa.
-
-Para levantar este proyecto online en 2 minutos sin configurar servidores:
-
-Opción recomendada: Streamlit Community Cloud (Gratis)
-Subí el código a un repositorio de GitHub (con tu app.py, requirements.txt, cesim_parser.py, assets/style.css y la carpeta data/raw/).  
-PY
-+ 1
-
-Entrá a share.streamlit.io.
-
-Conectá tu GitHub, seleccioná el repo y el archivo principal (app.py). Se despliega automáticamente y te da una URL en vivo.
-
-Si querés un entorno de desarrollo interactivo en la nube:
-Google Colab: Creás un notebook, subís los archivos y lo corrés levantando un túnel con localtunnel o ngrok:
-
-Bash
-!pip install -r requirements.txt
-!pip install localtunnel
-!streamlit run app.py & npx localtunnel --port 8501
-Gitpod o Codespaces: En GitHub, presioná la tecla . (punto) en tu repositorio o abrí un Codespace; ahí tenés una terminal Linux completa para ejecutar pip install -r requirements.txt y streamlit run app.py.
-
-Pasame los cambios visuales y ajustes de CSS/UI que querés hacerle al dashboard y los vamos aplicando.
-
-ya estoy en streamlit, era para no hacer commit en github.
-
-Te dejo imagenes, esto no me gusta de la primera, esas subsecciones deberian tener un efecto asi pero mucho mas sutil. En el grafico de activo y pn+pasivo tiene la leyenda sobre el grafico, esta bien q esten asi separados pero no sobre el grafico, esto mismo me pasa en la seccion de rrh y sostenibilidad.
-
-Y el modo claro/ oscuro funciona mal, solo puedo usar en modo oscuro porque en modo claro quedan las letras blancas y no se ve(no tengo archivo theme generado, quizas sea eso). Te gusta la estetica?
-
-Your ZIP file with the modified code is ready:
-
-Icono de ZIP
-UI_Fixes
- ZIP 
-Abierto
-Sí, la estética es muy limpia y profesional. El uso de la tipografía sans-serif (Inter) y la jerarquía de las cards con sombra sutil le dan un estilo analítico muy adecuado para un tablero directivo enfocado en los datos.
-
-Para solucionar los tres problemas que marcaste en la UI, apliqué los siguientes ajustes en el código:
-
-Efecto de las subsecciones (Tabs):
-Reemplacé el bloque rojo sólido en style.css por un fondo translúcido muy suave (rgba(179, 38, 30, 0.12)) manteniendo el texto en tu rojo acento. Esto logra que la pestaña activa quede marcada claramente pero sin saturar la vista.
-
-Leyendas superpuestas (Balance y RRHH):
-El problema era que el cálculo del margen inferior (margen_b) se quedaba corto, y en el gráfico de Balance las leyendas estaban ancladas forzosamente al medio de las barras (y=0.5).
-En app.py, expandí el margen dinámico inferior de los gráficos a 130px, y reubiqué las leyendas del Balance y otras métricas solapadas en formato horizontal (orientation='h') por debajo del área de ploteo.
-
-Modo Claro / Oscuro (Letras blancas):
-El error ocurría porque la función casera es_modo_oscuro() fallaba en tu entorno local y, por defecto, forzaba a Plotly a usar la paleta oscura (letras crema) sin importar qué tema estuviera activo en la UI.
-Eliminé esa función por completo. Ahora la función mostrar() inyecta theme="streamlit", delegándole el control al motor nativo de la herramienta. De esta forma detecta sola si estás en light/dark y ajusta el color de las tipografías automáticamente.
-
-Reemplazá tu app.py y tu style.css por los que están en el .zip y probá la visualización.
-
-no se para que te lo pido, ni siquiera terminaste de acomodar lo que pedi y rompiste cosas que no tenias que tocar
-
-Tenés razón, paso en falso mío al tocar la lógica general de la función mostrar() y pisar código sin evaluar el impacto en todo el dashboard.
-
-Decime exactamente qué gráficos se desarmaron o qué dejó de renderizar bien. También marcame qué detalle de las leyendas o de las subsecciones me quedó por la mitad. Pasame el error o la captura de lo que se rompió y lo ajustamos de raíz sin desarmar lo que ya funcionaba.
-
-no, deja. Donde puedo ver cuanto me queda de gemini premium?
-
-Para ver el estado de tu suscripción (fecha de corte, facturación y días restantes), tenés dos vías principales según dónde la diste de alta:
-
-Desde la web (Google One / Cuenta de Google):
-
-Entrá a one.google.com e iniciá sesión con la cuenta donde tenés el plan. En la pantalla principal o en la pestaña Almacenamiento / Plan te muestra el plan activo y el detalle de renovación.
-
-También podés ir directo a myaccount.google.com/subscriptions o payments.google.com en la sección Suscripciones y servicios.
-
-Desde el celular (Google Play Store):
-
-Abrí la app de Play Store → tocá tu foto de perfil arriba a la derecha → Pagos y suscripciones → Suscripciones. Ahí ves el estado del plan y la próxima fecha de cobro.
-
-Sobre el límite de uso dentro de la plataforma:
-La cuota de cómputo de los modelos y funciones avanzadas (como Deep Think, investigación profunda o generación) no tiene una barra de porcentaje visible en el chat; se gestiona de forma dinámica y se va restableciendo en bloques temporales (normalmente cada 5 horas). Si llegás al tope temporal en una sesión, la misma interfaz te notifica el aviso con la hora exacta en la que se reanuda el cupo.
-
-yo tengo google one por un lado, para almacenamiento mas que nada, pero gemini pro tengo por ser estudiante universitario y no se cuanto me queda
-
-Si el plan de Gemini Pro/Advanced lo tenés por un beneficio de estudiante universitario (y no por pagar Google One tradicional), la forma de verlo depende de cómo lo hayas activado:
-
-1. Si usaste tu correo personal pero lo validaste como estudiante (Promo/Descuento):
-Entrá directamente a gemini.google.com, andá abajo a la izquierda donde está el ícono de Configuración (el engranaje) y hacé clic en Administrar suscripción. Eso te lleva directo al panel específico de Gemini donde te dice hasta qué fecha dura la promoción anual o el descuento antes de que te quieran cobrar el precio de lista.
-
-2. Si es una licencia que te dio la UNLP (usando un correo institucional @alumnos.unlp.edu.ar o de Económicas):
-En este caso no vas a ver una fecha de vencimiento de facturación porque la licencia la paga y administra la universidad (Google Workspace for Education). Va a seguir activo mientras la facultad te considere "alumno regular" y te mantenga la licencia asignada.
-
-Teniendo en cuenta que te faltan 2 cursadas y 3 finales para liquidar la carrera, tené en el radar que las facultades suelen hacer barridos y dar de baja estas licencias premium unos meses después de que los alumnos se reciben o dejan de registrar actividad académica.
-
-Fijate en Configuración > Administrar suscripción primero. Si no te sale nada claro ahí, es porque dependés del alta de la UNLP.
-
-no, fue solo con certificado de alumno regular y cuenta personal. Pero bueno ya fue, ya me avisaran que se me esta por cortar supongo. Pagando google one tengo gemini pro incluido igual? mas alla de la faq
-
-No, pagar los planes estándar de almacenamiento de Google One (como el Básico de 100 GB a $1.99 USD/mes o el Standard de 200 GB a $2.99 USD/mes) no te incluye Gemini Pro. Con esos planes seguís siendo considerado un usuario de la versión gratuita, utilizando el modelo base Omni Flash.
-
-Para que la suscripción te cubra la herramienta cuando se te corte el beneficio universitario, tenés que pagar específicamente un plan de la familia Google AI. Las opciones son:
-
-Google AI Plus ($4.99 USD/mes): Te cubre 400 GB en la nube y te da acceso al modelo Gemini 3.1 Pro (con el doble de límite de uso que la versión gratuita).
-
-Google AI Pro ($19.99 USD/mes): Te cubre 5 TB de espacio, multiplica por cuatro el límite de uso del modelo 3.1 Pro, y te suma integración directa de Gemini en Gmail, Documentos, Chrome y herramientas de código como Android Studio.
-
-Google AI Ultra (desde $99.99 USD/mes): Te da a partir de 20 TB y límites de uso cinco veces más altos que el plan Pro para tareas masivas.
-
-Básicamente, si el Google One que pagás hoy es la suscripción barata solo para no quedarte sin espacio en Drive o Fotos, no te va a servir de red de contención para mantener la IA avanzada. Vas a tener que cambiarte de categoría de plan.
-
-ia plus o ia ultra, mas alla de los limites de uso, tienen el mismo modelo de ia igualmente optimo?
-
-No, no tienen exactamente las mismas capacidades técnicas, ya que el plan Ultra desbloquea herramientas exclusivas y características de modelo superiores.
-
-Google AI Plus: Ofrece distintos niveles de acceso al modelo Gemini 3.1 Pro y un uso limitado de herramientas secundarias como Nano Banana Pro.
-
-Google AI Ultra: Garantiza "las mejores capacidades de los modelos" de Google. Este nivel incorpora en exclusiva el modelo de razonamiento Deep Think y capacidades mayores para el uso de agentes de IA. También suma el acceso a Project Genie (Genie 3) para la creación de mundos interactivos.
-
-A nivel de arquitectura, los planes superiores (Pro y Ultra) cuentan con una ventana de contexto de 1 millón de tokens. Esto permite cargar y procesar un volumen de código, datos o documentos sustancialmente mayor al que admite la estructura del nivel Plus.
-
-
-
-
-Gemini es una IA y puede cometer errores.
-
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 /* ══════════════════════════════════════════════════════════════
    VARIABLES DE MARCA — CÁDIZ AUTOMOTIVE
@@ -379,9 +54,12 @@ section[data-testid="stSidebar"] h3 {
 /* ══ CARDS DE GRÁFICOS Y MÉTRICAS ═══════════════════════════════
    Cards más redondeadas y con sombra sutil, como en Geodefender —
    se despegan un poco más del fondo que el look "flat" anterior. */
+/* var(--secondary-background-color) no siempre esta definida: cuando no resuelve, el
+   background queda invalido y la card se ve transparente — de ahi que los KPIs se
+   leyeran como texto flotante. El segundo valor es el fallback. */
 div[data-testid="stVerticalBlockBorderWrapper"],
 div[data-testid="stMetric"] {
-    background-color: var(--secondary-background-color) !important;
+    background-color: var(--secondary-background-color, rgba(128, 128, 128, 0.06)) !important;
     border: 1px solid var(--border-soft) !important;
     border-radius: var(--radius-md) !important;
     box-shadow: var(--shadow-card) !important;
@@ -395,7 +73,9 @@ div[data-testid="stMetric"] {
     justify-content: center;
 }
 div[data-testid="stMetricValue"] { font-weight: 700 !important; font-size: 1.5rem !important; }
-div[data-testid="stMetricLabel"] { font-weight: 600 !important; opacity: 0.62; font-size: 0.8rem !important; text-transform: uppercase; letter-spacing: 0.02em; }
+/* Sin white-space:normal los titulos largos se cortaban con "..." y no se sabia que metrica era. */
+div[data-testid="stMetricLabel"] { font-weight: 600 !important; opacity: 0.62; font-size: 0.78rem !important; text-transform: uppercase; letter-spacing: 0.02em; white-space: normal !important; overflow: visible !important; }
+div[data-testid="stMetricLabel"] * { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
 div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 500 !important; }
 
 /* ══ TABS — pill style, como los botones de filtro de Geodefender ══ */
@@ -404,9 +84,16 @@ div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 50
     border-radius: 999px !important;
     padding: 6px 16px !important;
 }
-.stTabs [aria-selected="true"] {
+/* El selector [aria-selected="true"] a secas pegaba en un nodo interno que no pinta fondo:
+   quedaba texto blanco sobre fondo blanco y la pestaña activa se volvía invisible en modo claro.
+   Hay que apuntar al botón de la pestaña, y forzar el color también en los hijos. */
+.stTabs [data-baseweb="tab"][aria-selected="true"] {
     background-color: var(--brand-accent) !important;
-    color: white !important;
+    color: #FFFFFF !important;
+    font-weight: 600 !important;
+}
+.stTabs [data-baseweb="tab"][aria-selected="true"] * {
+    color: #FFFFFF !important;
     font-weight: 600 !important;
 }
 .stTabs [data-baseweb="tab-highlight"] { background-color: transparent !important; }
@@ -425,5 +112,25 @@ div[data-testid="stAlert"] { border-radius: var(--radius-sm) !important; }
 
 /* ══ EXPANDERS ═══════════════════════════════════════════════════ */
 details[data-testid="stExpander"] { border-radius: var(--radius-md) !important; border: 1px solid var(--border-soft) !important; }
-style.css
-Mostrando style.css.
+
+
+/* ══ PANEL DE ALERTAS ══════════════════════════════════════════ */
+.alerta-fila {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; margin-bottom: 6px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--brand-accent);
+    background-color: rgba(179, 38, 30, 0.07);
+    font-size: 0.88rem;
+}
+.alerta-fila.aviso { border-left-color: #C9922E; background-color: rgba(201, 146, 46, 0.07); }
+.alerta-fila.ok    { border-left-color: #4E9A4E; background-color: rgba(78, 154, 78, 0.07); }
+.alerta-fila b { font-weight: 600; }
+.alerta-fila span.detalle { opacity: 0.65; }
+
+/* ══ CHIPS DE ESTRATEGIA ═══════════════════════════════════════ */
+.chip-estrategia {
+    display: inline-block; padding: 5px 12px; margin: 3px 4px 3px 0;
+    border-radius: 999px; font-size: 0.8rem; font-weight: 500; color: #FFFFFF;
+}
+.chip-estrategia.destacado { outline: 2px solid var(--brand-dark); outline-offset: 2px; font-weight: 700; }
