@@ -17,6 +17,16 @@ BRAND_LIGHT = '#F5F2ED'        # Crema
 # Tonos apagados pero CON matiz (no gris puro) para distinguir competidores de un vistazo,
 # sin competir visualmente con el rojo CADIZ.
 MUTED_PALETTE = ['#8C97A6', '#A68C6E', '#7E9E8C', '#9E8CA0', '#A69B6E', '#7E8C9E']
+# Color por CONCEPTO, no por orden de aparición. El rojo de marca queda reservado para
+# identificar a CÁDIZ entre los equipos; las métricas usan colores con significado propio
+# y estable en toda la app (antes el rojo era "Salario" en un gráfico y "Rotación" en el de al lado).
+COLOR_METRICA = {
+    'dinero':      '#3E7CB1',   # azul  — plata: costos, presupuestos, salarios
+    'personas':    '#8C97A6',   # gris azulado — headcount, contrataciones
+    'eficiencia':  '#4E9A4E',   # verde — indicadores donde más es mejor
+    'riesgo':      '#C9922E',   # ámbar — rotación, deuda, alertas blandas
+    'critico':     BRAND_ACCENT # rojo  — problemas y la propia CÁDIZ
+}
 COLOR_MAP = {MY_COMPANY: BRAND_ACCENT}
 for i, c in enumerate([c for c in COMPANIES if c != MY_COMPANY]):
     COLOR_MAP[c] = MUTED_PALETTE[i % len(MUTED_PALETTE)]
@@ -141,6 +151,119 @@ def chart_evolucion(sub: pd.DataFrame, titulo: str):
                                   name='Promedio', line=dict(color=color_ref, width=1, dash='dash'), marker=dict(size=4)))
     fig.update_layout(title=f'Evolución — {titulo}')
     mostrar(fig)
+def sparkline(valores, color=None, invertir=False):
+    """Minigráfico de tendencia para meter dentro de una tarjeta de KPI.
+    Con 12-15 rondas, un número solo no dice nada: la forma de la serie sí."""
+    serie = [v for v in valores if v is not None and not pd.isna(v)]
+    if len(serie) < 2:
+        return None
+    color = color or BRAND_ACCENT
+    fig = go.Figure(go.Scatter(y=serie, mode='lines', line=dict(color=color, width=2),
+                                fill='tozeroy', fillcolor='rgba(179,38,30,0.10)', hoverinfo='skip'))
+    fig.update_layout(height=46, margin=dict(l=0, r=0, t=0, b=0),
+                       paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                       xaxis=dict(visible=False), yaxis=dict(visible=False, autorange='reversed' if invertir else True),
+                       showlegend=False)
+    return fig
+
+def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None):
+    """Serie histórica de una métrica para un equipo, ordenada por ronda.
+    OJO con 'seccion': hay métricas cuyo nombre se repite dentro del mismo estado
+    (ej. 'Total' aparece en Accionistas, Acreedores, Gobierno, Personal y Proveedores
+    dentro de Creación de Valor). Sin filtrar por sección se mezclan cinco series distintas."""
+    d = df_all[(df_all['Estado'] == estado) & (df_all['Metrica'] == metrica)].copy()
+    if seccion: d = d[d['Seccion'] == seccion]
+    if empresa: d = d[d['Empresa'] == empresa]
+    if d.empty: return []
+    d['Valor'] = num(d['Valor'])
+    if hasta_orden is not None:
+        d = d[d['Ronda_Orden'] <= hasta_orden]
+    return d.sort_values('Ronda_Orden')['Valor'].tolist()
+
+def kpi_con_tendencia(col, label, valor_txt, serie, delta=None, color=None, invertir=False):
+    """Tarjeta de KPI + sparkline debajo, para ver nivel y tendencia sin cambiar de sección."""
+    with col:
+        st.metric(label, valor_txt, delta=delta)
+        fig = sparkline(serie, color=color, invertir=invertir)
+        if fig is not None:
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+# ---------------- Panel de alertas ----------------
+def evaluar_alertas():
+    """Corre un set de reglas sobre la ronda en foco y devuelve solo lo que se está prendiendo.
+    La idea es no tener que recorrer las 5 secciones para enterarse de que algo se rompió."""
+    alertas = []
+    bal = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
+    ratios = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
+
+    # --- Liquidez: el sobregiro automático de Cesim es la señal más cara de ignorar
+    deuda_cp = valor_de(bal, 'Deudas a corto plazo (no planificadas)', empresa_analisis)
+    if deuda_cp and deuda_cp > 0:
+        alertas.append(('critico', 'Sobregiro automático',
+                        f'{format_num(deuda_cp)} USD de deuda de corto plazo NO planificada: la caja no alcanzó para cubrir obligaciones.'))
+    caja = valor_de(bal, 'Efectivo y equivalentes de efectivo', empresa_analisis)
+    activo_total = valor_de(bal, 'Activo total', empresa_analisis)
+    if caja is not None and activo_total and activo_total > 0 and (caja / activo_total) < 0.05:
+        alertas.append(('aviso', 'Caja ajustada',
+                        f'El efectivo es el {caja/activo_total*100:.1f}% del activo — margen fino para la próxima ronda.'))
+
+    # --- Capacidad: tan malo pasarse como tener la planta parada
+    cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') &
+             (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
+             (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
+    if not cap.empty:
+        cap['Valor'] = num(cap['Valor'])
+        for planta, uso in cap.dropna(subset=['Valor']).groupby('Subgrupo')['Valor'].sum().items():
+            if uso > 95:
+                alertas.append(('aviso', f'Planta {planta} al límite', f'Capacidad empleada {uso:.0f}% — sin margen para crecer.'))
+            elif uso < 60:
+                alertas.append(('aviso', f'Planta {planta} ociosa', f'Capacidad empleada {uso:.0f}% — activo fijo sin usar.'))
+
+    # --- Tendencias: dos rondas seguidas en la misma dirección ya son una señal, no ruido
+    orden_hoy = df[df['Ronda'] == ronda_snapshot]['Ronda_Orden'].iloc[0] if not df[df['Ronda'] == ronda_snapshot].empty else None
+
+    def cae_dos_rondas(estado, metrica, etiqueta, detalle, invertido=False):
+        serie = serie_metrica(estado, metrica, empresa_analisis, hasta_orden=orden_hoy)
+        serie = [v for v in serie if v is not None and not pd.isna(v)]
+        if len(serie) < 3: return
+        d1, d2 = serie[-1] - serie[-2], serie[-2] - serie[-3]
+        empeora = (d1 < 0 and d2 < 0) if not invertido else (d1 > 0 and d2 > 0)
+        if empeora:
+            alertas.append(('aviso', etiqueta, detalle.format(a=serie[-3], b=serie[-1])))
+
+    cae_dos_rondas('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %',
+                   'Retorno del accionista en baja', 'Cayó dos rondas seguidas: de {a:,.1f}% a {b:,.1f}%.')
+    cae_dos_rondas('Hoja de Balance, miles USD, Global', 'Inventario',
+                   'Inventario acumulándose', 'Creció dos rondas seguidas — capital inmovilizado.', invertido=True)
+
+    # --- Posición competitiva
+    ret_all = {emp: valor_de(ratios, 'Retorno total acumulado del accionista (p.a.), %', emp) for emp in COMPANIES}
+    ranking = sorted([e for e in ret_all if ret_all.get(e) is not None], key=ret_all.get, reverse=True)
+    if empresa_analisis in ranking:
+        pos = ranking.index(empresa_analisis) + 1
+        if pos > len(COMPANIES) / 2:
+            alertas.append(('aviso', f'Posición {pos}° de {len(COMPANIES)}', 'Mitad de tabla para abajo en retorno del accionista.'))
+
+    calif = valor_texto(ratios, 'Calificación crediticia', empresa_analisis)
+    if isinstance(calif, str) and calif.strip() and calif.strip()[0] in ('B', 'C', 'D'):
+        alertas.append(('critico', 'Calificación crediticia deteriorada', f'Cesim la bajó a {calif} — encarece la deuda futura.'))
+    return alertas
+
+def panel_alertas():
+    alertas = evaluar_alertas()
+    if not alertas:
+        st.markdown('<div class="alerta-fila ok">✅ <b>Sin alertas</b> '
+                    f'<span class="detalle">— nada fuera de rango en {ronda_snapshot} para {empresa_analisis}.</span></div>',
+                    unsafe_allow_html=True)
+        return
+    criticas = [a for a in alertas if a[0] == 'critico']
+    resto = [a for a in alertas if a[0] != 'critico']
+    for nivel, titulo, detalle in criticas + resto:
+        icono = '🔴' if nivel == 'critico' else '🟠'
+        clase = 'alerta-fila' if nivel == 'critico' else 'alerta-fila aviso'
+        st.markdown(f'<div class="{clase}">{icono} <b>{titulo}</b> <span class="detalle">— {detalle}</span></div>',
+                    unsafe_allow_html=True)
+
 # ---------------- Sidebar ----------------
 st.sidebar.markdown('### CÁDIZ AUTOMOTIVE')
 filtro_tipo = st.sidebar.radio('Ecosistema', ['Práctica', 'Oficial'], horizontal=True, key='filtro_ecosistema')
@@ -197,35 +320,50 @@ def seccion_resultado():
 
     cap_vals = {emp: valor_de(val_ronda, 'Capitalización de mercado, miles USD', emp) for emp in COMPANIES}
     st.subheader('KPIs de Valor')
+    # Títulos cortos: los largos se cortaban con puntos suspensivos y no se entendía qué métrica era.
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        prom_ret_acum = np.nanmean([v for v in retorno_acum_vals.values() if v is not None]) if any(v is not None for v in retorno_acum_vals.values()) else None
-        val_ret_acum = retorno_acum_vals.get(empresa_analisis)
-        delta_ret_acum = ((val_ret_acum - prom_ret_acum) / abs(prom_ret_acum) * 100) if prom_ret_acum and val_ret_acum is not None else None
-        st.metric('Retorno del Accionista — ACUMULADO', f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
-                   delta=f'{delta_ret_acum:+.1f}% vs Prom' if delta_ret_acum is not None else None)
-    with c2:
-        ranking_acum = sorted([e for e in retorno_acum_vals if retorno_acum_vals.get(e) is not None], key=retorno_acum_vals.get, reverse=True)
-        pos = ranking_acum.index(empresa_analisis) + 1 if empresa_analisis in ranking_acum else '-'
-        st.metric('Posición ACUMULADA', f'{pos}° de {len(COMPANIES)}')
-    with c3:
-        prom_cv = np.nanmean([v for v in cv_vals.values() if v is not None]) if any(v is not None for v in cv_vals.values()) else None
-        val_cv = cv_vals.get(empresa_analisis)
-        delta_cv = ((val_cv - prom_cv)/prom_cv*100) if prom_cv and val_cv is not None else None
-        st.metric(f'Beneficio del Accionista — {ronda_snapshot} (USD)', format_num(val_cv), delta=f'{delta_cv:+.1f}% vs Prom' if delta_cv is not None else None)
-    with c4: 
-        prom_cap = np.nanmean([v for v in cap_vals.values() if v is not None]) if any(v is not None for v in cap_vals.values()) else None
-        val_cap = cap_vals.get(empresa_analisis)
-        delta_cap = ((val_cap - prom_cap)/prom_cap*100) if prom_cap and val_cap else None
-        st.metric('Market Cap (USD)', format_num(val_cap), delta=f'{delta_cap:+.1f}% vs Prom' if delta_cap else None)
-    with c5:
-        prom_ret_ronda = np.nanmean([v for v in retorno_ronda_vals.values() if v is not None]) if any(v is not None for v in retorno_ronda_vals.values()) else None
-        val_ret_ronda = retorno_ronda_vals.get(empresa_analisis)
-        delta_ret_ronda = ((val_ret_ronda - prom_ret_ronda) / abs(prom_ret_ronda) * 100) if prom_ret_ronda and val_ret_ronda is not None else None
-        st.metric(f'Retorno de la Acción — {ronda_snapshot}', f'{val_ret_ronda:+,.1f}%' if val_ret_ronda is not None else '—',
-                   delta=f'{delta_ret_ronda:+.1f}% vs Prom' if delta_ret_ronda is not None else None)
-    st.caption('"Retorno acumulado" es per-annum y no es aditivo entre rondas — no lo restes vos mismo para ver "cómo fue esta ronda". '
-               'Para eso usá "Retorno de la Acción" (variación simple de precio, sí comparable ronda a ronda).')
+    prom_ret_acum = np.nanmean([v for v in retorno_acum_vals.values() if v is not None]) if any(v is not None for v in retorno_acum_vals.values()) else None
+    val_ret_acum = retorno_acum_vals.get(empresa_analisis)
+    delta_ret_acum = ((val_ret_acum - prom_ret_acum) / abs(prom_ret_acum) * 100) if prom_ret_acum and val_ret_acum is not None else None
+    kpi_con_tendencia(c1, 'Retorno acumulado', f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
+                       serie_metrica('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %', empresa_analisis),
+                       delta=f'{delta_ret_acum:+.1f}% vs Prom' if delta_ret_acum is not None else None)
+
+    ranking_acum = sorted([e for e in retorno_acum_vals if retorno_acum_vals.get(e) is not None], key=retorno_acum_vals.get, reverse=True)
+    pos = ranking_acum.index(empresa_analisis) + 1 if empresa_analisis in ranking_acum else '-'
+    ret_hist = df_all[(df_all['Estado'] == 'Ratios e indicadores financieros clave') &
+                       (df_all['Metrica'] == 'Retorno total acumulado del accionista (p.a.), %')].copy()
+    ret_hist['Valor'] = num(ret_hist['Valor'])
+    puestos_hist = ret_hist.dropna(subset=['Valor']).copy()
+    puestos_hist['Puesto'] = puestos_hist.groupby('Ronda')['Valor'].rank(ascending=False, method='min')
+    serie_puesto = puestos_hist[puestos_hist['Empresa'] == empresa_analisis].sort_values('Ronda_Orden')['Puesto'].tolist()
+    # invertir: en el ranking, "para arriba" en el gráfico tiene que ser mejorar de puesto
+    kpi_con_tendencia(c2, 'Posición en el ranking', f'{pos}° de {len(COMPANIES)}', serie_puesto, invertir=True)
+
+    prom_cv = np.nanmean([v for v in cv_vals.values() if v is not None]) if any(v is not None for v in cv_vals.values()) else None
+    val_cv = cv_vals.get(empresa_analisis)
+    delta_cv = ((val_cv - prom_cv)/prom_cv*100) if prom_cv and val_cv is not None else None
+    kpi_con_tendencia(c3, 'Beneficio del accionista', format_num(val_cv),
+                       serie_metrica('Creación de valor, miles USD', 'Total', empresa_analisis, seccion='Accionistas'),
+                       delta=f'{delta_cv:+.1f}% vs Prom' if delta_cv is not None else None)
+
+    prom_cap = np.nanmean([v for v in cap_vals.values() if v is not None]) if any(v is not None for v in cap_vals.values()) else None
+    val_cap = cap_vals.get(empresa_analisis)
+    delta_cap = ((val_cap - prom_cap)/prom_cap*100) if prom_cap and val_cap else None
+    kpi_con_tendencia(c4, 'Market Cap (USD)', format_num(val_cap),
+                       serie_metrica('Valuación - Global', 'Capitalización de mercado, miles USD', empresa_analisis),
+                       delta=f'{delta_cap:+.1f}% vs Prom' if delta_cap else None)
+
+    prom_ret_ronda = np.nanmean([v for v in retorno_ronda_vals.values() if v is not None]) if any(v is not None for v in retorno_ronda_vals.values()) else None
+    val_ret_ronda = retorno_ronda_vals.get(empresa_analisis)
+    delta_ret_ronda = ((val_ret_ronda - prom_ret_ronda) / abs(prom_ret_ronda) * 100) if prom_ret_ronda and val_ret_ronda is not None else None
+    kpi_con_tendencia(c5, 'Retorno de la acción',
+                       f'{val_ret_ronda:+,.1f}%' if val_ret_ronda is not None else 'Sin ronda previa',
+                       serie_metrica('Ratios e indicadores financieros clave', 'Precio de la acción al final de la ronda, USD', empresa_analisis),
+                       delta=f'{delta_ret_ronda:+.1f}% vs Prom' if delta_ret_ronda is not None else None)
+    st.caption('El retorno acumulado es per-annum y no es aditivo entre rondas — para ver cómo fue *esta* ronda usá '
+               '"Retorno de la acción", que es variación simple de precio. En la primera ronda del ecosistema no hay '
+               'ronda previa con la cual compararla.')
     st.divider()
     vista_ranking = st.radio('Vista del ranking (columna derecha)', ['Acumulado (Retorno del Accionista, %)', f'Solo {ronda_snapshot} (USD)'], horizontal=True, key='vista_ranking_cv')
     col_a, col_b = st.columns(2)
@@ -337,11 +475,20 @@ def seccion_mercado():
             # salía de un color acá y de otro allá).
             estrategia_colores = dict(zip(estrategias, [BRAND_ACCENT, MUTED_PALETTE[0], MUTED_PALETTE[1], MUTED_PALETTE[2], MUTED_PALETTE[3]]))
             est = est.copy().sort_values('Empresa')
-            fig_est = px.bar(est, x='Empresa', y=[1] * len(est), color='Valor',
-                              category_orders={'Valor': estrategias}, color_discrete_map=estrategia_colores,
-                              title=f'Estrategia elegida — {tech_pan}, {pais_pan}, {ronda_snapshot}')
-            fig_est.update_traces(text=est['Valor'], textposition='inside')
-            mostrar(fig_est, ocultar_eje_valores='y')
+            # Antes era un gráfico de barras todas de la misma altura: el eje Y no codificaba nada
+            # y el texto iba rotado adentro de la barra. Peor todavía, px.bar parte el dataframe en
+            # un trace por estrategia y el update_traces le pasaba la columna ENTERA a cada trace,
+            # así que el texto de la barra no correspondía a su color. Con chips no hay ambigüedad
+            # posible: el color y el texto salen de la misma fila.
+            with st.container(border=True):
+                st.markdown(f'**Estrategia elegida — {tech_pan}, {pais_pan}, {ronda_snapshot}**')
+                chips = []
+                for _, fila in est.iterrows():
+                    color = estrategia_colores.get(fila['Valor'], MUTED_PALETTE[0])
+                    clase = 'chip-estrategia destacado' if fila['Empresa'] == MY_COMPANY else 'chip-estrategia'
+                    chips.append(f'<span class="{clase}" style="background-color:{color}">'
+                                 f'{fila["Empresa"]} · {fila["Valor"]}</span>')
+                st.markdown(' '.join(chips), unsafe_allow_html=True)
         else:
             st.info('Sin datos de estrategia para esta combinación.')
 
@@ -447,11 +594,25 @@ def seccion_operaciones():
             cols = st.columns(len(cap))
             for col, (_, row) in zip(cols, cap.iterrows()):
                 titulo = row['Subgrupo'] if pd.notna(row['Subgrupo']) else 'Capacidad'
+                uso = float(row['Valor'])
+                # El semicírculo gastaba media pantalla para mostrar un solo número, y el
+                # "gauge+number" recortaba el valor con height=220. Una barra horizontal
+                # comunica lo mismo, entra en un tercio del espacio y deja leer el número.
+                if uso > 95:   color_uso, lectura = BRAND_ACCENT, 'al límite'
+                elif uso < 60: color_uso, lectura = COLOR_METRICA['riesgo'], 'ociosa'
+                else:          color_uso, lectura = COLOR_METRICA['eficiencia'], 'en rango'
                 with col:
-                    fig = go.Figure(go.Indicator(mode='gauge+number', value=row['Valor'], title={'text': f'Capacidad Instalada ({titulo})'},
-                        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': BRAND_ACCENT}, 'steps': [{'range': [0, 100], 'color': '#27272A'}]}))
-                    fig.update_layout(height=220, margin=dict(t=40, b=10))
-                    mostrar(fig)
+                    with st.container(border=True):
+                        st.markdown(f'**Capacidad empleada — {titulo}**')
+                        st.markdown(
+                            f'<div style="display:flex;align-items:baseline;gap:10px;margin:2px 0 8px">'
+                            f'<span style="font-size:1.9rem;font-weight:700;color:{color_uso}">{uso:,.1f}%</span>'
+                            f'<span style="opacity:0.6;font-size:0.85rem">{lectura}</span></div>'
+                            f'<div style="background:rgba(128,128,128,0.18);border-radius:999px;height:10px;width:100%">'
+                            f'<div style="background:{color_uso};border-radius:999px;height:10px;'
+                            f'width:{min(uso, 100):.1f}%"></div></div>',
+                            unsafe_allow_html=True)
+                        st.caption('Rango sano: 60–95%. Por encima no hay margen para crecer; por debajo hay activo fijo sin usar.')
         st.divider()
         st.markdown('**Producción: propia vs. contratada, y fábricas**')
         prod = df[(df['Estado'] == 'Detalles de fabricación') &
@@ -716,8 +877,11 @@ def seccion_finanzas():
                             'Ganancias acumuladas + de la ronda': gb('Ganancias acumuladas') + gb('Beneficio de la ronda')}
         if sum(activo_items.values()) > 0:
             fig_bal = go.Figure()
-            colores_activo = [BRAND_ACCENT] + MUTED_PALETTE[:3]
-            colores_pasivo = MUTED_PALETTE[:3] + [BRAND_ACCENT, MUTED_PALETTE[4]]
+            # Paletas separadas por lado: antes el verde era "Activo fijo" a la izquierda y
+            # "Deudas LP" a la derecha, y el tan era "Inventario" y "Ganancias acumuladas".
+            # Con la misma paleta de los dos lados parecía que un color significaba lo mismo.
+            colores_activo = ['#3E7CB1', '#5C9BC9', '#8FBEDC', '#C3DCEC']          # azules  = qué tengo
+            colores_pasivo = ['#C9922E', '#B3261E', '#8C6D3F', '#6E8C6E', '#A8A29A']  # cálidos = quién lo financia
             for (nombre, val), color in zip(activo_items.items(), colores_activo):
                 fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
                                           text=format_num(val), textposition='inside', legend='legend'))
@@ -728,9 +892,11 @@ def seccion_finanzas():
                 barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
                 # Dos leyendas separadas, cada una pegada a la barra que le corresponde —
                 # antes una sola leyenda combinada hacía difícil saber qué color era de qué lado.
-                legend=dict(orientation='v', title='Activo', x=0.12, y=0.5, xanchor='center', yanchor='middle'),
-                legend2=dict(orientation='v', title='Pasivo + PN', x=0.88, y=0.5, xanchor='center', yanchor='middle'),
-                height=CHART_HEIGHT + 20)
+                # Estaban en x=0.12 / x=0.88, o sea DENTRO del área de ploteo: tapaban las barras.
+                # Van abajo, una a cada lado, que además es donde mostrar() ya reserva margen.
+                legend=dict(orientation='h', title='Activo', x=0.0, y=-0.18, xanchor='left', yanchor='top'),
+                legend2=dict(orientation='h', title='Pasivo + PN', x=1.0, y=-0.18, xanchor='right', yanchor='top'),
+                height=CHART_HEIGHT + 90)
             mostrar(fig_bal, ocultar_eje_valores='y')
             st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
         else:
@@ -833,30 +999,31 @@ def seccion_rrhh_sostenibilidad():
 
         col_a, col_b = st.columns(2)
         with col_a:
-            st.subheader('SALARIO VS ROTACIÓN')
+            st.subheader('Salario y rotación')
             salario = rrhh[rrhh['Metrica'] == 'Salario mensual, USD'].sort_values('Ronda_Orden')
             rotacion = rrhh[rrhh['Metrica'] == 'Rotación de personal, %'].sort_values('Ronda_Orden')
             if not salario.empty and not rotacion.empty:
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode='lines+markers', line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
-                fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers', line=dict(color=COLOR_POSITIVE, width=2, dash='dash'), yaxis='y2'))
-                max_rot = max(20, rotacion['Valor'].max() * 1.3 if not rotacion['Valor'].empty else 20)
-                max_sal = max(6000, salario['Valor'].max() * 1.2 if not salario['Valor'].empty else 6000)
+                fig.add_trace(go.Scatter(x=salario['Ronda'], y=salario['Valor'], name='Salario (USD)', mode='lines+markers', line=dict(color=COLOR_METRICA['dinero'], width=3), yaxis='y1'))
+                fig.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers', line=dict(color=COLOR_METRICA['riesgo'], width=2, dash='dash'), yaxis='y2'))
+                # El eje fijo en 0-20 dejaba la línea pegada al piso cuando la rotación anda en 2-5%.
+                max_rot = (rotacion['Valor'].max() * 1.4) if rotacion['Valor'].notna().any() else 20
+                max_sal = (salario['Valor'].max() * 1.25) if salario['Valor'].notna().any() else 6000
                 fig.update_layout(title='Evolución: Salario vs Rotación',
                                   yaxis=dict(title='Salario (USD)', range=[0, max_sal], rangemode='tozero', side='left'),
                                   yaxis2=dict(title='Rotación (%)', range=[0, max_rot], overlaying='y', side='right', showgrid=False),
                                   legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
                 mostrar(fig)
         with col_b:
-            st.subheader('ROTACIÓN VS CONTRATACIONES')
+            st.subheader('Rotación y contrataciones')
             st.caption('Cuántas contrataciones netas hizo falta hacer, en la misma ronda en que se dio la rotación.')
             contrat = rrhh[rrhh['Metrica'] == 'Contrataciones + / despidos -'].sort_values('Ronda_Orden')
             if not salario.empty and not contrat.empty and not rotacion.empty:
                 fig_ch = go.Figure()
                 fig_ch.add_trace(go.Bar(x=contrat['Ronda'], y=contrat['Valor'], name='Contrataciones netas (personas)',
-                                         marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                                         marker_color=COLOR_METRICA['personas'], yaxis='y1'))
                 fig_ch.add_trace(go.Scatter(x=rotacion['Ronda'], y=rotacion['Valor'], name='Rotación (%)', mode='lines+markers',
-                                             line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                                             line=dict(color=COLOR_METRICA['riesgo'], width=3), yaxis='y2'))
                 fig_ch.update_layout(title='Rotación vs. Contrataciones netas',
                                       yaxis=dict(title='Personas', side='left', rangemode='tozero'),
                                       yaxis2=dict(title='Rotación, %', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
@@ -866,15 +1033,15 @@ def seccion_rrhh_sostenibilidad():
         st.divider()
         col_c, col_d = st.columns(2)
         with col_c:
-            st.subheader('INVERSIÓN EN I+D')
+            st.subheader('Inversión en I+D')
             idn = rrhh[rrhh['Metrica'] == 'Número de personal de I+D, esta ronda'].sort_values('Ronda_Orden')
             idc = rrhh[rrhh['Metrica'] == 'Otros costos variables de I + D'].sort_values('Ronda_Orden')
             if not idn.empty and not idc.empty:
                 fig_id = go.Figure()
                 fig_id.add_trace(go.Bar(x=idc['Ronda'], y=idc['Valor'], name='Costo variable I+D (USD)',
-                                         marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                                         marker_color=COLOR_METRICA['dinero'], yaxis='y1'))
                 fig_id.add_trace(go.Scatter(x=idn['Ronda'], y=idn['Valor'], name='Personal I+D (headcount)', mode='lines+markers',
-                                             line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                                             line=dict(color=COLOR_METRICA['personas'], width=3), yaxis='y2'))
                 fig_id.update_layout(title='Inversión en I+D: costo vs. dotación',
                                       yaxis=dict(title='Costo variable, USD', side='left', rangemode='tozero'),
                                       yaxis2=dict(title='Personal I+D', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
@@ -883,27 +1050,28 @@ def seccion_rrhh_sostenibilidad():
             else:
                 st.info('Sin datos de I+D para este equipo.')
         with col_d:
-            st.subheader('CAPACITACIÓN: INVERSIÓN VS. IMPACTO')
+            st.subheader('Capacitación e impacto')
             capac = rrhh[rrhh['Metrica'] == 'Presupuesto mensual para capacitación, USD'].sort_values('Ronda_Orden')
             efic = rrhh[rrhh['Metrica'] == 'Multiplicador de la eficiencia de RRHH'].sort_values('Ronda_Orden')
             if not capac.empty and not efic.empty:
                 fig_cap = go.Figure()
                 fig_cap.add_trace(go.Bar(x=capac['Ronda'], y=capac['Valor'], name='Presupuesto capacitación (USD)',
-                                          marker_color=MUTED_PALETTE[0], yaxis='y1'))
+                                          marker_color=COLOR_METRICA['dinero'], yaxis='y1'))
                 fig_cap.add_trace(go.Scatter(x=efic['Ronda'], y=efic['Valor'], name='Multiplicador eficiencia RRHH', mode='lines+markers',
-                                              line=dict(color=BRAND_ACCENT, width=3), yaxis='y2'))
+                                              line=dict(color=COLOR_METRICA['eficiencia'], width=3), yaxis='y2'))
                 fig_cap.update_layout(title='Capacitación vs. eficiencia de RRHH',
                                        yaxis=dict(title='Presupuesto, USD', side='left', rangemode='tozero'),
                                        yaxis2=dict(title='Multiplicador eficiencia', overlaying='y', side='right', showgrid=False),
                                        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5))
                 mostrar(fig_cap)
-                st.caption('Con una sola ronda esto es un punto de referencia — el "impacto" real de la capacitación se lee '
-                           'en la pendiente entre rondas, no en un valor aislado.')
+                st.caption('Ojo con leer una relación directa: el efecto de la capacitación no es instantáneo, así que el '
+                           'presupuesto de una ronda y el multiplicador de esa MISMA ronda no se explican entre sí. '
+                           'Lo que hay que mirar es la pendiente del multiplicador en las rondas siguientes a un aumento de presupuesto.')
             else:
                 st.info('Sin datos de capacitación para este equipo.')
 
     with bloque_sost:
-        st.subheader('IMPACTO AMBIENTAL')
+        st.subheader('Impacto ambiental')
         c1, c2 = st.columns(2)
         pais_esg = c1.selectbox('País', ['EE.UU.', 'China'], key='pais_esg_rrhh')
         ind = c2.selectbox('Indicador', ['Emisiones de CO2', 'Consumo de energía', 'Consumo de agua'], key='ind_esg_rrhh')
@@ -912,7 +1080,7 @@ def seccion_rrhh_sostenibilidad():
         chart_comparacion_equipos(sub_amb, f'{ind} — {pais_esg}')
 
         st.divider()
-        st.subheader('REPUTACIÓN ESG VS MARKET SHARE')
+        st.subheader('Reputación ESG y cuota de mercado')
         esg = df[(df['Estado'] == 'Informe ESG') & (df['Subgrupo'] == 'Puntuación final') & (df['Metrica'] == 'Reputación ESG') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].copy()
         esg['Valor'] = num(esg['Valor'])
         cols = st.columns(3)
@@ -927,6 +1095,12 @@ def seccion_rrhh_sostenibilidad():
                     mostrar(fig2)
 # ---------------- Router ----------------
 st.title(seccion)
+# El panel corre en TODAS las secciones: la idea es enterarse de que algo se rompió sin
+# tener que recorrer el tablero entero ni abrir el Excel de proyección.
+with st.container(border=True):
+    st.markdown(f'**Alertas — {empresa_analisis}, {ronda_snapshot}**')
+    panel_alertas()
+st.write('')
 if seccion == SECCIONES[0]: seccion_resultado()
 elif seccion == SECCIONES[1]: seccion_mercado()
 elif seccion == SECCIONES[2]: seccion_operaciones()
