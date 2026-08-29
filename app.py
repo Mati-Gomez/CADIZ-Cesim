@@ -589,6 +589,13 @@ def seccion_mercado():
             st.info('Sin datos suficientes.')
 
         st.divider()
+        st.markdown(f'**Evolución de la cuota de mercado — {pais_evo}**')
+        st.caption('Los 7 equipos, CADIZ resaltado. Complementa el gráfico de abajo: acá se ve el resultado, abajo la jugada (precio/características) que lo explica.')
+        share_hist = df[(df['Estado'] == estado_evo) & (df['Seccion'] == f'{pais_evo} cuotas de mercado, %') &
+                         (df['Metrica'].str.strip() == 'Total')].copy()
+        chart_evolucion(share_hist, f'Cuota de mercado, % — {pais_evo}')
+
+        st.divider()
         st.markdown(f'**Trayectoria de {empresa_analisis}: precio y características en el tiempo**')
         tech_traj = st.selectbox('Tecnología', tecnologias, key='sel_evo_tech')
         traj = df[(df['Estado'] == estado_evo) & (df['Seccion'] == tech_traj) & (df['Empresa'] == empresa_analisis) &
@@ -824,23 +831,33 @@ def seccion_finanzas():
     # Estos 7 KPIs describen la foto financiera de la ronda, no son de corto ni de largo plazo:
     # quedan fijos arriba y las pestañas subdividen solamente el análisis.
     bal_ronda = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
-    ebitda_val = valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', empresa_analisis)
-    margen_val = valor_de(ratios_ronda, 'Margen bruto', empresa_analisis)
-    ros_val = valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', empresa_analisis)
-    caja_val = valor_de(bal_ronda, 'Efectivo y equivalentes de efectivo', empresa_analisis)
+    ebitda_vals = {e: valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', e) for e in COMPANIES}
+    margen_vals = {e: valor_de(ratios_ronda, 'Margen bruto', e) for e in COMPANIES}
+    ros_vals = {e: valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', e) for e in COMPANIES}
+    caja_vals = {e: valor_de(bal_ronda, 'Efectivo y equivalentes de efectivo', e) for e in COMPANIES}
     deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
     deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
     val_deuda_cp = deuda_cp_vals.get(empresa_analisis)
     calif_val = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
 
+    def delta_str(vals, empresa=empresa_analisis):
+        # Mismo cálculo que el resto de la app: % de distancia contra el promedio de los 7 equipos.
+        prom = np.nanmean([v for v in vals.values() if v is not None]) if any(v is not None for v in vals.values()) else None
+        val = vals.get(empresa)
+        if prom in (None, 0) or val is None:
+            return None
+        d = (val - prom) / abs(prom) * 100
+        return f'{d:+.1f}% vs Prom'
+
     f1, f2, f3, f4 = st.columns(4)
-    with f1: st.metric('EBITDA (USD)', format_num(ebitda_val))
-    with f2: st.metric('Margen bruto', f"{margen_val:,.1f}%" if pd.notna(margen_val) else '—')
-    with f3: st.metric('ROS', f"{ros_val:,.1f}%" if pd.notna(ros_val) else '—')
-    with f4: st.metric('Caja final (USD)', format_num(caja_val) if pd.notna(caja_val) else '—')
+    with f1: st.metric('EBITDA (USD)', format_num(ebitda_vals.get(empresa_analisis)), delta=delta_str(ebitda_vals))
+    with f2: st.metric('Margen bruto', f"{margen_vals.get(empresa_analisis):,.1f}%" if pd.notna(margen_vals.get(empresa_analisis)) else '—', delta=delta_str(margen_vals))
+    with f3: st.metric('ROS', f"{ros_vals.get(empresa_analisis):,.1f}%" if pd.notna(ros_vals.get(empresa_analisis)) else '—', delta=delta_str(ros_vals))
+    with f4: st.metric('Caja final (USD)', format_num(caja_vals.get(empresa_analisis)) if pd.notna(caja_vals.get(empresa_analisis)) else '—', delta=delta_str(caja_vals))
     f5, f6, f7, _f8 = st.columns(4)
-    with f5: st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—')
-    with f6: st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)))
+    with f5: st.metric('Deuda CP no planificada (USD)', format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
+                        delta=delta_str(deuda_cp_vals), delta_color='inverse')
+    with f6: st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)), delta=delta_str(deuda_lp_vals), delta_color='inverse')
     with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
     st.write('')
 
