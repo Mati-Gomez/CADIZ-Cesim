@@ -262,17 +262,34 @@ def evaluar_alertas():
     # OJO con la forma del reporte: Cesim pone el PAÍS en 'Metrica' (EE.UU. / China) y el
     # HORIZONTE en 'Subgrupo' (Ronda actual / Próxima ronda / Después de la próxima ronda).
     # Filtrando al revés no matchea nada y el conteo actual daba 0.
+    #
+    # FIX (reportado: "avisa expansión de fábrica que no es real"): esta alerta vive bajo el
+    # encabezado "Alertas — {empresa_analisis}, {ronda_snapshot}", pero el chequeo original
+    # recorría las 7 COMPANIES y mostraba en un solo mensaje cualquier expansión, sin filtrar por
+    # empresa_analisis -- verificado con los datos reales: en Ronda 1 quienes expanden son CEOS y
+    # TOKIO (China 2->3), CADIZ se mantiene 2->2->2 sin cambios. Se filtra a empresa_analisis, como
+    # el resto del panel, y se desglosa por área (Metrica = EE.UU./China) en vez de sumarlas --
+    # sumar los dos países en un solo número puede esconder una expansión real en un área si la
+    # otra se mantiene o se contrae.
+    #
+    # Segundo problema (misma causa raíz del reporte): el chequeo corre igual en Práctica que en
+    # Oficial. Verificado con los datos reales: CADIZ en China muestra 2->3 en Práctica 2 y
+    # 2->3->5 en Práctica 3 (una decisión de ensayo cargada en esas rondas de práctica), pero en la
+    # Ronda 1 oficial nunca se concretó (2->2->2). Una decisión de práctica no es un compromiso
+    # real para el juego oficial, así que ahora se aclara en el texto en vez de mostrarla igual.
     fab = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
-             (df['Ronda'] == ronda_snapshot)].copy()
+             (df['Ronda'] == ronda_snapshot) & (df['Empresa'] == empresa_analisis)].copy()
     if not fab.empty:
         fab['Valor'] = num(fab['Valor'])
-        act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby('Empresa')['Valor'].sum()
-        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby('Empresa')['Valor'].sum()
-        expansiones = [f'{e}: {act.get(e, 0):.0f} → {fut.get(e, 0):.0f}'
-                       for e in COMPANIES if fut.get(e, 0) > act.get(e, 0)]
+        act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby('Metrica')['Valor'].sum()
+        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby('Metrica')['Valor'].sum()
+        expansiones = [f'{area}: {act.get(area, 0):.0f} → {fut.get(area, 0):.0f}'
+                       for area in act.index if fut.get(area, 0) > act.get(area, 0)]
         if expansiones:
-            alertas.append(('aviso', 'Expansión de capacidad planificada (próximas 2 rondas)',
-                            ' · '.join(expansiones)))
+            detalle = ' · '.join(expansiones)
+            if filtro_tipo == 'Práctica':
+                detalle += ' — decisión cargada en una Ronda de práctica: es un ensayo, no un compromiso real para la competencia oficial.'
+            alertas.append(('aviso', 'Expansión de capacidad planificada (próximas 2 rondas)', detalle))
     return alertas
 
 def panel_alertas():
