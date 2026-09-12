@@ -7,6 +7,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from cesim_parser import build_historico
+from gap_analysis import calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_PROYECCION_EXCEL
+from metric_crosswalk import CROSSWALK_FINANZAS
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
@@ -49,13 +51,27 @@ def cargar_historico(files_signature: tuple) -> pd.DataFrame:
     data['Pais'] = data['Estado'].apply(get_pais)
     return data
 def get_data(tipo_ronda) -> pd.DataFrame:
-    xls_files = sorted(glob.glob(os.path.join(DATA_DIR, '**', '*.xls'), recursive=True) + 
+    xls_files = sorted(glob.glob(os.path.join(DATA_DIR, '**', '*.xls'), recursive=True) +
                        glob.glob(os.path.join(DATA_DIR, '**', '*.XLS'), recursive=True))
     if not xls_files:
         st.warning(f'No se encontraron archivos .xls en {DATA_DIR} ni en subcarpetas.')
         st.stop()
     df_raw = cargar_historico(tuple(xls_files))
     return df_raw[df_raw['Tipo_Ronda'] == tipo_ronda].copy()
+@st.cache_data(show_spinner='Leyendo proyección de CADIZ...')
+def _cargar_proyeccion_cached(path: str, mtime: float):
+    # `mtime` en la firma de cache -- no se usa dentro de la función, pero cambia cada vez que se
+    # reemplaza CADIZ_Gestion_v2.xlsx en el repo (mismo nombre de archivo), así Streamlit invalida
+    # el caché y relee el Excel en vez de servir una versión vieja. Devuelve un DataFrame o None.
+    return load_proyeccion(path)
+def get_proyeccion():
+    """CADIZ_Gestion_v2.xlsx vive en la raíz del repo (al lado de este archivo): el usuario lo
+    reemplaza (siempre el mismo nombre) cada vez que hay una versión nueva del modelo de gestión, y
+    la próxima carga de la app toma automáticamente esa versión como 'la más actual' -- no hace falta
+    subir ningún CSV ni correr ningún script aparte."""
+    if not os.path.exists(DEFAULT_PROYECCION_EXCEL):
+        return None
+    return _cargar_proyeccion_cached(DEFAULT_PROYECCION_EXCEL, os.path.getmtime(DEFAULT_PROYECCION_EXCEL))
 def num(series):
     return pd.to_numeric(series, errors='coerce')
 def format_num(val, dec=0):
@@ -171,6 +187,82 @@ def sparkline(valores, color=None, invertir=False):
                        xaxis=dict(visible=False), yaxis=dict(visible=False, autorange='reversed' if invertir else True),
                        showlegend=False)
     return fig
+
+# --- CONTROL DE GESTIÓN: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs. Real
+# (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
+def _fmt_valor_cg(v, tipo):
+    if v is None:
+        return '—'
+    if tipo == 'usd':
+        return format_num(v)
+    if tipo == 'ratio':
+        return f'{v * 100:,.1f}%'
+    return str(v)
+def _fmt_delta_cg(v):
+    if v['estado'] != 'ok' or v['gap_abs'] is None:
+        return None
+    if v['tipo'] == 'usd':
+        # Ronda con status=REAL en ambos lados (histórico ya migrado) da un gap de centavos por
+        # redondeo de punto flotante entre el motor Python y el motor Excel -- no es un gap real y
+        # mostrarlo como "-0" confundiría; se redondea al dólar y se omite si queda en 0.
+        gap_redondeado = round(v['gap_abs'])
+        return format_num(gap_redondeado) if gap_redondeado != 0 else None
+    if v['tipo'] == 'ratio':
+        return f"{v['gap_abs'] * 100:+.1f} p.p."
+    return None
+_DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
+def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False):
+    """Botón 'Control de Gestión': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
+    KPIs del crosswalk dado. Un KPI sin proyección para esta ronda (el modelo no lo cubre, o es una
+    ronda de Práctica que el modelo no proyecta) o sin dato real todavía (CESIM no publicó esta
+    ronda) no se omite en silencio: cae al gráfico de evolución de esa variable.
+
+    mostrar_directo=True se salta el toggle y renderiza directo -- para cuando esta es la ÚNICA
+    razón de estar en la página (p.ej. CESIM todavía no publicó ningún RDOS de esta ronda: no hay
+    nada más que mostrar en el resto de las secciones, así que no tiene sentido esconder esto detrás
+    de un clic extra)."""
+    crosswalk = crosswalk or CROSSWALK_FINANZAS
+    if not mostrar_directo:
+        activo = st.toggle('📊 Control de Gestión: Proyectado vs. Real', key=f'cg_toggle_{key_suffix}')
+        if not activo:
+            return
+    df_proy = get_proyeccion()
+    if df_proy is None:
+        st.info('Todavía no se subió `CADIZ_Gestion_v2.xlsx` a la raíz del repo (o no se pudo leer '
+                'la hoja `DATA_EXPORT`) — subilo con ese mismo nombre para ver el Control de Gestión.')
+        return
+    ronda_num = ronda_a_num(ronda_snapshot)
+    gaps = calcular_gaps(df_todas_rondas, df_proy, ronda_nombre=ronda_snapshot, ronda_num=ronda_num, crosswalk=crosswalk)
+    con_gap = {k: v for k, v in gaps.items() if v['estado'] in ('ok', 'sin_real')}
+    sin_gap = {k: v for k, v in gaps.items() if v['estado'] in ('sin_datos', 'sin_proyeccion')}
+    with st.container(border=True):
+        st.markdown(f'**Control de Gestión — {ronda_snapshot}**')
+        if not con_gap:
+            st.caption('CADIZ no tiene una proyección cargada para esta ronda en el modelo de gestión — '
+                       'ver la evolución de cada indicador más abajo.')
+        else:
+            cols = st.columns(min(4, len(con_gap)))
+            for i, (clave, v) in enumerate(con_gap.items()):
+                with cols[i % len(cols)]:
+                    if v['estado'] == 'sin_real':
+                        st.metric(v['label'], _fmt_valor_cg(v['proyectado'], v['tipo']))
+                        st.caption('Proyectado (CADIZ) — real de CESIM pendiente')
+                    else:
+                        st.metric(v['label'], _fmt_valor_cg(v['real'], v['tipo']),
+                                   delta=_fmt_delta_cg(v), delta_color=_DELTA_COLOR_CG[v['gap_favorable']])
+                        st.caption(f"Real — proyectado {_fmt_valor_cg(v['proyectado'], v['tipo'])}")
+        if sin_gap:
+            st.caption('Sin comparación posible en esta ronda para estos indicadores (no forman parte '
+                       'de la proyección de CADIZ, o es una ronda de práctica) — se muestra su evolución:')
+    if sin_gap:
+        cols_ev = st.columns(2)
+        for i, (clave, v) in enumerate(sin_gap.items()):
+            spec = crosswalk[clave]['real']
+            sub = df_todas_rondas[(df_todas_rondas['Estado'] == spec['estado']) & (df_todas_rondas['Metrica'] == spec['metrica'])]
+            if spec.get('seccion'):
+                sub = sub[sub['Seccion'] == spec['seccion']]
+            with cols_ev[i % 2]:
+                chart_evolucion(sub, v['label'])
 
 def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None):
     """Serie histórica de una métrica para un equipo, ordenada por ronda.
@@ -348,7 +440,22 @@ SECCIONES = ['Resultados', 'Mercado', 'Operaciones', 'Finanzas', 'RRHH y Sosteni
 seccion = st.sidebar.radio('Sección', SECCIONES, key='select_seccion_router')
 df_all = get_data(filtro_tipo)
 if df_all.empty or ronda_snapshot not in df_all['Ronda'].unique():
-    st.info(f"📁 Faltan datos: No se encontraron archivos para **{ronda_snapshot}** en el entorno **{filtro_tipo}**.")
+    # CASO ESPECIAL: CESIM todavía no publicó ningún RDOS de esta ronda (nada que mostrar en
+    # Resultados/Mercado/Operaciones/RRHH), pero CADIZ ya cargó su propia proyección en el modelo de
+    # gestión para esa ronda -- en vez de un callejón sin salida, se muestra directamente el Control
+    # de Gestión (lo único que SÍ hay para ofrecer) en la sección Finanzas. Fuera de Finanzas, o si
+    # no hay proyección tampoco, se mantiene el aviso original sin cambios.
+    ronda_num_bypass = ronda_a_num(ronda_snapshot)
+    df_proy_bypass = get_proyeccion() if ronda_num_bypass is not None else None
+    hay_proyeccion_cadiz = (df_proy_bypass is not None and not df_proy_bypass[
+        (df_proy_bypass['round'] == ronda_num_bypass) & (df_proy_bypass['team'] == MY_COMPANY)].empty)
+    if hay_proyeccion_cadiz and seccion == 'Finanzas' and empresa_analisis == MY_COMPANY:
+        st.info(f"📁 CESIM todavía no publicó los RDOS de **{ronda_snapshot}** — el resto del tablero "
+                "no tiene datos para mostrar todavía, pero CADIZ ya cargó su proyección para esta "
+                "ronda en el modelo de gestión:")
+        panel_control_gestion(df_all.copy(), ronda_snapshot, key_suffix='finanzas_sin_real', mostrar_directo=True)
+    else:
+        st.info(f"📁 Faltan datos: No se encontraron archivos para **{ronda_snapshot}** en el entorno **{filtro_tipo}**.")
     st.stop()
 df = df_all.copy()
 ronda_ultima = ronda_snapshot
@@ -904,6 +1011,16 @@ def seccion_finanzas():
                         delta=delta_str(deuda_cp_vals), delta_color='inverse')
     with f6: st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)), delta=delta_str(deuda_lp_vals), delta_color='inverse')
     with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
+    st.write('')
+
+    # Control de Gestión: es inherentemente sobre CADIZ (es nuestra propia proyección, no la de
+    # "Equipo en foco") -- si se está mirando otro equipo, se avisa en vez de mostrar el gap de
+    # CADIZ sin aclarar de quién es.
+    if empresa_analisis == MY_COMPANY:
+        panel_control_gestion(df, ronda_snapshot, key_suffix='finanzas')
+    else:
+        with st.expander('📊 Control de Gestión: Proyectado vs. Real (solo CADIZ)'):
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión.')
     st.write('')
 
     tab_cp, tab_lp = st.tabs(['Corto Plazo: Liquidez y Operación', 'Largo Plazo: Estructura, Retorno y Competencia'])
