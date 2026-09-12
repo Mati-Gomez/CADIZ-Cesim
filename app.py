@@ -257,39 +257,47 @@ def evaluar_alertas():
             alertas.append(('aviso', 'Cambió la calificación crediticia',
                             f'De {str(calif_ant).strip()} a {str(calif_hoy).strip()} respecto de {ronda_prev}.'))
 
-    # --- Expansión de capacidad de la industria: Cesim publica las fábricas que va a haber
-    #     después de la próxima ronda, así que se sabe de antemano quién está por agrandarse.
+    # --- Movimientos de capacidad de LA COMPETENCIA: Cesim publica las fábricas que va a haber
+    #     después de la próxima ronda, así que se sabe de antemano quién está por agrandarse o
+    #     achicarse. La idea de esta alerta es específicamente vigilar a los rivales -- CADIZ ya
+    #     sabe sus propias decisiones -- y hacerlo siempre, sin depender de a quién tengamos
+    #     seleccionado en "Equipo en foco" (por eso se compara contra MY_COMPANY, no contra
+    #     empresa_analisis: cambiar el equipo en foco para mirar otra sección no debe apagar esta
+    #     vigilancia de la competencia).
     # OJO con la forma del reporte: Cesim pone el PAÍS en 'Metrica' (EE.UU. / China) y el
     # HORIZONTE en 'Subgrupo' (Ronda actual / Próxima ronda / Después de la próxima ronda).
     # Filtrando al revés no matchea nada y el conteo actual daba 0.
     #
-    # FIX (reportado: "avisa expansión de fábrica que no es real"): esta alerta vive bajo el
-    # encabezado "Alertas — {empresa_analisis}, {ronda_snapshot}", pero el chequeo original
-    # recorría las 7 COMPANIES y mostraba en un solo mensaje cualquier expansión, sin filtrar por
-    # empresa_analisis -- verificado con los datos reales: en Ronda 1 quienes expanden son CEOS y
-    # TOKIO (China 2->3), CADIZ se mantiene 2->2->2 sin cambios. Se filtra a empresa_analisis, como
-    # el resto del panel, y se desglosa por área (Metrica = EE.UU./China) en vez de sumarlas --
-    # sumar los dos países en un solo número puede esconder una expansión real en un área si la
-    # otra se mantiene o se contrae.
+    # Historial de este chequeo: la v1 mezclaba los 7 equipos en un solo mensaje ambiguo y solo
+    # miraba subas (nunca bajas, como la reducción real de CEOS en EE.UU. 7->5 en Ronda 1) -- se
+    # corrigió de más filtrando a empresa_analisis, lo cual apagaba el aviso de competencia cuando
+    # el foco está en CADIZ, que es exactamente el caso de uso principal. Esta versión vuelve a
+    # cubrir a todos los rivales (todo el que no sea MY_COMPANY), agrega reducciones, y desglosa
+    # por área (Metrica) en vez de sumar EE.UU.+China en un solo número, que puede esconder un
+    # movimiento real en un área si la otra se mueve al revés.
     #
-    # Segundo problema (misma causa raíz del reporte): el chequeo corre igual en Práctica que en
-    # Oficial. Verificado con los datos reales: CADIZ en China muestra 2->3 en Práctica 2 y
-    # 2->3->5 en Práctica 3 (una decisión de ensayo cargada en esas rondas de práctica), pero en la
-    # Ronda 1 oficial nunca se concretó (2->2->2). Una decisión de práctica no es un compromiso
-    # real para el juego oficial, así que ahora se aclara en el texto en vez de mostrarla igual.
+    # Se mantiene el aviso de Ronda de práctica: verificado con datos reales que una decisión
+    # cargada ahí (ensayo, ej. CADIZ China 2->3 en Práctica 2) puede no trasladarse nunca a la
+    # competencia oficial (Ronda 1 mostró a CADIZ sin cambios) -- no es un compromiso real.
     fab = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
-             (df['Ronda'] == ronda_snapshot) & (df['Empresa'] == empresa_analisis)].copy()
+             (df['Ronda'] == ronda_snapshot) & (df['Empresa'] != MY_COMPANY)].copy()
     if not fab.empty:
         fab['Valor'] = num(fab['Valor'])
-        act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby('Metrica')['Valor'].sum()
-        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby('Metrica')['Valor'].sum()
-        expansiones = [f'{area}: {act.get(area, 0):.0f} → {fut.get(area, 0):.0f}'
-                       for area in act.index if fut.get(area, 0) > act.get(area, 0)]
-        if expansiones:
-            detalle = ' · '.join(expansiones)
+        act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
+        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
+        movimientos = []
+        for clave in act.index:
+            empresa, area = clave
+            a, f = act.get(clave, 0), fut.get(clave, 0)
+            if f > a:
+                movimientos.append(f'{empresa} expande {area} ({a:.0f} → {f:.0f})')
+            elif f < a:
+                movimientos.append(f'{empresa} reduce {area} ({a:.0f} → {f:.0f})')
+        if movimientos:
+            detalle = ' · '.join(movimientos)
             if filtro_tipo == 'Práctica':
-                detalle += ' — decisión cargada en una Ronda de práctica: es un ensayo, no un compromiso real para la competencia oficial.'
-            alertas.append(('aviso', 'Expansión de capacidad planificada (próximas 2 rondas)', detalle))
+                detalle += ' — decisión cargada en una Ronda de práctica: puede ser un ensayo, no necesariamente un compromiso real para la competencia oficial.'
+            alertas.append(('aviso', 'Movimientos de capacidad de la competencia (próximas 2 rondas)', detalle))
     return alertas
 
 def panel_alertas():
