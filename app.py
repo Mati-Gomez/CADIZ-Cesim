@@ -279,25 +279,45 @@ def evaluar_alertas():
     # Se mantiene el aviso de Ronda de práctica: verificado con datos reales que una decisión
     # cargada ahí (ensayo, ej. CADIZ China 2->3 en Práctica 2) puede no trasladarse nunca a la
     # competencia oficial (Ronda 1 mostró a CADIZ sin cambios) -- no es un compromiso real.
+    #
+    # FIX (reportado: "en Ronda 1 dice que CEOS expande China en las próximas 2 rondas, y en
+    # Ronda 2 vuelve a decir lo mismo"): es el MISMO evento real, visto dos veces porque antes solo
+    # se comparaba 'Ronda actual' contra 'Después de la próxima ronda' (fijo a 2 rondas vista) y el
+    # título decía siempre "(próximas 2 rondas)" sin importar cuánto faltaba en realidad. Verificado
+    # con los datos: en R1, CEOS China = 2 (actual) / 2 (próxima) / 3 (después) -> el cambio todavía
+    # está a 2 rondas. En R2, CEOS China = 2 (actual) / 3 (próxima) / 3 (después) -> el MISMO cambio
+    # ya está a 1 ronda -- el horizonte se acorta, pero el mensaje no lo reflejaba y parecía una
+    # alerta repetida sin sentido. Ahora se mira primero 'Próxima ronda' (1 ronda vista); si ahí no
+    # hay cambio, recién se usa 'Después de la próxima ronda' (2 rondas vista) -- así el aviso
+    # cuenta regresiva (2 rondas -> 1 ronda) en vez de repetirse idéntico, y deja de aparecer solo
+    # cuando el cambio ya se concretó en 'Ronda actual'.
     fab = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Número de fábricas') &
              (df['Ronda'] == ronda_snapshot) & (df['Empresa'] != MY_COMPANY)].copy()
     if not fab.empty:
         fab['Valor'] = num(fab['Valor'])
         act = fab[fab['Subgrupo'] == 'Ronda actual'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
-        fut = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
+        prox = fab[fab['Subgrupo'] == 'Próxima ronda'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
+        desp = fab[fab['Subgrupo'] == 'Después de la próxima ronda'].groupby(['Empresa', 'Metrica'])['Valor'].sum()
         movimientos = []
         for clave in act.index:
             empresa, area = clave
-            a, f = act.get(clave, 0), fut.get(clave, 0)
-            if f > a:
-                movimientos.append(f'{empresa} expande {area} ({a:.0f} → {f:.0f})')
-            elif f < a:
-                movimientos.append(f'{empresa} reduce {area} ({a:.0f} → {f:.0f})')
+            a = act.get(clave, 0)
+            p = prox.get(clave, a)
+            d = desp.get(clave, p)
+            # Prioridad: el cambio más cercano en el tiempo es el que importa mostrar ahora.
+            if p != a:
+                destino, horizonte = p, 'la próxima ronda'
+            elif d != a:
+                destino, horizonte = d, 'dentro de 2 rondas'
+            else:
+                continue
+            verbo = 'expande' if destino > a else 'reduce'
+            movimientos.append(f'{empresa} {verbo} {area} ({a:.0f} → {destino:.0f}, {horizonte})')
         if movimientos:
             detalle = ' · '.join(movimientos)
             if filtro_tipo == 'Práctica':
                 detalle += ' — decisión cargada en una Ronda de práctica: puede ser un ensayo, no necesariamente un compromiso real para la competencia oficial.'
-            alertas.append(('aviso', 'Movimientos de capacidad de la competencia (próximas 2 rondas)', detalle))
+            alertas.append(('aviso', 'Movimientos de capacidad de la competencia', detalle))
     return alertas
 
 def panel_alertas():
