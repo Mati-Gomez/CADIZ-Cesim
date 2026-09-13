@@ -75,7 +75,7 @@ CROSSWALK_FINANZAS = {
         "real": {"estado": "Hoja de Balance, miles USD, Global",
                  "metrica": "Deudas a largo plazo", "seccion": None},
         "tipo": "usd",
-        "gap_favorable": None,
+        "gap_favorable": None,   # ni más ni menos deuda LP es "mejor" per se -- es una decisión, no un resultado a evaluar
     },
     "calificacion_crediticia": {
         "label": "Calificación crediticia",
@@ -95,6 +95,21 @@ CROSSWALK_FINANZAS = {
     },
 }
 
+# Alcance ampliado (Adenda 11): Mercado y Operaciones, Global/por-región donde corresponde. Mismo
+# criterio -- cada entrada se verificó contra Ronda 1 real antes de incorporarse, y solo se listaron
+# combinaciones donde la definición de ambos lados (Plan/Real) es efectivamente la misma magnitud.
+#
+# NOTA IMPORTANTE sobre alcance temporal: tanto Mercado como Operaciones dependen de CADIZ_Gestion_v2
+# .xlsx!DATA_EXPORT, que solo proyecta (status=PLAN) desde Ronda 2 en adelante -- Ronda 0 y Ronda 1 ya
+# se jugaron sin un plan cargado de antemano en este modelo, así que ahí no corresponde ningún gap
+# (calcular_gaps ya devuelve 'sin_proyeccion' para esas rondas, correctamente). El primer gap real
+# aparece en Ronda 2 en cuanto CESIM publique su RDOS.
+#
+# "Cuota de mercado CADIZ (promedio)" (Finanzas, ya en CROSSWALK_FINANZAS -- no se movió) se dejó
+# deliberadamente afuera de aquí también: se verificó que la fórmula del Excel divide por 12 (incluye
+# los 6 casilleros de Eléctrico/Hidrógeno donde CADIZ no compite) en vez de ponderar por volumen como
+# hace CESIM -- confirmado contra Ronda 1 real (CESIM: 18,03% ponderado por ventas; Excel: fórmula que
+# da 4,63% en Ronda 2). Reportado al equipo; omitida del Control de Gestión hasta corregir el Excel.
 CROSSWALK_MERCADO = {
     "demanda_estimada_eeuu": {
         "label": "Demanda estimada — EE.UU.",
@@ -116,6 +131,19 @@ CROSSWALK_MERCADO = {
     },
 }
 
+# "Utilización de capacidad": el RDOS NO publica un único % por área (EE.UU./China) -- lo publica
+# desglosado por (área, tecnología) en 'Detalles de fabricación' -> Seccion='Capacidad empleada, %',
+# Subgrupo=área, Metrica=tecnología (ej. R1 real CADIZ: EE.UU./Combustión=30%, EE.UU./Híbrido=55%).
+# Un primer intento de crosswalk (bug ya corregido) apuntaba mal a Metrica='Capacidad empleada, %'
+# -- eso no existe como tal, siempre salía vacío. En vez de eso se RECONSTRUYE el agregado real con
+# la misma lógica que usa el propio modelo Excel para su lado Plan: (Producción interna real, sumada
+# todas las tecnologías del área) / Capacidad operativa (cierre de ronda) -- ver 'real_calc' más abajo,
+# resuelto en gap_analysis._valor_real_utilizacion_capacidad(). La capacidad NO se hardcodea como
+# constante en la web: se lee de CADIZ_Gestion_v2.xlsx!DATA_EXPORT (metric='Capacidad operativa',
+# status=PLAN), que el motor ya actualiza solo si CADIZ invierte/desinvierte (decisión D2) -- así que
+# si la capacidad cambia en una ronda futura, el real se recalcula solo, sin tocar la web. Verificado
+# EXACTO contra Ronda 1 real: (336+616)/1.400 = 68,0% EE.UU., (240+100)/500 = 68,0% China -- coincide
+# con el 68% ya confirmado por el equipo (no el 85% que se había calculado mal en un intento anterior).
 CROSSWALK_OPERACIONES = {
     "utilizacion_capacidad_eeuu": {
         "label": "Utilización de capacidad — EE.UU.",
@@ -133,6 +161,14 @@ CROSSWALK_OPERACIONES = {
     },
 }
 
+# Resultados (Adenda 11). EPS: verificado exacto contra Ronda 1 real. FCF: CESIM no publica esta línea
+# en el RDOS -- se deja en el crosswalk con 'real' apuntando a un campo inexistente a propósito, así
+# calcular_gaps siempre devuelve 'sin_real' y el panel cae al gráfico de evolución (solo Proyectado),
+# nunca a un gap inventado. "Retorno total acumulado del accionista": el dato real SÍ existe en el
+# RDOS, pero el lado Plan es un PROXY explícito (no una réplica del algoritmo real de CESIM, que no es
+# público) -- incluido por pedido expreso del equipo, ya que es el objetivo estratégico central del
+# juego (manual cap. 2.1: "el ganador se determina por el retorno total de los accionistas"). Se
+# etiqueta como PROXY en el propio label para no confundirlo con una regla CESIM verificada.
 CROSSWALK_RESULTADOS = {
     "eps": {
         "label": "EPS",
@@ -146,6 +182,10 @@ CROSSWALK_RESULTADOS = {
         "proyeccion": {"metric": "FCF", "region": "Global"},
         "real": {"estado": "NO PUBLICADO POR CESIM", "metrica": "NO PUBLICADO POR CESIM", "seccion": None},
         "tipo": "usd", "gap_favorable": "real_mayor",
+        # CESIM no publica una línea de FCF en el RDOS -- nunca va a haber 'real' para comparar (no es
+        # un 'real pendiente' temporal como Utilización de capacidad en una ronda sin RDOS publicado
+        # todavía). Por pedido del equipo, se muestra como evolución de la PROYECCIÓN propia de CADIZ
+        # a través de las rondas, sin intentar un gap contra algo que no existe.
         "real_no_publicado": True,
     },
     "retorno_accionista": {

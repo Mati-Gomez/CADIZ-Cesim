@@ -7,7 +7,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from cesim_parser import build_historico
-from gap_analysis import calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_PROYECCION_EXCEL
+from gap_analysis import (calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_PROYECCION_EXCEL,
+                          precio_volumen_mercado, variacion_precio_volumen_mix, costo_unitario_area,
+                          cuota_mercado_objetivo_vs_real, flujo_caja_plan_real_global,
+                          TECNOLOGIAS as _TECNOLOGIAS_GAP, MERCADOS as _MERCADOS_GAP, AREAS as _AREAS_GAP,
+                          MONEDA_MERCADO as _MONEDA_MERCADO_GAP)
 from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
@@ -203,9 +207,32 @@ def sparkline(valores, color=None, invertir=False):
                        xaxis=dict(visible=False), yaxis=dict(visible=False, autorange='reversed' if invertir else True),
                        showlegend=False)
     return fig
+def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyectado', nombre_frente='Real'):
+    """Bullet chart genérico: una barra horizontal gruesa y apagada (`valor_fondo`) con una barra fina
+    superpuesta en BRAND_ACCENT (`valor_frente`), barmode='overlay' -- lectura inmediata de si el
+    valor de referencia (Plan, o Punto de Equilibrio) fue superado o no. Reutilizado por la Fila 2 de
+    la Comparativa Plan vs. Real (Proyectado vs. Real) y por el gráfico de Punto de Equilibrio de
+    Operaciones (Volumen de Equilibrio vs. Volumen Real Vendido) -- mismo patrón visual, distinto par
+    de valores."""
+    if valor_fondo is None or valor_frente is None:
+        return st.info('Sin dato para graficar.')
+    # Los valores de texto van como st.caption (no como texto 'outside' de cada barra): al ser una
+    # sola fila horizontal, dos barras con longitud parecida (p.ej. Plan≈Real) hacen que sus textos
+    # 'outside' se dibujen en el mismo punto y queden ilegibles superpuestos -- un caption plano al
+    # pie no tiene ese problema y es igual de legible.
+    color_fondo = 'rgba(140,151,166,0.55)'
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=[valor_fondo], y=[''], orientation='h', name=nombre_fondo,
+                          marker_color=color_fondo, width=0.6))
+    fig.add_trace(go.Bar(x=[valor_frente], y=[''], orientation='h', name=nombre_frente,
+                          marker_color=BRAND_ACCENT, width=0.25))
+    fig.update_layout(barmode='overlay', title=titulo, xaxis_title=None,
+                       legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
+    mostrar(fig, ocultar_eje_valores='y')
+    st.caption(f'{nombre_fondo}: {_fmt_valor_cg(valor_fondo, tipo)} · {nombre_frente}: {_fmt_valor_cg(valor_frente, tipo)}')
 
-# --- CONTROL DE GESTIÓN: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs. Real
-# (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
+# --- COMPARATIVA PLAN VS. REAL: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs.
+# Real (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
 def _fmt_valor_cg(v, tipo):
     if v is None:
         return '—'
@@ -236,8 +263,8 @@ def _fmt_delta_cg(v):
         return f"{v['gap_abs'] * 100:+.1f} p.p."
     return None
 _DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
-def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False):
-    """Botón 'Control de Gestión': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
+def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False):
+    """Botón 'Comparativa Plan vs. Real': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
     KPIs del crosswalk dado. Un KPI sin proyección para esta ronda (el modelo no lo cubre, o es una
     ronda de Práctica que el modelo no proyecta) o sin dato real todavía (CESIM no publicó esta
     ronda) no se omite en silencio: cae al gráfico de evolución de esa variable.
@@ -248,13 +275,13 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
     de un clic extra)."""
     crosswalk = crosswalk or CROSSWALK_FINANZAS
     if not mostrar_directo:
-        activo = st.toggle('📊 Control de Gestión: Proyectado vs. Real', key=f'cg_toggle_{key_suffix}')
+        activo = st.toggle('📊 Comparativa Plan vs. Real', key=f'cg_toggle_{key_suffix}')
         if not activo:
             return
     df_proy = get_proyeccion()
     if df_proy is None:
         st.info('Todavía no se subió `CADIZ_Gestion_v2.xlsx` a la raíz del repo (o no se pudo leer '
-                'la hoja `DATA_EXPORT`) — subilo con ese mismo nombre para ver el Control de Gestión.')
+                'la hoja `DATA_EXPORT`) — subilo con ese mismo nombre para ver la Comparativa Plan vs. Real.')
         return
     ronda_num = ronda_a_num(ronda_snapshot)
     claves_no_publicadas = {k for k, spec in crosswalk.items() if spec.get('real_no_publicado')}
@@ -264,7 +291,7 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
     con_gap = {k: v for k, v in gaps.items() if v['estado'] in ('ok', 'sin_real')}
     sin_gap = {k: v for k, v in gaps.items() if v['estado'] in ('sin_datos', 'sin_proyeccion')}
     with st.container(border=True):
-        st.markdown(f'**Control de Gestión — {ronda_snapshot}**')
+        st.markdown(f'**Comparativa Plan vs. Real — {ronda_snapshot}**')
         if not con_gap:
             st.caption('CADIZ no tiene una proyección cargada para esta ronda en el modelo de gestión — '
                        'ver la evolución de cada indicador más abajo.')
@@ -279,6 +306,18 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
                         st.metric(v['label'], _fmt_valor_cg(v['real'], v['tipo']),
                                    delta=_fmt_delta_cg(v), delta_color=_DELTA_COLOR_CG[v['gap_favorable']])
                         st.caption(f"Real — proyectado {_fmt_valor_cg(v['proyectado'], v['tipo'])}")
+            # Fila 2: bullet charts (Proyectado vs. Real superpuestos) -- solo para los KPIs que
+            # tienen AMBOS valores (estado='ok'); 'sin_real' ya se ve en la tarjeta de arriba, no hay
+            # nada que superponer todavía.
+            # tipo='texto' (ej. Calificación crediticia) no tiene sentido como barra -- ya se ve
+            # completo en la tarjeta de Fila 1 (valor + "Real — proyectado ...").
+            con_ambos = {k: v for k, v in con_gap.items() if v['estado'] == 'ok' and v['tipo'] != 'texto'}
+            if con_ambos:
+                st.markdown('###### Proyectado vs. Real')
+                cols_b = st.columns(min(4, len(con_ambos)))
+                for i, (clave, v) in enumerate(con_ambos.items()):
+                    with cols_b[i % len(cols_b)]:
+                        chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'])
         if sin_gap or sin_publicar:
             st.caption('Sin comparación posible para estos indicadores (no forman parte de la '
                        'proyección de CADIZ, es una ronda de práctica, o CESIM no publica ese dato en '
@@ -301,6 +340,148 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
                 chart_evolucion_proyeccion(df_proy, spec['metric'], spec['region'], v['label'])
                 st.caption('CESIM no publica este dato en el RDOS — evolución de la proyección propia de CADIZ.')
             i += 1
+
+# --- Fila 3 de la Comparativa Plan vs. Real: gráficos de GAP/varianza específicos por sección
+# (Adenda 12). Cada uno se llama desde la pestaña "Comparativa Plan vs. Real" de su propia sección
+# (no desde panel_comparativa_plan_real, que es genérico y no conoce estas métricas de grano fino
+# por mercado/tecnología/área) -- y solo tiene sentido con team=CADIZ (son cruces contra SU propia
+# proyección en CADIZ_Gestion_v2.xlsx). ---
+def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
+    st.markdown('###### Análisis de Desvíos de Ingresos — Precio / Volumen / Mix')
+    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_resultados_mercado')
+    datos = precio_volumen_mercado(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
+    if not datos:
+        st.info(f'CADIZ no tiene datos de precio/volumen (Plan o Real) en {mercado_sel} para {ronda_snapshot}.')
+        return
+    if all(d['precio_plan'] is None for d in datos.values()):
+        # Sin ESTO, el waterfall tomaría Plan=0 como línea base y le atribuiría el 100% de los
+        # Ingresos Reales al "Desvío por Precio" -- un artefacto de la falta de dato, no un desvío
+        # real. El modelo de CADIZ solo proyecta desde Ronda 2 (Ronda 0/1 no tienen Plan cargado).
+        st.info(f'CADIZ no tiene una proyección de Precio/Volumen cargada para {mercado_sel} en {ronda_snapshot} '
+                '— el modelo de gestión proyecta recién desde Ronda 2, no hay Plan con el que comparar.')
+        return
+    var = variacion_precio_volumen_mix(datos)
+    if not var['reconciliacion_ok']:
+        st.warning('El desglose Precio/Volumen/Mix no reconcilia exactamente con la variación de Ingresos — revisar.')
+    etapas = [('Ingresos Proyectados', var['ingresos_plan']), ('Desvío por Precio', var['var_precio']),
+              ('Desvío por Volumen', var['var_volumen']), ('Desvío por Mix', var['var_mix']),
+              ('Ingresos Reales', var['ingresos_real'])]
+    fig = go.Figure(go.Waterfall(
+        orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'total'],
+        x=[e[0] for e in etapas], y=[e[1] for e in etapas],
+        text=[format_num(v) for _, v in etapas], textposition='outside',
+        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': MUTED_PALETTE[2]}},
+        totals={'marker': {'color': BRAND_ACCENT}}))
+    fig.update_layout(title=f'Ingresos — Plan vs. Real, {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]})')
+    mostrar(fig, ocultar_eje_valores='y')
+    st.caption(f'En moneda nativa de {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se convierte a USD '
+               'para no asumir un tipo de cambio que el simulador no publica.')
+
+def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
+    st.markdown('###### Cuota de mercado — Objetivo (Plan) vs. Real, por tecnología')
+    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_mercado_cuota')
+    datos = cuota_mercado_objetivo_vs_real(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
+    if not datos:
+        st.info(f'Sin datos de cuota objetivo/real en {mercado_sel} para {ronda_snapshot}.')
+        return
+    filas = []
+    for tech, d in datos.items():
+        if d['objetivo'] is not None:
+            filas.append({'Tecnología': tech, 'Tipo': 'Objetivo (Plan)', 'Cuota': d['objetivo'] * 100})
+        if d['real'] is not None:
+            filas.append({'Tecnología': tech, 'Tipo': 'Real', 'Cuota': d['real'] * 100})
+    if not filas:
+        return st.info('Sin datos suficientes.')
+    dfc = pd.DataFrame(filas)
+    fig = px.bar(dfc, x='Tecnología', y='Cuota', color='Tipo', barmode='group',
+                 color_discrete_map={'Objetivo (Plan)': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
+                 text=dfc['Cuota'].apply(lambda v: f'{v:.1f}%'), title=f'Cuota de mercado — {mercado_sel}, {ronda_snapshot}')
+    fig.update_traces(textposition='outside', cliponaxis=False)
+    fig.update_layout(yaxis_title='% del mercado total')
+    mostrar(fig)
+    st.caption('Cuota = ventas de CADIZ en esa tecnología / tamaño TOTAL del mercado (las 4 tecnologías) — '
+               'misma convención en Plan y Real (distinta de la que el RDOS publica directo por tecnología, '
+               'ver nota metodológica en gap_analysis.cuota_mercado_objetivo_vs_real).')
+
+def _costo_fabricacion_ponderado(datos_area):
+    """A partir de costo_unitario_area(): costo unitario de fabricación PONDERADO por producción REAL
+    (propia + contratada), Plan vs. Real, y el GAP que aporta cada tecnología al total — usa los
+    MISMOS pesos (producción real) para ponderar Plan y Real, así el desglose por tecnología
+    reconcilia EXACTO con la diferencia total (no es una aproximación)."""
+    filas = []
+    prod_total = 0.0
+    for tech, d in datos_area.items():
+        prod_p, prod_t = d['prod_propia_real'], d['prod_terc_real']
+        prod_tech = prod_p + prod_t
+        if prod_tech <= 0:
+            continue
+        plan_tech = ((d['cu_propia_plan'] or 0) * prod_p + (d['cu_terc_plan'] or 0) * prod_t) / prod_tech
+        real_tech = ((d['cu_propia_real'] or 0) * prod_p + (d['cu_terc_real'] or 0) * prod_t) / prod_tech
+        filas.append({'tech': tech, 'prod': prod_tech, 'plan': plan_tech, 'real': real_tech})
+        prod_total += prod_tech
+    if prod_total <= 0:
+        return None
+    plan_pond = sum(f['prod'] * f['plan'] for f in filas) / prod_total
+    real_pond = sum(f['prod'] * f['real'] for f in filas) / prod_total
+    gaps = [{'tech': f['tech'], 'gap': (f['real'] - f['plan']) * f['prod'] / prod_total} for f in filas]
+    return {'plan_pond': plan_pond, 'real_pond': real_pond, 'gaps': gaps}
+
+def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy):
+    st.markdown('###### Desvío en Unit Economics — Costo unitario de fabricación (Plan vs. Real)')
+    st.caption('Alcance: solo costo de FABRICACIÓN (propia + contratada), ponderado por producción real. '
+               'Transporte/aranceles y promoción se reportan por mercado de destino (no por área de origen) '
+               'y no están incluidos acá — por eso este desvío no reconcilia el 100% de la Contribución '
+               'Marginal unitaria completa.')
+    area_sel = st.selectbox('Área de producción', _AREAS_GAP, key='sel_cg_operaciones_area')
+    datos = costo_unitario_area(df_all, df_proy, ronda_snapshot, ronda_num, area_sel, team=MY_COMPANY)
+    if not datos:
+        return st.info(f'Sin datos de costo unitario de fabricación en {area_sel} para {ronda_snapshot}.')
+    if all(d['cu_propia_plan'] is None and d['cu_terc_plan'] is None for d in datos.values()):
+        # Mismo motivo que en el waterfall de Ingresos: sin esto, Plan=0 le atribuiría el 100% del
+        # costo real a un "GAP" que en realidad es solo ausencia de proyección (Ronda 0/1, antes de
+        # que el modelo de CADIZ empezara a proyectar en Ronda 2).
+        return st.info(f'CADIZ no tiene una proyección de costo unitario cargada para {area_sel} en {ronda_snapshot} '
+                        '— el modelo de gestión proyecta recién desde Ronda 2, no hay Plan con el que comparar.')
+    pond = _costo_fabricacion_ponderado(datos)
+    if not pond:
+        return st.info(f'Sin datos de producción real en {area_sel} para {ronda_snapshot}.')
+    etapas = [('Costo Plan', pond['plan_pond'])]
+    for g in pond['gaps']:
+        if abs(g['gap']) > 1e-9:
+            etapas.append((f"GAP {g['tech']}", g['gap']))
+    etapas.append(('Costo Real', pond['real_pond']))
+    fig = go.Figure(go.Waterfall(
+        orientation='v', measure=['absolute'] + ['relative'] * (len(etapas) - 2) + ['total'],
+        x=[e[0] for e in etapas], y=[e[1] for e in etapas],
+        text=[format_num(v) for _, v in etapas], textposition='outside',
+        increasing={'marker': {'color': MUTED_PALETTE[2]}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
+        totals={'marker': {'color': BRAND_ACCENT}}))
+    fig.update_layout(title=f'Costo unitario de fabricación — {area_sel}, {ronda_snapshot}')
+    mostrar(fig, ocultar_eje_valores='y')
+
+def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
+    st.markdown('###### Composición del Flujo de Caja — Plan vs. Real (Global)')
+    res = flujo_caja_plan_real_global(df_all, df_proy, ronda_snapshot, ronda_num, team=MY_COMPANY)
+    plan, real = res['plan'], res['real']
+    etiquetas = {'cfo': 'Act. Operativas (CFO)', 'cfi': 'Act. de Inversión (CFI)', 'cff': 'Act. Financieras (CFF)'}
+    filas = []
+    for k, label in etiquetas.items():
+        if plan.get(k) is not None:
+            filas.append({'Componente': label, 'Tipo': 'Proyectado', 'Valor': plan[k]})
+        if real.get(k) is not None:
+            filas.append({'Componente': label, 'Tipo': 'Real', 'Valor': real[k]})
+    if not filas:
+        return st.info(f'Sin datos de Flujo de Caja (Plan o Real) para {ronda_snapshot}.')
+    dff = pd.DataFrame(filas)
+    fig = px.bar(dff, x='Componente', y='Valor', color='Tipo', barmode='group',
+                 color_discrete_map={'Proyectado': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
+                 text=dff['Valor'].apply(format_num), title=f'Composición del Flujo de Caja — Global, {ronda_snapshot}')
+    fig.update_traces(textposition='outside', cliponaxis=False)
+    mostrar(fig, ocultar_eje_valores='y')
+    if all(plan.get(k) is None for k in etiquetas):
+        st.caption('CADIZ no proyecta Flujo de Caja para esta ronda en el modelo de gestión (recién desde Ronda 2).')
+    if all(real.get(k) is None for k in etiquetas):
+        st.caption('CESIM todavía no publicó el RDOS real de esta ronda — se muestra solo lo proyectado.')
 
 def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None):
     """Serie histórica de una métrica para un equipo, ordenada por ronda.
@@ -493,7 +674,7 @@ if df_all.empty or ronda_snapshot not in df_all['Ronda'].unique():
         st.info(f"📁 CESIM todavía no publicó los RDOS de **{ronda_snapshot}** — el resto del tablero "
                 "no tiene datos para mostrar todavía, pero CADIZ ya cargó su proyección para esta "
                 "ronda en el modelo de gestión:")
-        panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=_CROSSWALK_POR_SECCION_BYPASS[seccion],
+        panel_comparativa_plan_real(df_all.copy(), ronda_snapshot, crosswalk=_CROSSWALK_POR_SECCION_BYPASS[seccion],
                                key_suffix=f'{seccion.lower()}_sin_real', mostrar_directo=True)
     else:
         st.info(f"📁 Faltan datos: No se encontraron archivos para **{ronda_snapshot}** en el entorno **{filtro_tipo}**.")
@@ -508,14 +689,16 @@ except FileNotFoundError:
 # SECCIÓN 1 — RESULTADOS
 # =================================================================
 def seccion_resultado():
-    tab_resumen, tab_cg = st.tabs(['Resumen', 'Control de Gestión'])
+    tab_resumen, tab_cg = st.tabs(['Resumen', 'Comparativa Plan vs. Real'])
     with tab_resumen:
         _seccion_resultado_resumen()
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_RESULTADOS, key_suffix='resultados', mostrar_directo=True)
+            panel_comparativa_plan_real(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_RESULTADOS, key_suffix='resultados', mostrar_directo=True)
+            st.divider()
+            fila3_resultados_ingresos(df_all.copy(), ronda_snapshot, ronda_a_num(ronda_snapshot), get_proyeccion())
         else:
-            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver la Comparativa Plan vs. Real (es sobre la proyección propia de CADIZ).')
 def _seccion_resultado_resumen():
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda_r1 = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
@@ -666,14 +849,16 @@ def _seccion_resultado_resumen():
 # SECCIÓN 2 — MERCADO
 # =================================================================
 def seccion_mercado():
-    tab_pos, tab_pan, tab_evo, tab_cg = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución', 'Control de Gestión'])
+    tab_pos, tab_pan, tab_evo, tab_cg = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución', 'Comparativa Plan vs. Real'])
     tecnologias = ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno']
 
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_MERCADO, key_suffix='mercado', mostrar_directo=True)
+            panel_comparativa_plan_real(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_MERCADO, key_suffix='mercado', mostrar_directo=True)
+            st.divider()
+            fila3_mercado_cuota_objetivo(df_all.copy(), ronda_snapshot, ronda_a_num(ronda_snapshot), get_proyeccion())
         else:
-            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver la Comparativa Plan vs. Real (es sobre la proyección propia de CADIZ).')
 
     with tab_pos:
         c1, c2 = st.columns(2)
@@ -716,6 +901,35 @@ def seccion_mercado():
                 mostrar(fig_efi)
             else: st.info("Sin datos consolidados de Marketing.")
         else: st.info("Sin datos de Marketing para analizar eficiencia.")
+
+        st.divider()
+        st.subheader('Share of Voice (SOV) vs. Share of Market (SOM)')
+        st.caption(f'{tech_sel}, {pais_sel}, {ronda_snapshot}. SOV = Promoción del equipo / Promoción total de la '
+                   'tecnología (los 7 equipos). SOM = cuota de mercado real que publica CESIM para esa tecnología '
+                   '(Ventas del equipo / Ventas totales DE ESA TECNOLOGÍA, no del mercado completo) — mismo grano '
+                   'que el SOV, para que la comparación sea de manzanas con manzanas.')
+        promo_sov = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_sel}') & (df['Seccion'] == tech_sel) &
+                       (df['Metrica'] == 'Promoción') & (df['Ronda'] == ronda_snapshot)].copy()
+        promo_sov['Valor'] = num(promo_sov['Valor']).abs()
+        som_sov = df[(df['Estado'] == f'Informe de mercado, {pais_sel}') & (df['Seccion'] == f'{pais_sel} cuotas de mercado, %') &
+                     (df['Metrica'] == tech_sel) & (df['Ronda'] == ronda_snapshot)].copy()
+        som_sov['Valor'] = num(som_sov['Valor'])
+        promo_total_sov = promo_sov['Valor'].sum()
+        if promo_total_sov > 0 and not som_sov.empty:
+            sov_df = promo_sov[['Empresa', 'Valor']].rename(columns={'Valor': 'Promo'})
+            sov_df['SOV'] = sov_df['Promo'] / promo_total_sov * 100
+            som_df = som_sov[['Empresa', 'Valor']].rename(columns={'Valor': 'SOM'})
+            comp_sov = sov_df.merge(som_df, on='Empresa', how='outer')
+            comp_sov_long = comp_sov.melt(id_vars='Empresa', value_vars=['SOV', 'SOM'], var_name='Indicador', value_name='Pct').dropna(subset=['Pct'])
+            fig_sov = px.bar(comp_sov_long, x='Empresa', y='Pct', color='Indicador', barmode='group',
+                              color_discrete_map={'SOV': MUTED_PALETTE[0], 'SOM': BRAND_ACCENT},
+                              text=comp_sov_long['Pct'].apply(lambda v: f'{v:,.1f}%'),
+                              title=f'SOV vs. SOM — {tech_sel}, {pais_sel}, {ronda_snapshot}')
+            fig_sov.update_traces(textposition='outside', cliponaxis=False)
+            fig_sov.update_layout(yaxis_title='%')
+            mostrar(fig_sov)
+        else:
+            st.info('Sin datos suficientes de Promoción o Cuota de mercado para esta combinación.')
 
     with tab_pan:
         c1p, c2p = st.columns(2)
@@ -852,12 +1066,14 @@ def seccion_mercado():
 # SECCIÓN 3 — OPERACIONES
 # =================================================================
 def seccion_operaciones():
-    bloque1, bloque2, tab_cg = st.tabs(['Capacidad y Costos', 'Inventario y Logística', 'Control de Gestión'])
+    bloque1, bloque2, tab_cg = st.tabs(['Capacidad y Costos', 'Inventario y Logística', 'Comparativa Plan vs. Real'])
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_OPERACIONES, key_suffix='operaciones', mostrar_directo=True)
+            panel_comparativa_plan_real(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_OPERACIONES, key_suffix='operaciones', mostrar_directo=True)
+            st.divider()
+            fila3_operaciones_gap_fabricacion(df_all.copy(), ronda_snapshot, ronda_a_num(ronda_snapshot), get_proyeccion())
         else:
-            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver la Comparativa Plan vs. Real (es sobre la proyección propia de CADIZ).')
     with bloque1:
         cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) & (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
         cap['Valor'] = num(cap['Valor'])
@@ -981,6 +1197,42 @@ def seccion_operaciones():
             ))
             fig_ue.update_layout(title=f'Unit Economics — {tech_ue} {pais_ue}')
             mostrar(fig_ue, ocultar_eje_valores='y')
+            costo_total_unit = -(c_prod + c_flete + c_caract)
+            markup_pct = (m_bruto / costo_total_unit * 100) if costo_total_unit else None
+            col_cm, col_mk = st.columns(2)
+            col_cm.metric('Contribución Marginal Unitaria', f'USD {m_bruto:,.0f}')
+            col_mk.metric('Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—')
+            st.caption('Mark-up = Contribución Marginal Unitaria / Costo unitario total (fabricación + logística + características).')
+
+        st.divider()
+        st.markdown(f'**Punto de equilibrio — {empresa_analisis}, {ronda_snapshot}**')
+        cm_total_miles = 0.0
+        vol_total_miles = 0.0
+        for mercado_be in ['EE.UU.', 'China', 'Europa']:
+            margen_be = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {mercado_be}') &
+                           (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
+                           (df['Metrica'] == 'Margen de contribución')].copy()
+            cm_total_miles += num(margen_be['Valor']).sum()
+            ventas_be = df[(df['Estado'] == f'Informe de mercado, {mercado_be}') & (df['Empresa'] == empresa_analisis) &
+                          (df['Ronda'] == ronda_snapshot) & (df['Metrica'] == 'Ventas, miles unidades')].copy()
+            vol_total_miles += num(ventas_be['Valor']).sum()
+        pl_be = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
+        def gbe(metrica): return valor_de(pl_be, metrica) or 0.0
+        costos_fijos_miles = gbe('Depreciación de Activos Fijos') + gbe('I+D') + gbe('Administración')
+        if vol_total_miles > 0 and cm_total_miles:
+            cm_unitaria = cm_total_miles / vol_total_miles  # miles USD / miles u. = USD/u. -- la escala se cancela
+            volumen_real = vol_total_miles * 1000.0
+            volumen_equilibrio = (costos_fijos_miles * 1000.0) / cm_unitaria if cm_unitaria else None
+            if volumen_equilibrio is not None and volumen_equilibrio > 0:
+                chart_bullet(f'Punto de Equilibrio — {empresa_analisis}, {ronda_snapshot}', volumen_equilibrio, volumen_real,
+                             'unidades', nombre_fondo='Volumen de Equilibrio', nombre_frente='Volumen Real Vendido')
+                st.caption('Costos Fijos = Depreciación + I+D + Administración (real, Global). Contribución Marginal '
+                           'Unitaria Ponderada = Margen de contribución total / unidades totales vendidas, sumado en '
+                           'los 3 mercados donde el equipo vende.')
+            else:
+                st.info('No se pudo calcular el punto de equilibrio para esta combinación.')
+        else:
+            st.info('Sin datos suficientes de ventas/margen para calcular el punto de equilibrio.')
     with bloque2:
         c1, c2 = st.columns(2)
         pais_sel = c1.selectbox('País Inventario', ['EE.UU.', 'China', 'Europa'], key='sel_inv_pais')
@@ -1100,7 +1352,7 @@ def seccion_finanzas():
     st.write('')
 
     tab_cp, tab_lp, tab_cg = st.tabs(['Corto Plazo: Liquidez y Operación', 'Largo Plazo: Estructura, Retorno y Competencia',
-                                       'Control de Gestión'])
+                                       'Comparativa Plan vs. Real'])
 
     # Control de Gestión: es inherentemente sobre CADIZ (es nuestra propia proyección, no la de
     # "Equipo en foco") -- si se está mirando otro equipo, se avisa en vez de mostrar el gap de
@@ -1108,9 +1360,11 @@ def seccion_finanzas():
     # consistencia con Resultados/Mercado/Operaciones, que ahora tienen la misma pestaña.
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            panel_control_gestion(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True)
+            panel_comparativa_plan_real(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True)
+            st.divider()
+            fila3_finanzas_flujo_caja(df_all.copy(), ronda_snapshot, ronda_a_num(ronda_snapshot), get_proyeccion())
         else:
-            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión.')
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver la Comparativa Plan vs. Real.')
 
     with tab_cp:
         # El detalle del sobregiro ya lo levanta el panel de alertas en Resultados: acá va

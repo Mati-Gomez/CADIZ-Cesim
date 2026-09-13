@@ -225,15 +225,178 @@ compiten) — así no se ocupa espacio con un panel vacío.
   depender solo del dividend yield proxy).
 - Utilización de capacidad: bug de mapeo encontrado, corregido y reverificado como se detalla arriba.
 
+## Adenda 12 — Rediseño "Comparativa Plan vs. Real" (panel analítico profundo)
+
+Fecha: 2026-09-13. A pedido del equipo ("la sección de control de gestión quedó muy pobre"), se
+renombra y rediseña el panel de cruce Proyectado/Real en las 4 secciones que lo tienen (Resultados,
+Mercado, Operaciones, Finanzas), y se agregan gráficos nuevos en las vistas principales de Mercado y
+Operaciones. Sigue el mismo principio de la Adenda 11: nunca inventar un dato Plan/Real que el modelo
+o CESIM no publican — si falta, se muestra un `st.info()` explícito, nunca un gap fantasma.
+
+### Renombre
+
+"Control de Gestión" → **"Comparativa Plan vs. Real"** en toda la app: el nombre de la función
+(`panel_control_gestion` → `panel_comparativa_plan_real`), el toggle, las 4 pestañas, los captions y
+el título del panel. Cambio mecánico (verificado con `grep` línea por línea), sin tocar lógica.
+
+### Estructura nueva del panel (Fila 1 / Fila 2 / Fila 3)
+
+- **Fila 1** (sin cambios de fondo): hasta 4 tarjetas por fila con Proyectado/Real/Delta — ya existía.
+- **Fila 2** (nueva): un bullet chart por KPI de Fila 1 que SÍ tiene ambos valores (`estado='ok'`) —
+  barra gruesa apagada (Proyectado) con una barra fina superpuesta en `BRAND_ACCENT` (Real),
+  `barmode='overlay'` (`chart_bullet()`, nuevo helper reutilizable). Los valores no van como texto
+  "outside" de cada barra (dos barras de longitud parecida en la misma fila hacían que sus textos se
+  superpusieran e quedaran ilegibles cuando Plan≈Real) sino como `st.caption()` simple debajo del
+  gráfico. KPIs `tipo='texto'` (ej. Calificación crediticia) se excluyen de esta fila — ya se ven
+  completos en la tarjeta de Fila 1, y una barra de una calificación como "A" no tiene sentido.
+- **Fila 3** (nueva, específica por sección — ver abajo): gráficos de GAP/varianza, uno por sección,
+  llamados desde la pestaña "Comparativa Plan vs. Real" de cada `seccion_*()` (no desde el panel
+  genérico, que no conoce estas métricas de grano fino por mercado/tecnología/área).
+
+### 6 campos nuevos en `CADIZ_Gestion_v2.xlsx!DATA_EXPORT` (status=PLAN, Ronda 2-12)
+
+La Fila 3 de Resultados/Mercado/Operaciones necesita comparar contra un Plan a nivel (mercado,
+tecnología) o (área, tecnología) que el Excel calculaba internamente pero no exportaba. Se agregaron
+6 líneas nuevas a `build_gestion_v2.py` (una por combinación, dentro del loop PLAN existente R2-R12,
+sin tocar ninguna fórmula de negocio):
+
+| Métrica (`metric`) | Grano | Unidad | Fuente en el motor |
+|---|---|---|---|
+| `Precio de venta` | mercado × tecnología | moneda nativa del mercado (USD/RMB/EUR) | D5·MARKETING (decisión CADIZ) |
+| `Cuota de mercado objetivo CADIZ` | mercado × tecnología | ratio (0-1) | D1·DEMANDA (decisión CADIZ) |
+| `Presupuesto de promoción` | mercado × tecnología | USD | D5·MARKETING (decisión CADIZ) |
+| `Ventas efectivas (mercado)` | mercado × tecnología | u. | `_ENGINE_MERCADO` (ya calculado) |
+| `Costo unitario de producción propia` | área × tecnología | USD/u. | `_ENGINE_PRODUCCION` (ya calculado) |
+| `Costo unitario de producción tercerizada` | área × tecnología | USD/u. | `_ENGINE_PRODUCCION` (ya calculado) |
+
+Pipeline ejecutado dos veces (una al agregar las primeras 5 filas, otra al sumar "Cuota de mercado
+objetivo CADIZ" — ver más abajo por qué): `build_gestion_v2.py` → `recalc.py` (una vez) →
+`fix_digit_sheet_quoting()` (una vez) → verificación (0 errores de fórmula, 0 referencias de hoja sin
+comillas). Estado final: 18.912 fórmulas, 0 errores, 128 filas PLAN/SIM CADIZ (R2-R12), 7.230 filas en
+`DATA_EXPORT`.
+
+`gap_analysis._valor_proyeccion()` necesitó un filtro opcional por `spec["tech"]`: sin él, una métrica
+con varias filas por (región, tecnología) bajo el mismo nombre devolvía siempre `.iloc[0]` (la primera
+fila que apareciera) — un error silencioso. Las métricas viejas (`technology="NA"`) no pasan `tech` y
+siguen funcionando igual que antes.
+
+### Funciones nuevas en `gap_analysis.py`
+
+- `precio_volumen_mercado()` + `variacion_precio_volumen_mix()`: Análisis de Desvíos de Ingresos
+  (Precio/Volumen/Mix, fórmulas estándar de Contabilidad Gerencial — Horngren et al.), por mercado,
+  en la moneda nativa (sin inventar un tipo de cambio). La suma de los 3 componentes reconcilia EXACTO
+  con `Ingresos Real − Ingresos Plan` (identidad algebraica, verificada con `reconciliacion_ok`).
+  **Bug encontrado y corregido durante la construcción**: el volumen real de `Detalles de logística →
+  Ventas en {mercado}` viene en signo NEGATIVO (es una salida en un ledger de inventario) — se
+  verificó cruzando contra `Informe de mercado, {mercado} → Ventas, miles unidades` (mismo valor
+  absoluto, signo correcto) y se usa esa segunda fuente en su lugar.
+- `costo_unitario_area()` + `_costo_fabricacion_ponderado()` (esta última en `app.py`): costo unitario
+  de fabricación (propia + contratada) Plan vs. Real, ponderado por producción REAL (mismos pesos en
+  Plan y Real, así el desglose por tecnología reconcilia exacto con la diferencia total — no es una
+  aproximación). **Alcance deliberadamente acotado**: solo fabricación. Transporte/aranceles y
+  promoción se reportan por MERCADO de destino en el RDOS (no por ÁREA de origen), y repartirlos entre
+  áreas de origen requeriría reconstruir la asignación de exportaciones del motor (Sección E) — fuera
+  de este corte. Por eso el desvío de "Unit Economics" en la Comparativa Plan vs. Real de Operaciones
+  NO reconcilia el 100% de la Contribución Marginal unitaria completa, y el caption de esa pestaña lo
+  dice explícitamente.
+- `cuota_mercado_objetivo_vs_real()`: cuota de mercado por tecnología, Objetivo (Plan) vs. Real. **Nota
+  metodológica importante**: el campo que el RDOS publica directo (`Informe de mercado, {mercado} →
+  Seccion='{mercado} cuotas de mercado, %' → Metrica=tecnología`) usa la convención "Ventas del equipo
+  en esa tecnología / Σ Ventas de los 7 equipos EN ESA TECNOLOGÍA" (verificado exacto: Ronda 1
+  Combustión EE.UU. = 667.398 / 4.146,85 = 16,09%). El input Plan "Cuota de mercado objetivo CADIZ"
+  usa otra convención, declarada en el propio comentario del Excel: "% del mercado regional TOTAL (no
+  se multiplica por mix tecnológico)". Compararlas directo mezclaría dos definiciones distintas de
+  "cuota" — por eso el Real se RECONSTRUYE acá con la misma convención que el Objetivo (Ventas reales
+  de CADIZ en esa tecnología / tamaño total del mercado, las 4 tecnologías), en vez de usar el campo
+  publicado directo. Esto motivó agregar la 6ª fila nueva a `DATA_EXPORT` (no estaba en el plan
+  original de 5 campos).
+- `flujo_caja_plan_real_global()`: Composición del Flujo de Caja (CFO/CFI/CFF) Plan vs. Real, a nivel
+  Global. El Plan ya estaba en `DATA_EXPORT` (3 líneas Global: CFO/CFI/CFF). El Real NO existe como
+  una sola línea Global en el RDOS — CESIM lo publica en 3 Estados separados ("Flujo de efectivo de
+  casa matriz" + China + Europa). Se reconstruye sumando los tres (cada valor × 1.000, misma
+  convención "miles USD" → USD que el resto del lado real agregado). Los movimientos INTERCOMPAÑÍA
+  (préstamos internos entre casa matriz y filiales, dividendos que las filiales giran a casa matriz)
+  se CANCELAN naturalmente al sumar — no hace falta identificarlos a mano. **Verificado exacto contra
+  Ronda 1 real**: CFO+CFI+CFF sumados (−5.738.730.257) reconcilia con la suma de "Cambios en efectivo y
+  equivalentes de efectivo" de los 3 Estados (−5.738.730.257, a redondeo de punto flotante); el CFF
+  Global dio exactamente −2.000.000.000 USD, que es el dividendo real pagado a los accionistas
+  EXTERNOS de CADIZ (todo lo intercompañía canceló a 0) — confirma que el método es correcto.
+
+### Los 4 gráficos de Fila 3 (uno por sección)
+
+- **Resultados**: `go.Waterfall` de Ingresos (Proyectados → Desvío por Precio → Desvío por Volumen →
+  Desvío por Mix → Reales), con selector de mercado (moneda nativa).
+- **Mercado**: barras agrupadas de Cuota de mercado Objetivo (Plan) vs. Real por tecnología.
+- **Operaciones**: `go.Waterfall` de GAP en costo unitario de fabricación por tecnología (alcance
+  fabricación-only, ver nota arriba), con selector de área.
+- **Finanzas**: barras agrupadas de Composición del Flujo de Caja (CFO/CFI/CFF) Proyectado vs. Real,
+  Global.
+
+**Guard contra falso desvío cuando no hay Plan cargado** (encontrado probando en Ronda 1, que no
+tiene Plan — el modelo proyecta recién desde Ronda 2): sin este guard, el waterfall tomaba Plan=0
+como línea base y le atribuía el 100% de los Ingresos/Costos Reales a "Desvío por Precio" / al GAP de
+la primera tecnología — un artefacto de la falta de dato, no un desvío real. Se agregó una detección
+explícita (`all(precio_plan is None ...)`) que muestra `st.info()` en su lugar, tanto en Resultados
+como en Operaciones. El gráfico de Mercado (barras agrupadas) y el de Finanzas (también agrupadas) no
+necesitaron este guard porque cada barra es independiente — si falta un lado, simplemente no se
+dibuja esa barra, sin baseline falso que inventar.
+
+### 3 gráficos nuevos en las vistas PRINCIPALES (no en la Comparativa)
+
+- **Mercado → Posicionamiento**: Share of Voice (SOV = Promoción del equipo / Promoción total de la
+  tecnología, los 7 equipos) vs. Share of Market — se usa el mismo campo real por tecnología que
+  documenta la nota metodológica de arriba (grano dentro-de-la-tecnología en ambos lados, para que la
+  comparación sea de manzanas con manzanas), no el "% del mercado total". Dato 100% real — ninguna
+  proyección involucrada.
+- **Operaciones → Capacidad y Costos**: junto al waterfall de Unit Economics ya existente, dos
+  métricas de texto nuevas — Contribución Marginal Unitaria (mismo valor que "= Margen Unitario" del
+  waterfall, re-etiquetado) y Mark-up aplicado (%) = Contribución Marginal Unitaria / Costo unitario
+  total.
+- **Operaciones → Capacidad y Costos**: bullet chart de Punto de Equilibrio — Costos Fijos reales
+  (Depreciación + I+D + Administración, de `Cuenta de resultados, miles USD, Global`, disponibles
+  directo, sin reconstrucción) / Contribución Marginal Unitaria Ponderada real (Margen de contribución
+  total / unidades totales vendidas, sumado en los 3 mercados donde el equipo compite), comparado
+  contra el Volumen Real Vendido. 100% real — no depende de que haya Plan cargado, así que funciona
+  igual en Ronda 1 que en rondas con proyección.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` y `gap_analysis.py` — 0 errores de sintaxis.
+- Streamlit + Playwright en vivo, Ronda 1 (real sin Plan) y Ronda 2 (Plan sin real — estado bypass):
+  las 4 pestañas "Comparativa Plan vs. Real" (Resultados/Mercado/Operaciones/Finanzas) cargan sin
+  errores de consola/JS, con los mensajes `st.info()` correctos donde falta un lado del dato.
+- Los 3 gráficos de la vista principal (SOV vs. SOM, Contribución Marginal + Mark-up, Punto de
+  Equilibrio) probados en vivo con datos reales de Ronda 1 — valores sensatos (ej. CADIZ: SOV 5,4% vs.
+  SOM 16,1% en Combustión/EE.UU. — más eficiencia comercial que el promedio; Volumen de Equilibrio
+  691k u. vs. Volumen Real Vendido 2,1M u.).
+- Bug visual encontrado y corregido en el propio `chart_bullet()`: el texto "outside" de cada barra se
+  clippeaba contra el borde del gráfico (faltaba `cliponaxis=False`) y, cuando Plan≈Real, los dos
+  textos se superponían e quedaban ilegibles — se resolvió moviendo los valores a un `st.caption()`
+  simple debajo del gráfico (ver arriba).
+- **No probado con datos reales combinados Plan+Real** (los 4 waterfalls/barras de Fila 3, con ambos
+  lados presentes a la vez): este entorno de prueba solo tiene RDOS real de Ronda 1 (sin Plan) — el
+  modelo recién proyecta desde Ronda 2, y CESIM todavía no publicó el RDOS real de Ronda 2. La lógica
+  de cómputo (`precio_volumen_mercado`, `variacion_precio_volumen_mix`, `costo_unitario_area`,
+  `cuota_mercado_objetivo_vs_real`) sí se validó numéricamente contra un fixture sintético (Ronda 1
+  real copiada y relabeleada "Ronda 2") en el corte anterior de este mismo trabajo. Verificar
+  visualmente estos 4 gráficos con datos reales en cuanto CESIM publique el RDOS de Ronda 2.
+
 ## Pendiente para el próximo corte
 
 - Ampliar el crosswalk a RRHH si el equipo decide agregarle una pestaña más adelante (por ahora,
-  deliberadamente sin Control de Gestión, a pedido del equipo).
+  deliberadamente sin Comparativa Plan vs. Real, a pedido del equipo).
 - Corregir el bug ya reportado en `cesim_parser.detect_round()`: no reconoce el título "Resultados,
   Ronda inicial 0" (regex busca "Ronda X", no matchea "Ronda inicial 0") — revisar antes de subir
   `RDOS RONDA 0.xls` al repo de la web.
 - Corregir la fórmula de "Cuota de mercado CADIZ (promedio)" en el Excel (divide por 12 casilleros en
-  vez de ponderar por volumen) antes de reincorporarla al Control de Gestión.
+  vez de ponderar por volumen) antes de reincorporarla a la Comparativa Plan vs. Real — DEFERIDO a
+  pedido explícito del equipo ("excel luego lo acomodamos"), no tocado en esta Adenda.
+- Verificar visualmente los 4 gráficos de Fila 3 con datos Plan+Real combinados en cuanto CESIM
+  publique el RDOS real de Ronda 2 (ver nota de verificación arriba).
+- `metric_crosswalk.py` no se modificó en esta Adenda: los 4 gráficos de Fila 3 usan funciones
+  dedicadas en `gap_analysis.py` (grano por mercado/tecnología/área) en vez del patrón simple de
+  crosswalk de un solo KPI — se documentó la decisión acá en vez de forzar el crosswalk a un grano que
+  no le corresponde.
 - Cuando CESIM publique los RDOS reales de Ronda 2: agregar el archivo a `data/raw/practicas/
-  oficial/`, y todos los paneles de Control de Gestión pasan solos de "real pendiente" a mostrar el
-  gap real — no requiere ningún cambio de código.
+  oficial/`, y todos los paneles de Comparativa Plan vs. Real pasan solos de "real pendiente" a
+  mostrar el gap real — no requiere ningún cambio de código.

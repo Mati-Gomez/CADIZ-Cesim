@@ -51,6 +51,14 @@ def _valor_proyeccion(df_proy, ronda_num, spec, team="CADIZ"):
         return None, None
     sub = df_proy[(df_proy["round"] == ronda_num) & (df_proy["team"] == team) &
                   (df_proy["metric"] == spec["metric"]) & (df_proy["region"] == spec["region"])]
+    # spec["tech"] es opcional -- solo lo necesitan las métricas nuevas (Adenda 12) que traen varias
+    # filas por (región, tecnología) con el MISMO nombre de métrica (ej. "Precio de venta" tiene una
+    # fila por cada una de las 4 tecnologías en cada mercado). Sin este filtro, .iloc[0] más abajo
+    # devolvería SIEMPRE la primera fila que aparece en DATA_EXPORT para esa métrica/región -- un
+    # error silencioso. Las métricas viejas (sin desglose por tecnología, technology="NA") no pasan
+    # "tech" y siguen funcionando exactamente igual que antes.
+    if "tech" in spec:
+        sub = sub[sub["technology"] == spec["tech"]]
     if sub.empty:
         return None, None
     row = sub.iloc[0]
@@ -117,6 +125,198 @@ def _valor_real_utilizacion_capacidad(df_real, df_proy, ronda_nombre, ronda_num,
     if not cap_val:
         return None
     return prod_total / cap_val * 100.0
+
+
+TECNOLOGIAS = ["Combustión", "Híbrido", "Eléctrico", "Hidrógeno"]
+MERCADOS = ["EE.UU.", "China", "Europa"]
+AREAS = ["EE.UU.", "China"]
+MONEDA_MERCADO = {"EE.UU.": "USD", "China": "RMB", "Europa": "EUR"}
+
+
+def _valor_real_grano(df_real, ronda_nombre, estado, seccion, metrica, subgrupo=None, empresa="CADIZ"):
+    """Como _valor_real, pero además puede filtrar por 'Subgrupo' -- necesario para los campos reales
+    (Adenda 12) donde Estado+Seccion+Metrica NO alcanza para identificar una sola fila (ej. 'Informe
+    de costos': Seccion='Costo de producción interna por unidad, USD', Metrica=tecnología, y el ÁREA
+    vive en Subgrupo, no en el nombre de la métrica -- a diferencia de 'Ventas en {mercado}', que sí
+    desambigua el mercado en el propio nombre)."""
+    if df_real is None or ronda_nombre is None:
+        return None
+    sub = df_real[(df_real["Ronda"] == ronda_nombre) & (df_real["Empresa"] == empresa) &
+                  (df_real["Estado"] == estado) & (df_real["Seccion"] == seccion) & (df_real["Metrica"] == metrica)]
+    if subgrupo is not None:
+        sub = sub[sub["Subgrupo"] == subgrupo]
+    if sub.empty:
+        return None
+    try:
+        return float(sub.iloc[0]["Valor"])
+    except (TypeError, ValueError):
+        return None
+
+
+def precio_volumen_mercado(df_real, df_proy, ronda_nombre, ronda_num, mercado, team="CADIZ"):
+    """Precio y volumen (Plan y Real) de `team` en un mercado, por tecnología -- insumo del Análisis
+    de Desvíos de Ingresos (Precio/Volumen/Mix, Adenda 12). El precio queda en la moneda NATIVA del
+    mercado (MONEDA_MERCADO) en ambos lados -- ni CESIM ni este cálculo convierten a USD, así que no
+    hace falta asumir un tipo de cambio (dato que además no es públicamente verificable). Devuelve
+    solo las tecnologías con volumen Plan o Real > 0 -- las demás son tecnologías donde `team`
+    directamente no compite en este mercado."""
+    out = {}
+    for tech in TECNOLOGIAS:
+        precio_plan, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Precio de venta", "region": mercado, "tech": tech}, team)
+        vol_plan, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Ventas efectivas (mercado)", "region": mercado, "tech": tech}, team)
+        precio_real = _valor_real_grano(df_real, ronda_nombre, "Precio de venta", mercado, f"{tech}, {MONEDA_MERCADO[mercado]}", empresa=team)
+        # OJO signo: "Detalles de logística" -> "Ventas en {mercado}" viene NEGATIVO en el RDOS (es
+        # una salida en un ledger de inventario: Total disponible − Ventas − Exportado = Inventario
+        # final) -- verificado cruzando contra 'Informe de mercado, {mercado}' -> 'Ventas, miles
+        # unidades' (positivo, mismo valor absoluto: 667,398 en ambos para CADIZ/Combustión/EE.UU.
+        # Ronda 1). Se usa directamente este segundo campo -- ya viene con el signo correcto y es el
+        # mismo que usa el resto de la app (chart Demanda vs. Ventas de la sección Mercado).
+        vol_real = _valor_real_grano(df_real, ronda_nombre, f"Informe de mercado, {mercado}", tech, "Ventas, miles unidades", empresa=team)
+        vol_real = vol_real * 1000.0 if vol_real is not None else None   # "miles unidades" -> absoluto
+        if not (vol_plan or vol_real):
+            continue
+        out[tech] = {"precio_plan": precio_plan, "precio_real": precio_real,
+                     "vol_plan": vol_plan or 0.0, "vol_real": vol_real or 0.0}
+    return out
+
+
+def variacion_precio_volumen_mix(datos):
+    """Análisis de Desvíos clásico de Contabilidad Gerencial (Sales Price / Volume / Mix Variance):
+    descompone la variación de Ingresos (Real vs. Plan) de un conjunto de tecnologías (ya filtrado a
+    UN mercado, en su moneda nativa -- ver precio_volumen_mercado) en 3 componentes. Fórmulas
+    estándar (Horngren et al.), para cada tecnología i:
+        Precio_i  = (P_real_i − P_plan_i) × Q_real_i
+        Volumen_i = (ΣQ_real − ΣQ_plan) × Mix_plan_i × P_plan_i
+        Mix_i     = (Mix_real_i − Mix_plan_i) × ΣQ_real × P_plan_i
+    La suma de los 3 componentes reconcilia EXACTO con Ingresos_Real − Ingresos_Plan (identidad
+    algebraica, no una aproximación) -- se verifica antes de devolver; si no reconcilia (no debería
+    pasar nunca) se marca 'reconciliacion_ok': False en vez de mostrar números que no cierran."""
+    q_plan_tot = sum(d["vol_plan"] for d in datos.values())
+    q_real_tot = sum(d["vol_real"] for d in datos.values())
+    ing_plan = sum((d["precio_plan"] or 0) * d["vol_plan"] for d in datos.values())
+    ing_real = sum((d["precio_real"] or 0) * d["vol_real"] for d in datos.values())
+    var_precio = var_volumen = var_mix = 0.0
+    for d in datos.values():
+        pp, pr = d["precio_plan"] or 0, d["precio_real"] or 0
+        qp, qr = d["vol_plan"], d["vol_real"]
+        mix_plan = (qp / q_plan_tot) if q_plan_tot else 0.0
+        mix_real = (qr / q_real_tot) if q_real_tot else 0.0
+        var_precio += (pr - pp) * qr
+        var_volumen += (q_real_tot - q_plan_tot) * mix_plan * pp
+        var_mix += (mix_real - mix_plan) * q_real_tot * pp
+    reconciliado = ing_plan + var_precio + var_volumen + var_mix
+    return {
+        "ingresos_plan": ing_plan, "ingresos_real": ing_real,
+        "var_precio": var_precio, "var_volumen": var_volumen, "var_mix": var_mix,
+        "reconciliacion_ok": abs(reconciliado - ing_real) < max(1.0, abs(ing_real) * 1e-6),
+    }
+
+
+def costo_unitario_area(df_real, df_proy, ronda_nombre, ronda_num, area, team="CADIZ"):
+    """Costo unitario de producción (propia y tercerizada), Plan vs. Real, por tecnología, en un
+    ÁREA de producción (EE.UU./China) -- insumo del desvío de costos de fabricación en Operaciones
+    (Adenda 12). Mismo grano (área × tecnología) en Plan y Real, en USD/u. absoluto en ambos lados --
+    no hace falta ponderar por mix de origen. OJO alcance: esto es solo el costo de FABRICACIÓN
+    (propia + contratada); transporte/aranceles y promoción se reportan por MERCADO de destino en el
+    RDOS (no por área de origen), y repartirlos entre áreas de origen requeriría reconstruir la
+    asignación de exportaciones del motor (Sección E) -- fuera de este primer corte. Por eso el
+    'desvío de Unit Economics' en la web se limita a fabricación, y se aclara explícitamente que no
+    reconcilia 100% con la Contribución Marginal unitaria completa."""
+    out = {}
+    for tech in TECNOLOGIAS:
+        cu_propia_plan, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Costo unitario de producción propia", "region": area, "tech": tech}, team)
+        cu_terc_plan, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Costo unitario de producción tercerizada", "region": area, "tech": tech}, team)
+        cu_propia_real = _valor_real_grano(df_real, ronda_nombre, "Informe de costos", "Costo de producción interna por unidad, USD", tech, subgrupo=area, empresa=team)
+        cu_terc_real = _valor_real_grano(df_real, ronda_nombre, "Informe de costos", "Costos de fabricación contratada por unidad, USD", tech, subgrupo=area, empresa=team)
+        prod_propia_real = _valor_real_grano(df_real, ronda_nombre, "Detalles de fabricación", "Producción interna, miles unidades", tech, subgrupo=area, empresa=team)
+        prod_terc_real = _valor_real_grano(df_real, ronda_nombre, "Detalles de fabricación", "Producción contratada, miles unidades", tech, subgrupo=area, empresa=team)
+        # Filtra por producción REAL (no por el costo Plan): el motor calcula un costo unitario Plan
+        # con la misma curva de costos para las 4 tecnologías aunque CADIZ no produzca ahí todavía
+        # (el costo "existe" en la fórmula, pero no es una tecnología en la que CADIZ compita) -- si
+        # se filtrara por cu_propia_plan!=0 quedarían Eléctrico/Hidrógeno mostrados por error.
+        if not ((prod_propia_real or 0) or (prod_terc_real or 0)):
+            continue
+        out[tech] = {"cu_propia_plan": cu_propia_plan, "cu_propia_real": cu_propia_real,
+                     "cu_terc_plan": cu_terc_plan, "cu_terc_real": cu_terc_real,
+                     "prod_propia_real": (prod_propia_real or 0) * 1000.0, "prod_terc_real": (prod_terc_real or 0) * 1000.0}
+    return out
+
+
+def cuota_mercado_objetivo_vs_real(df_real, df_proy, ronda_nombre, ronda_num, mercado, team="CADIZ"):
+    """Cuota de mercado por tecnología: Objetivo (Plan, decisión D1·DEMANDA) vs. Real, en la MISMA
+    convención declarada por el propio input del Excel: "% del mercado regional TOTAL (no se
+    multiplica por mix tecnológico)". OJO -- esto es DISTINTO del campo que el RDOS publica directo
+    en 'Informe de mercado, {mercado}' -> Seccion='{mercado} cuotas de mercado, %' -> Metrica=
+    tecnología: se verificó que ESE campo usa otra convención (Ventas del equipo en esa tecnología /
+    Σ Ventas de los 7 equipos EN ESA TECNOLOGÍA -- ej. Ronda 1 Combustión EE.UU.: 667,398/4.146,85 =
+    16,09%, exacto). Compararlo directo contra el Objetivo sería mezclar dos definiciones distintas
+    de "cuota" -- por eso el Real se reconstruye ACÁ con la misma convención que el Objetivo: Ventas
+    reales de `team` en esa tecnología / tamaño total del mercado (Σ Ventas reales, los 7 equipos,
+    las 4 tecnologías)."""
+    sub_ventas = df_real[(df_real["Ronda"] == ronda_nombre) &
+                          (df_real["Estado"] == f"Informe de mercado, {mercado}") &
+                          (df_real["Metrica"] == "Ventas, miles unidades")].copy()
+    if sub_ventas.empty:
+        return {}
+    sub_ventas["Valor"] = pd.to_numeric(sub_ventas["Valor"], errors="coerce")
+    tamano_total = sub_ventas["Valor"].sum()
+    out = {}
+    for tech in TECNOLOGIAS:
+        objetivo, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Cuota de mercado objetivo CADIZ", "region": mercado, "tech": tech}, team)
+        ventas_team = sub_ventas[(sub_ventas["Seccion"] == tech) & (sub_ventas["Empresa"] == team)]["Valor"].sum()
+        real_cuota = (ventas_team / tamano_total) if tamano_total else None
+        if not ((objetivo or 0) or ventas_team):
+            continue
+        out[tech] = {"objetivo": objetivo, "real": real_cuota}
+    return out
+
+
+def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team="CADIZ"):
+    """Composición del Flujo de Caja (CFO/CFI/CFF), Plan vs. Real, a nivel Global -- insumo del
+    gráfico de Composición de Flujo de Caja en la Comparativa Plan vs. Real de Finanzas (Adenda 12).
+
+    Plan: ya está en DATA_EXPORT como 3 líneas Global directas ("Total actividades operativas (CFO)",
+    "...de inversión (CFI)", "...financieras (CFF)"), en USD absoluto (misma convención canónica que
+    el resto del lado PLAN -- Cambio 3, ver Integracion_Excel_Web_Control_Gestion.md) -- no requieren
+    ninguna transformación acá.
+
+    Real: CESIM NO publica un único "Estado de flujo de efectivo, Global" en el RDOS -- lo publica en
+    3 Estados separados: 'Flujo de efectivo de casa matriz, miles USD' (HQ + operación en EE.UU.) +
+    'Estado de flujo de efectivo, miles USD, China' + '...Europa'. Se reconstruye sumando el
+    CFO/CFI/CFF de los tres (cada valor × 1.000, misma convención "miles USD" → USD que usa
+    _to_absoluto() para el resto de los campos reales agregados). Los movimientos INTERCOMPAÑÍA
+    (préstamos internos entre casa matriz y filiales, dividendos que las filiales giran a casa
+    matriz) se CANCELAN naturalmente al sumar los tres lados -- no hace falta identificarlos ni
+    restarlos a mano. Verificado exacto contra Ronda 1 real: CFO+CFI+CFF sumados reconcilia (a
+    redondeo de punto flotante) con la suma de 'Cambios en efectivo y equivalentes de efectivo' de
+    los 3 Estados -- confirma que la reconstrucción es consistente. El CFF Global de Ronda 1 dio
+    exactamente el dividendo real pagado a los accionistas EXTERNOS de CADIZ (todo lo intercompañía
+    se canceló a 0) -- una verificación limpia de que el método es correcto."""
+    plan = {}
+    for clave, metric in [("cfo", "Total actividades operativas (CFO)"),
+                           ("cfi", "Total actividades de inversión (CFI)"),
+                           ("cff", "Total actividades financieras (CFF)")]:
+        val, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": metric, "region": "Global"}, team)
+        plan[clave] = val
+
+    ESTADOS_CF = ["Flujo de efectivo de casa matriz, miles USD",
+                  "Estado de flujo de efectivo, miles USD, China",
+                  "Estado de flujo de efectivo, miles USD, Europa"]
+    real = {"cfo": 0.0, "cfi": 0.0, "cff": 0.0}
+    encontrado = False
+    for estado in ESTADOS_CF:
+        v_cfo = _valor_real_grano(df_real, ronda_nombre, estado, "Efectivo proveniente de actividades operativas", "Total", empresa=team)
+        v_cfi = _valor_real_grano(df_real, ronda_nombre, estado, "Efectivo proveniente de actividades de inversión",
+                                   "Inversiones en fábricas (-) / desinversiones (+)", empresa=team)
+        v_cff = _valor_real_grano(df_real, ronda_nombre, estado, "Efectivo proveniente de actividades financieras", "Total", empresa=team)
+        if v_cfo is not None or v_cfi is not None or v_cff is not None:
+            encontrado = True
+        real["cfo"] += (v_cfo * 1000.0) if v_cfo is not None else 0.0
+        real["cfi"] += (v_cfi * 1000.0) if v_cfi is not None else 0.0
+        real["cff"] += (v_cff * 1000.0) if v_cff is not None else 0.0
+    if not encontrado:
+        real = {"cfo": None, "cfi": None, "cff": None}
+    return {"plan": plan, "real": real}
 
 
 def _to_absoluto(valor, spec_tipo, fuente):
