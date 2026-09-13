@@ -907,13 +907,94 @@ Adenda 16: sólo donde el patrón representa algo real, nunca fabricando una com
 - Capturas de pantalla de Finanzas y Operaciones, en claro y en oscuro nativo de Streamlit:
   banda oscura y barra segmentada legibles y con contraste correcto en ambos modos.
 
+## Adenda 19 — Fix de despliegue, limpieza de alertas, fin de Práctica, contraste del selectbox
+
+Después de entregar la Adenda 18, el equipo reportó que la web desplegada se veía "sin estilo"
+(banda oscura y barra segmentada como texto plano, sidebar claro). Diagnóstico confirmado con el
+propio equipo: el `assets/style.css` desplegado estaba desactualizado respecto del `app.py`
+desplegado (le faltaban los bloques de la Adenda 16 en adelante) — no fue un bug de este repo, fue
+un problema de sincronización en el despliegue. Se aprovechó para blindar el `except
+FileNotFoundError: pass` de la carga de CSS (línea ~932 de `app.py`): ahora si el archivo no
+aparece, muestra un `st.warning` explícito en vez de degradar en silencio a una web sin estilo sin
+ninguna pista de por qué.
+
+Con el estilo ya confirmado andando bien en el despliegue, el equipo pidió tres cambios más:
+
+### 1. Se sacó la alerta "I+D fuera de lo común"
+
+A pedido explícito del equipo ("ensucian mucho y no siento que sirvan"). Era la única alerta de
+Categoría 3 (supuesto propio de CADIZ, documentada como tal desde que se creó) — se removió el
+bloque completo de `evaluar_alertas()`, dejando una nota en el código que explica qué había y por
+qué se sacó. La alerta de "Entrada a tecnología nueva de la competencia" (Categoría 2, un hecho
+confirmado por CESIM, no una estimación) sigue activa sin cambios — es la que de verdad importa.
+
+### 2. Se eliminaron las rondas de Práctica de la navegación
+
+A pedido explícito del equipo ("eliminemos las rondas de prueba también, no suman"): ya arrancó la
+competencia Oficial (Ronda 0 y Ronda 1 jugadas), así que el ensayo previo dejó de aportar. Se sacó
+el radio "Ecosistema" (Práctica/Oficial) del sidebar — `filtro_tipo` queda fijo en `'Oficial'` — y
+`ronda_snapshot` ahora ofrece directamente Ronda 1 a 12. Los 3 archivos de Práctica
+(`data/raw/practicas/*.xls`) NO se borraron del repo, solo dejaron de ser navegables desde la app,
+por si hace falta revisarlos más adelante. Se limpiaron también los 3 condicionales muertos
+`if filtro_tipo == 'Práctica':` que quedaban en las alertas de competencia (ya no podían dispararse).
+
+### 3. Bug de contraste en "Equipo en foco" (sidebar oscuro)
+
+El equipo mandó una captura: el selectbox "Equipo en foco" se veía como una caja blanca casi vacía,
+con "CADIZ" apenas legible. Se verificó en vivo con Playwright (inspección de DOM y
+`getComputedStyle`, no se asumió la causa) — mismo tipo de gotcha que ya había aparecido antes con
+`stMetricLabel` (Adenda 15): la versión de Streamlit del repo ya no arma el selectbox con
+`data-baseweb="select"` como asumía nuestro CSS (Adenda 16) — ahora usa un `react-aria-ComboBox`, y
+la caja con fondo blanco es el DIV HIJO DIRECTO de esa clase. El selector viejo nunca matcheaba: el
+texto salía en el color claro forzado por el `*` del sidebar, pero sobre el fondo blanco nativo sin
+tocar — de ahí lo ilegible. Se agregó el selector `.react-aria-ComboBox > div` (se dejaron los
+selectores viejos por si conviven versiones), verificado con `getComputedStyle` mostrando el fondo
+translúcido correcto después del fix.
+
+### 4. Bug de datos reportado — investigado, NO es un bug
+
+El equipo marcó como posible error que, en Europa, la cuota de mercado Real salga por encima de la
+Objetivo (12.1% vs. 10.0% en Combustión) mientras el gráfico de "Demanda estimada — Europa" muestra
+que la demanda Real vino MÁS CHICA que la proyectada (74.7% del plan). Se auditó el código
+(`gap_analysis.cuota_mercado_objetivo_vs_real`, ya documentado y verificado en adendas anteriores):
+la Cuota Real divide por el tamaño de mercado REAL (Σ ventas reales, 7 equipos, 4 tecnologías); la
+Cuota Objetivo viene de la celda del Excel de CADIZ, calculada contra el tamaño de mercado que el
+modelo había ASUMIDO al planificar. Son dos denominadores distintos por diseño (cada cuota se
+calcula contra el total de SU propio escenario, que es la forma correcta de medir participación de
+mercado). Consecuencia matemática, no contradicción: si la demanda real vino más chica que la
+proyectada, CADIZ puede terminar con una cuota más alta que el objetivo aunque haya vendido MENOS
+unidades en términos absolutos de lo que había planeado — está repartiéndose una torta más chica.
+Con los propios números que mandó el equipo, la cuenta cierra (aprox.): Objetivo ≈ 10,0% × 1,0M u.
+≈ 100k u. planeadas; Real ≈ 12,1% × 751,4k u. ≈ 90,9k u. reales — CADIZ vendió menos de lo
+planeado en unidades, pero el mercado entero se achicó todavía más. Se agregó una aclaración en el
+`st.caption()` del propio gráfico de Cuota para que esta lectura no se preste a confusión de nuevo.
+**Clasificación**: mecanismo verificado contra el código y consistente con los números que mostró
+el equipo — no se pudo reconciliar al centavo por no tener acceso a los archivos de Ronda 2 en este
+entorno de verificación, así que se presenta como razonamiento verificado, no como cifra exacta
+recalculada desde cero.
+
+### Pendiente de esta Adenda — pedido abierto, no resuelto todavía
+
+El equipo preguntó si convendría otra forma de navegar entre Ronda y Equipo en el sidebar, ahora que
+quedó más simple (sin el toggle de Ecosistema). Se le devolvieron opciones concretas para elegir en
+vez de decidir unilateralmente — ver la respuesta en el chat. Ronda 2 en adelante.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores.
+- Smoke test con Playwright sobre las 5 secciones — sin traceback ni error de Streamlit.
+- Captura del sidebar completo confirmando: sin toggle de Ecosistema, selector de Ronda 1-12,
+  "Equipo en foco" con contraste correcto (fondo translúcido oscuro, texto legible).
+
 ## Pendiente para el próximo corte (actualizado)
 
+- Definir con el equipo la forma de navegación Ronda/Equipo en el sidebar (pregunta abierta de esta
+  Adenda).
 - Corregir la fórmula de "Cuota de mercado CADIZ (promedio)" en el Excel (divide por 12 casilleros
   en vez de ponderar por volumen) — sigue siendo el próximo paso de fondo, pospuesto varias veces
   por la iteración de estilo.
 - Ítems estéticos 5 y 6 de la Adenda 15 (etiquetas superpuestas en "Precio Promedio vs Volumen" y
   "Matriz Riesgo/Retorno", "Mix tecnológico" redundante) — pendientes de aprobación del equipo.
-- Nuevo hallazgo de esta Adenda: revisar el gráfico de doble eje "Trayectoria de precio y
-  características" en Mercado → Evolución (no estaba en el relevamiento original de la Adenda 15).
+- Revisar el gráfico de doble eje "Trayectoria de precio y características" en Mercado → Evolución
+  (hallazgo de la Adenda 18, no estaba en el relevamiento original de la Adenda 15).
 - Resto de los pendientes de Adendas 12 y 13 sin cambios (ver arriba).

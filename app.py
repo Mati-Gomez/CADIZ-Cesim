@@ -474,7 +474,13 @@ def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
     mostrar(fig)
     st.caption('Cuota = ventas de CADIZ en esa tecnología / tamaño TOTAL del mercado (las 4 tecnologías) — '
                'misma convención en Plan y Real (distinta de la que el RDOS publica directo por tecnología, '
-               'ver nota metodológica en gap_analysis.cuota_mercado_objetivo_vs_real).')
+               'ver nota metodológica en gap_analysis.cuota_mercado_objetivo_vs_real). '
+               'Ojo con leerla junto al gráfico de "Demanda estimada" de más arriba: el Proyectado de ESTA '
+               'cuota se calculó contra el tamaño de mercado que el modelo había asumido al planificar; el '
+               'Real se calcula contra el tamaño que terminó publicando CESIM. Si la demanda real vino más '
+               'chica que la proyectada, la cuota puede salir MÁS ALTA que el objetivo aunque el volumen '
+               'propio en unidades haya sido menor al planeado — no es una contradicción entre los dos '
+               'gráficos, es la misma torta más chica repartida distinto.')
 
 def _costo_fabricacion_ponderado(datos_area):
     """A partir de costo_unitario_area(): costo unitario de fabricación PONDERADO por producción REAL
@@ -634,65 +640,11 @@ def evaluar_alertas():
 
     orden_hoy = df[df['Ronda'] == ronda_snapshot]['Ronda_Orden'].iloc[0] if not df[df['Ronda'] == ronda_snapshot].empty else None
 
-    # --- I+D fuera de lo común (LA COMPETENCIA): alerta TEMPRANA de que un rival puede estar
-    #     preparando una tecnología nueva. El manual (cap. 7, "Investigación y desarrollo") dice que
-    #     el I+D propio tarda UNA ronda en estar disponible para producción -- por eso un salto de
-    #     gasto acá puede ser la primera señal, antes de que se vea reflejado en ventas reales (ver
-    #     la alerta de "Entrada confirmada a tecnología nueva" más abajo, que sí llega a decir en qué
-    #     tecnología). Igual que "Movimientos de capacidad de la competencia": vigila a todos los
-    #     rivales siempre, sin depender de a quién tengamos seleccionado en "Equipo en foco".
-    #
-    #     CESIM publica el I+D de cada equipo como un ÚNICO número GLOBAL en la Cuenta de Resultados
-    #     (dato real, Categoría 2) -- no desglosado por tecnología, así que esta alerta solo puede
-    #     decir "ojo, este rival está gastando raro", nunca en qué tecnología.
-    #
-    #     IMPORTANTE -- por qué esto es un INDICIO y no una cuenta regresiva: el manual (cap. 7)
-    #     aclara que "la cantidad requerida de jornadas de trabajo por persona para el desarrollo
-    #     interno varía según el nivel de eficiencia de sus empleados" -- es decir, cuántas jornadas
-    #     (y por lo tanto cuánto I+D) necesita CADA equipo para sacar una tecnología nueva NO es un
-    #     número fijo ni conocido por CADIZ: depende de la dotación/eficiencia de RRHH de ese rival,
-    #     que no es pública. Por eso esta alerta nunca debe leerse como "van a lanzar algo en N
-    #     rondas", solo como "está gastando de forma inusual, prestale atención" -- es estimativo por
-    #     diseño, no una certeza.
-    #
-    #     Además, esto NO cubre la otra vía del manual para sumar tecnología: comprar una LICENCIA
-    #     (disponible de inmediato, sin pasar por I+D interno) -- un rival puede aparecer con una
-    #     tecnología nueva sin ningún salto de I+D previo. Para esos casos (y para confirmar de una
-    #     vez con certeza, sea cual sea la vía) está la alerta de "Entrada confirmada a tecnología
-    #     nueva" más abajo, que es un HECHO (Categoría 2, no una estimación).
-    #
-    #     Criterio de disparo (Categoría 3 -- SUPUESTO PROPIO de CADIZ, no una regla de CESIM: el
-    #     manual dice explícitamente que "es difícil aplicar algún método para el cálculo exacto de
-    #     la inversión" y no da ningún umbral). Se probó primero un % de suba fijo ronda a ronda, pero
-    #     el I+D salta muchísimo incluso sin nada raro pasando (verificado con los 3 datos de
-    #     Práctica disponibles: TOKIO pasó de +432,7% a −77,6% en rondas consecutivas) -- un umbral
-    #     porcentual fijo daría falsos positivos todo el tiempo. En cambio, se exige que se cumplan
-    #     LAS DOS condiciones a la vez (sin ningún número mágico inventado): (a) el gasto de esta
-    #     ronda es el máximo histórico propio del equipo hasta ahora, Y (b) está por encima del
-    #     promedio de I+D de sus 6 rivales en la MISMA ronda. Filtra el ruido de rondas altas o bajas
-    #     "porque sí" sin necesitar un porcentaje arbitrario de corte.
-    id_hist = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Metrica'] == 'I+D')].copy()
-    id_hist['Valor'] = num(id_hist['Valor'])
-    if orden_hoy is not None:
-        id_ronda = id_hist[id_hist['Ronda_Orden'] == orden_hoy].dropna(subset=['Valor']).set_index('Empresa')['Valor']
-        for rival in [e for e in COMPANIES if e != MY_COMPANY]:
-            actual = id_ronda.get(rival)
-            if actual is None: continue
-            historia = id_hist[(id_hist['Empresa'] == rival) & (id_hist['Ronda_Orden'] <= orden_hoy)]['Valor'].dropna()
-            if len(historia) < 2: continue  # sin al menos una ronda previa no hay "récord" que declarar
-            otros = id_ronda.drop(index=rival, errors='ignore')
-            if otros.empty: continue
-            prom_otros = otros.mean()
-            if actual >= historia.max() and actual > prom_otros:
-                detalle = (f'Invirtió {format_num(actual)} USD en I+D esta ronda — su máximo histórico hasta '
-                           f'ahora, y por encima del promedio de sus rivales ({format_num(prom_otros)} USD). '
-                           'Indicio (estimativo, no una cuenta regresiva) de que puede estar preparando una '
-                           'tecnología nueva — todavía no se sabe en cuál, y las jornadas que necesita cada '
-                           'equipo dependen de su propia eficiencia de RRHH, no son iguales para todos. '
-                           'Tampoco cubre si la consigue por licencia en vez de I+D propio.')
-                if filtro_tipo == 'Práctica':
-                    detalle += ' Ronda de práctica: el I+D suele saltar mucho ahí sin que sea una señal real.'
-                alertas.append(('aviso', f'{rival}: I+D fuera de lo común', detalle))
+    # NOTA: hubo acá una alerta "I+D fuera de lo común" (Categoría 3, supuesto propio de CADIZ) que
+    # vigilaba gasto de I+D récord + por encima del promedio de rivales, como indicio temprano de
+    # tecnología nueva en camino. Se sacó a pedido del equipo (ensuciaba el panel y no aportaba
+    # suficiente valor accionable) -- la detección CONFIRMADA de tecnología nueva (Categoría 2, un
+    # hecho, no una estimación) sigue más abajo en "Entrada a tecnología nueva de la competencia".
 
     # --- Tendencias: dos rondas seguidas en la misma dirección. No hay número inventado acá,
     #     es la propia serie del reporte la que define si viene cayendo o subiendo.
@@ -786,8 +738,6 @@ def evaluar_alertas():
             detalle = (' · '.join(entradas_tech) + '. Antes no vendían nada ahí en esa tecnología — '
                        'confirmado con dato real, sin importar si la consiguieron con I+D propio o '
                        'comprando una licencia.')
-            if filtro_tipo == 'Práctica':
-                detalle += ' Ronda de práctica: puede ser un ensayo, no un compromiso real.'
             alertas.append(('aviso', 'Entrada a tecnología nueva de la competencia', detalle))
 
     # --- Movimientos de capacidad de LA COMPETENCIA: Cesim publica las fábricas que va a haber
@@ -848,8 +798,6 @@ def evaluar_alertas():
             movimientos.append(f'{empresa} {verbo} {area} ({a:.0f} → {destino:.0f}, {horizonte})')
         if movimientos:
             detalle = ' · '.join(movimientos)
-            if filtro_tipo == 'Práctica':
-                detalle += ' — decisión cargada en una Ronda de práctica: puede ser un ensayo, no necesariamente un compromiso real para la competencia oficial.'
             alertas.append(('aviso', 'Movimientos de capacidad de la competencia', detalle))
     return alertas
 
@@ -892,14 +840,16 @@ def panel_alertas():
 
 # ---------------- Sidebar ----------------
 st.sidebar.markdown('### CÁDIZ AUTOMOTIVE')
-filtro_tipo = st.sidebar.radio('Ecosistema', ['Práctica', 'Oficial'], horizontal=True, key='filtro_ecosistema')
-rondas_timeline = ['Práctica 1', 'Práctica 2', 'Práctica 3'] if filtro_tipo == 'Práctica' else [f'Ronda {i}' for i in range(1, 13)]
+# Las rondas de Práctica (el ensayo previo al arranque de la competencia oficial) se sacaron de la
+# navegación a pedido del equipo -- ya arrancó la competencia Oficial (Ronda 0 y Ronda 1 jugadas) y
+# esos ensayos "no suman" al análisis de gestión. Quedan como dato histórico en el repo
+# (data/raw/practicas/*.xls) por si hace falta revisarlos, pero la app ya no los ofrece para elegir.
+filtro_tipo = 'Oficial'
+rondas_timeline = [f'Ronda {i}' for i in range(1, 13)]
 ronda_snapshot = st.sidebar.select_slider('Ronda de análisis', options=rondas_timeline, value=rondas_timeline[0], key='slider_rondas')
-# Indicador de estado (estilo "● Conectado" de la referencia) -- acá confirma de un vistazo
-# qué ronda/ecosistema está en foco, en vez de ser puramente decorativo. En "Práctica" el
-# nombre de la ronda ya incluye la palabra ("Práctica 1") -- no repetirla dos veces.
-etiqueta_estado = ronda_snapshot if filtro_tipo in ronda_snapshot else f'{ronda_snapshot} · {filtro_tipo}'
-st.sidebar.markdown(f'<div class="sidebar-status"><span class="dot"></span>{etiqueta_estado}</div>',
+# Indicador de estado (estilo "● Conectado" de la referencia) -- acá confirma de un vistazo qué
+# ronda está en foco, en vez de ser puramente decorativo.
+st.sidebar.markdown(f'<div class="sidebar-status"><span class="dot"></span>{ronda_snapshot}</div>',
                      unsafe_allow_html=True)
 empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0, key='select_equipo')
 st.sidebar.divider()
@@ -932,7 +882,12 @@ ronda_ultima = ronda_snapshot
 try:
     st.markdown(f'<style>{open(os.path.join(BASE_DIR, "assets", "style.css"), encoding="utf-8").read()}</style>', unsafe_allow_html=True)
 except FileNotFoundError:
-    pass
+    # Antes fallaba en silencio (pass): si el archivo no está en el despliegue, la app se veía
+    # sin ningún estilo custom (sidebar claro, sin banda oscura, sin barra segmentada) y no había
+    # ninguna pista de por qué. Ahora al menos avisa.
+    st.warning('No se encontró assets/style.css — el estilo visual (sidebar oscuro, banda de KPIs, '
+               'barras segmentadas) no se aplicó en este despliegue. Verificá que la carpeta '
+               '"assets" se haya subido junto con app.py.')
 # =================================================================
 # SECCIÓN 1 — RESULTADOS
 # =================================================================
