@@ -552,3 +552,368 @@ confusión era otra cosa, hay que revisar de nuevo con ese detalle puntual.
   Real) con el desglose por tecnología movido a una tabla secundaria.
 - Verificar visualmente los gráficos de Fila 3 (nombres/colores de esta Adenda) con datos Plan+Real
   reales combinados en cuanto CESIM publique el RDOS de Ronda 2 (mismo pendiente que la Adenda 12).
+
+## Adenda 14 — Dos alertas nuevas: I+D fuera de lo común y Entrada a tecnología nueva de la competencia
+
+Fecha: 2026-09-13. A pedido del equipo ("estaría bueno saber si un equipo metió muchas jornadas de
+I+D para meter una tecnología nueva"), se agregan 2 alertas nuevas a `evaluar_alertas()` — ambas
+vigilan a LOS RIVALES siempre (igual que "Movimientos de capacidad de la competencia", ya existente),
+sin depender de a quién tengamos seleccionado en "Equipo en foco".
+
+### 1. "{rival}: I+D fuera de lo común" (aviso, TEMPRANO, Categoría 3 — supuesto propio)
+
+CESIM publica el I+D de cada equipo como un ÚNICO número GLOBAL en la Cuenta de Resultados (dato real
+para los 7 equipos) — no desglosado por tecnología. Se dispara cuando el I+D de esta ronda de un rival
+es (a) su propio máximo histórico Y (b) está por encima del promedio de I+D de sus 6 rivales en la
+misma ronda.
+
+**Por qué esas dos condiciones y no un % fijo de suba**: se probó primero un umbral de suba ronda a
+ronda, pero el I+D salta muchísimo incluso sin nada raro pasando — verificado con los 3 datos de
+Práctica disponibles (TOKIO pasó de +432,7% a −77,6% en rondas consecutivas). Un % fijo hubiera dado
+falsos positivos todo el tiempo. "Récord propio + por encima de sus rivales" filtra ese ruido sin
+inventar un número mágico de corte — el manual (cap. 7) dice explícitamente que "es difícil aplicar
+algún método para el cálculo exacto de la inversión" y no da ningún umbral, así que cualquier número
+fijo hubiera sido un invento sin respaldo.
+
+**Por qué es estimativo, no una cuenta regresiva** (aclaración pedida explícitamente por el equipo
+al revisar el diseño): el manual (cap. 7) dice que "la cantidad requerida de jornadas de trabajo por
+persona para el desarrollo interno varía según el nivel de eficiencia de sus empleados" — cuántas
+jornadas (y cuánto I+D) necesita CADA equipo para sacar una tecnología nueva depende de su propia
+dotación/eficiencia de RRHH, que no es pública. El texto de la alerta lo dice explícitamente: es un
+indicio de que "puede estar preparando algo", nunca una certeza ni un plazo.
+
+**Qué NO cubre**: el manual describe DOS caminos para sumar tecnología — I+D propio (con una ronda de
+retraso) o comprar una licencia (disponible de inmediato). Un rival puede entrar a una tecnología
+nueva vía licencia sin ningún salto de I+D previo, y esta alerta no lo vería venir. Para eso está la
+alerta #2, que confirma la entrada sin importar por qué vía la consiguió.
+
+### 2. "Entrada a tecnología nueva de la competencia" (aviso, CONFIRMADO, Categoría 2 — dato real)
+
+A diferencia de la alerta de I+D, esto es un HECHO, no una estimación: usa la cuota de mercado real
+que CESIM publica por (país, tecnología) para los 7 equipos (`Informe de mercado, {país} →
+Seccion='{país} cuotas de mercado, %' → Metrica=tecnología` — el mismo campo que ya usa
+`cuota_mercado_objetivo_vs_real()` en `gap_analysis.py`). Se dispara cuando un rival pasa de 0% en la
+ronda anterior a >0% en esta, en una combinación (tecnología, país) donde antes no vendía nada — no le
+importa si la consiguió con I+D propio o comprando una licencia, cubre las dos vías del manual por
+igual.
+
+**Consolidación en un solo aviso**: cuando una tecnología se habilita para toda la industria a la vez
+(verificado con datos reales: en Práctica 2, seis de los siete equipos entraron a Híbrido en los 3
+países en la misma ronda), disparar una tarjeta por cada combinación saturaba el panel sin agregar
+información nueva en cada una — se consolidó en un solo aviso con todas las entradas de la ronda
+separadas por "·", mismo patrón que ya usaba "Movimientos de capacidad de la competencia".
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores de sintaxis.
+- Probado en vivo (Streamlit + Playwright) recorriendo Práctica 1 → 2 → 3 con datos reales:
+  - Práctica 1 (primera ronda, sin historia previa): ninguna de las dos alertas nuevas dispara —
+    correcto, no hay "récord histórico" ni "ronda anterior" con la cual comparar todavía.
+  - Práctica 2: dispara "CHIEF: I+D fuera de lo común" (5,5M USD, máximo propio y por encima del
+    promedio de sus rivales de 1,3M) y "FOCUS: I+D fuera de lo común" (2,5M vs. promedio 1,8M), más
+    un aviso consolidado de "Entrada a tecnología nueva" con 12 combinaciones (Híbrido, los 3 países,
+    6 equipos).
+  - Práctica 3: TOKIO dispara AMBAS alertas en la misma ronda — "I+D fuera de lo común" (7,5M USD,
+    muy por encima del promedio de 1,8M) y aparece en el aviso consolidado de entrada con TRES
+    combinaciones nuevas (Hidrógeno EE.UU. 0%→100%, Eléctrico China 0%→30,5%, Eléctrico Europa
+    0%→100%) — exactamente el patrón que el equipo pidió poder ver ("un equipo metió muchas jornadas
+    de I+D para meter una tecnología nueva").
+  - Ronda 1 Oficial (primera ronda de ese ecosistema): tampoco dispara ninguna de las dos — correcto,
+    mismo motivo que Práctica 1.
+- **Nota de alcance**: todo lo probado en este entorno son rondas de Práctica (mucho más volátiles
+  que una competencia oficial real, según el propio caption que agregan las alertas) más una única
+  Ronda Oficial sin ronda previa — no se pudo probar el comportamiento en una secuencia de Rondas
+  Oficiales reales (2, 3, ...) porque CESIM todavía no las publicó. La lógica no depende de si es
+  Práctica u Oficial (mismos campos, mismas reglas), así que no se espera que cambie, pero queda
+  pendiente confirmarlo visualmente en cuanto haya más de una Ronda Oficial jugada.
+
+## Adenda 15 — Revisión estética integral y corrección de bugs de UI
+
+Después de cerrar las alertas (Adenda 14), el equipo pidió una opinión honesta sobre el estado
+estético del tablero completo ("¿te parece hacer algún cambio estético o lo ves bien así?"). Se
+recorrieron sistemáticamente las 9 secciones/sub-tabs de la app con Streamlit + Playwright (3
+capturas por vista, con scroll) y se armó una lista de hallazgos, ordenados por impacto. El equipo
+aprobó avanzar primero con los ítems 1 a 4 (bugs concretos y de bajo riesgo); los ítems 5 y 6
+(etiquetas superpuestas en 2 gráficos, redundancia de gráficos de tecnología cuando solo hay una
+tecnología activa) quedan pendientes para una próxima iteración.
+
+### 1. Truncamiento de títulos en las tarjetas KPI de Resultados/Resumen
+
+**Causa raíz encontrada, no solo el síntoma**: `assets/style.css` ya tenía una regla pensada
+específicamente para evitar este truncamiento (`div[data-testid="stMetricLabel"] { white-space:
+normal !important; ... }`), agregada en un corte anterior — pero el selector apuntaba a un
+`<div>`, y Streamlit 1.63 renderiza ese elemento como `<label data-testid="stMetricLabel">`. El
+selector nunca matcheaba nada, por eso el truncamiento seguía pasando pese a que "ya estaba
+arreglado" en apariencia. Se confirmó inspeccionando el DOM real servido (no adivinando por CSS).
+Corregido a `[data-testid="stMetricLabel"]` (sin tag fijo), que matchea el elemento real.
+
+Aparte, el valor (no el label) de la tarjeta "Retorno de la acción" mostraba el texto largo "Sin
+ronda previa" cuando no hay ronda anterior con la cual comparar (primera ronda del ecosistema) — el
+valor de `st.metric` no wrappea como el label, así que ese texto también se cortaba. Se reemplazó
+por "—", consistente con cómo se muestra la ausencia de dato en el resto del tablero; el caption
+debajo de las tarjetas ya explica por qué no hay dato en la primera ronda.
+
+### 2. Título duplicado en el gráfico de Capitalización de Mercado
+
+`chart_evolucion()` antepone "Evolución — " al título que recibe; se la estaba llamando con
+"Evolución de la Capitalización de Mercado (USD)", resultando en "Evolución — Evolución de...".
+Se revisaron los otros 4 usos de `chart_evolucion()` en el archivo — ninguno tenía el mismo problema.
+
+### 3. Números sin redondear en el Funnel de "Estructura Macro de Costos"
+
+El funnel (Operaciones → Capacidad y Costos) usaba `textinfo='value+percent initial'`, que aplica el
+formateo automático de Plotly (sufijo M/k pero SIN redondear decimales: "45.91583M"), inconsistente
+con `format_num()` (1 decimal) usado en el resto del tablero — incluida la waterfall de "Puente de
+Beneficio Neto" unas filas más abajo, con los mismos datos. Se armó el texto a mano con
+`format_num()` vía `text=[...] , textinfo='text+percent initial'`.
+
+### 4. Gráficos de doble eje Y (violan la regla de "un solo eje" de buenas prácticas de dataviz)
+
+Se encontraron 5 gráficos con dos escalas Y superpuestas en el mismo plano — un anti-patrón que
+puede sugerir correlaciones que no están probadas y dificulta leer cada serie por separado:
+
+- RRHH y Sostenibilidad → Personal y Talento: los 4 gráficos de esa pestaña (Evolución: Salario vs
+  Rotación; Rotación vs. Contrataciones netas; Inversión en I+D: costo vs. dotación; Capacitación
+  vs. eficiencia de RRHH). Esta pestaña nunca había sido tocada en los rediseños anteriores.
+- Finanzas → Largo Plazo: "Beneficio Neto vs. Nivel de Deuda" (Beneficio en USD contra Apalancamiento
+  en un eje secundario que llegaba a valores negativos).
+
+**Solución**: se creó `chart_dos_metricas_apiladas()` (helper nuevo, cerca de `chart_evolucion`), que
+arma dos paneles apilados con `plotly.subplots.make_subplots(rows=2, cols=1, shared_xaxes=True)` —
+comparten el eje X (misma Ronda, para poder seguir la evolución de ambas a la vez) pero cada métrica
+tiene su propio eje Y, con el nombre de la métrica como título de su panel (sin `subplot_titles`,
+que hubiera consumido alto extra en una tarjeta de 370px). Se reemplazaron los 5 gráficos por
+llamadas a este helper, conservando los mismos colores y tipos de traza (barra o línea) que tenían
+antes.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py`, `metric_crosswalk.py`, `gap_analysis.py`, `cesim_parser.py` — 0
+  errores.
+- Se inspeccionó el DOM real vía Playwright para confirmar la causa exacta del bug de truncamiento
+  (no se asumió qué elemento HTML generaba el problema).
+- Se volvió a correr el recorrido completo de capturas después de cada fix y se confirmó
+  visualmente: los 5 títulos de las tarjetas KPI se ven completos y sin "…"; el título de
+  Capitalización de Mercado ya no repite "Evolución"; el funnel muestra "45.9M / 31.0M / 25.6M /
+  17.1M / 14.9M / 11.8M" (antes "45.91583M..."); los 5 gráficos de doble eje pasaron a dos paneles
+  apilados de un solo eje cada uno, verificado en las 4 vistas de RRHH y en Finanzas/Largo Plazo.
+- **No incluido en este corte** (quedó fuera del alcance que aprobó el equipo, documentado para más
+  adelante): etiquetas de equipos superpuestas e ilegibles en "Precio Promedio vs Volumen"
+  (Mercado/Posicionamiento) y en "Matriz Riesgo/Retorno" (Finanzas/Largo Plazo); labels apretados e
+  ilegibles en segmentos chicos del stacked bar de "Estructura del Balance"; redundancia entre el
+  donut y la barra de "Mix tecnológico" (Mercado/Panorama Competitivo) mientras solo hay una
+  tecnología activa en el mercado.
+
+## Adenda 16 — Piloto de identidad visual (Resultados/Resumen + sidebar global)
+
+El equipo pidió explícitamente una opinión sobre si valía la pena un cambio estético más de fondo
+("¿te parece hacer algún cambio estético o lo ves bien así?"), y compartió como referencia un
+dashboard propio hecho en React (Grupo Randazzo / Geodefender — sistema de infracciones) con un
+look más "producto" (sidebar oscuro, tarjetas con barra de composición, banda oscura para las
+métricas más importantes). Antes de tocar nada se preguntó explícitamente por escrito si migrar
+CADIZ de Streamlit/Python a React (con deploy en Vercel) era conveniente — la respuesta, alineada
+con la prioridad que fijó el equipo ("si perdemos capacidad de analizar datos no, prima eso por
+sobre la estética"), fue que NO: toda la lógica de análisis (`cesim_parser.py`, `gap_analysis.py`,
+el crosswalk, las 8 reglas de `evaluar_alertas()`, las waterfalls financieras) está en pandas y ya
+fue auditada contra el manual y R0/R1 — reescribirla en JavaScript para una app React sería el
+escenario con más riesgo de introducir un error silencioso justo antes de la Ronda 2, y Vercel de
+por sí no está pensado para correr ese tipo de backend con estado (terminaría siendo dos proyectos
+en vez de uno). Se decidió seguir en Streamlit y usar el margen real que da el CSS, que resultó ser
+más amplio de lo que parecía.
+
+Con el equipo se acordó (1) qué patrones visuales de la referencia adoptar — sidebar oscuro con
+indicador de estado, tarjetas con barra de composición, banda oscura para los KPIs más críticos — y
+(2) probarlo primero en una sola sección (Resultados/Resumen) antes de extenderlo a toda la app.
+El equipo también autorizó cambiar la tipografía por una más parecida a la de la referencia.
+
+### Cambios de este corte
+
+- **Tipografía**: Inter → **Plus Jakarta Sans** en toda la app (`assets/style.css` y los gráficos de
+  Plotly en `mostrar()`, para que los títulos de gráfico usen la misma fuente que el resto de la
+  página).
+- **Sidebar oscuro** (afecta a las 5 secciones, porque el sidebar es chrome compartido, no algo que
+  se pueda "pilotear" por sección): fondo grafito (`--brand-dark`, la misma variable de marca que ya
+  existía, no un color nuevo), texto claro, cajas de selectbox/slider con su propio fondo traslúcido
+  para no perder contraste. **Decisión de diseño explícita**: NO se intentó oscurecer el menú
+  desplegable (popover) de los selects del sidebar, porque ese popover se porta fuera del `<section>`
+  del sidebar (a nivel `<body>`) y un selector que lo alcance oscurecería TODOS los selects de la
+  app, incluidos los de las secciones con fondo claro — quedaría peor que dejarlo como está.
+- **Indicador de estado** bajo el logo ("● Práctica 1"), estilo el "● Conectado" de la referencia,
+  pero mostrando algo real (ronda + ecosistema en foco) en vez de ser puramente decorativo.
+- **Barra segmentada de "Estado de Alertas"** arriba del listado de alertas: composición por
+  severidad (crítica / aviso / mejora) de las alertas ACTIVAS ahora mismo. Nota de rigor: a
+  diferencia de las tarjetas "Estado de Asignación" de la referencia (que son un % sobre un universo
+  FIJO, ej. actas totales), acá no hay un universo fijo de "reglas evaluadas" — una sola regla (ej.
+  "I+D fuera de lo común") puede dispararse entre 0 y 6 veces según cuántos rivales califiquen. Por
+  eso el rótulo dice explícitamente "N activas en {ronda}", nunca un porcentaje de un total que no
+  existe como tal — se adoptó el patrón visual, no una proporción inventada.
+- **Banda oscura de KPIs críticos**: los 3 números que más le importan a un accionista (Retorno
+  acum. del accionista, Beneficio del accionista, Capitalización de mercado) se separaron en un
+  bloque oscuro destacado, estilo "Monto Pendiente / A vencer / Ya pagado" de la referencia.
+  "Posición en el ranking" y "Retorno de la acción" (más de contexto que de creación de valor)
+  quedaron como tarjetas claras con sparkline, como antes.
+
+### Bug encontrado y corregido durante la verificación
+
+El color del delta en la banda oscura (verde si favorable, salmón si no) no se aplicaba en los
+casos negativos — quedaba en el gris por defecto. Causa: `favorable` se arma comparando floats de
+pandas/numpy (`delta > 0`), lo que da `numpy.bool_`, no un `bool` de Python -- el código usaba `is
+False` para diferenciar "desfavorable" de "sin dato", y `numpy.bool_(False) is False` da `False` en
+Python (fallo de identidad, no de valor). Se encontró inspeccionando el color computado real vía
+Playwright (`getComputedStyle`), no asumiendo por qué se veía mal. Corregido reescribiendo la
+condición sin comparar identidad (`if fav is None / elif fav / else`).
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores.
+- Se verificó visualmente el sidebar oscuro en las 5 secciones (no solo en el piloto), confirmando
+  que radios, slider, selectbox y sus estados hover se ven legibles con el nuevo fondo.
+- Se verificó con `getComputedStyle` vía Playwright que los 3 deltas de la banda oscura renderizan
+  el color correcto (`rgb(230,138,114)` salmón para desfavorable, `rgb(134,217,146)` verde para
+  favorable) después del fix.
+- **Alcance**: por acuerdo explícito con el equipo, este corte es un PILOTO en Resultados/Resumen
+  (más el sidebar, que es global por naturaleza). El resto de las secciones sigue con el estilo de
+  tarjetas claras anterior hasta que el equipo confirme si quiere extender el patrón.
+
+## Pendiente para el próximo corte (actualizado)
+
+- Todo lo pendiente de las Adendas 12 y 13 sigue pendiente (ver arriba).
+- Corregir la fórmula de "Cuota de mercado CADIZ (promedio)" en el Excel (divide por 12 casilleros en
+  vez de ponderar por volumen) — próximo en la cola de trabajo, a pedido explícito del equipo.
+- Si en una Ronda Oficial real la alerta de "I+D fuera de lo común" resulta demasiado sensible o
+  demasiado laxa (mucho más estable que Práctica, al no ser rondas de ensayo), reconsiderar el
+  criterio de disparo — quedó documentado como Categoría 3 (supuesto propio) explícitamente para que
+  se pueda ajustar sin que nadie lo confunda con una regla de CESIM.
+- Ítems estéticos 5 y 6 de la Adenda 15 (etiquetas superpuestas, redundancia de "Mix tecnológico"):
+  pendientes de aprobación del equipo para una próxima iteración.
+- Decidir si el piloto de la Adenda 16 (banda oscura + barra segmentada) se extiende al resto de las
+  secciones, y a qué otras métricas (ej. Capacidad empleada en Operaciones podría ser una barra
+  segmentada, en vez de la tarjeta simple actual).
+
+## Adenda 17 — Verificación de la banda oscura en modo oscuro nativo de Streamlit
+
+Antes de extender el piloto de la Adenda 16 al resto de la app, el equipo preguntó específicamente
+cómo se ve la nueva "banda oscura de KPIs críticos" cuando el usuario tiene activado el modo oscuro
+nativo de Streamlit (no confundir con el modo oscuro de los gráficos Plotly, que ya se manejaba
+correctamente desde antes vía `es_modo_oscuro()`).
+
+### Problema encontrado
+
+Al probar con Playwright, se detectó que la banda oscura (fondo `--brand-dark`, el mismo grafito
+que el sidebar) quedaba visualmente indistinguible de las tarjetas circundantes en modo oscuro:
+ambas terminan siendo prácticamente el mismo gris oscuro, perdiendo el efecto de "destacar los 3
+KPIs más importantes" que es la razón de ser del componente. Se confirmó con captura de pantalla
+antes de tocar el código (no se asumió el problema, se lo vio).
+
+### Causa y corrección
+
+`es_modo_oscuro()` (`app.py`, ya existente) usa `st.context.theme.type == 'dark'`. Se agregó:
+
+- En `assets/style.css`: una variante `.kpi-band-oscura.tema-oscuro` con fondo en degradé rojo
+  translúcido (`linear-gradient` sobre `rgba(179, 38, 30, ...)`, el rojo de marca) en vez del
+  grafito plano, para que la banda se distinga tanto del fondo oscuro de Streamlit como de las
+  tarjetas comunes.
+- En `app.py`, función `kpi_banda_oscura()`: se agrega la clase `tema-oscuro` al contenedor cuando
+  `es_modo_oscuro()` es verdadero.
+
+### Limitación de la plataforma encontrada durante la verificación (no un bug de nuestro código)
+
+Al verificar con Playwright alternando Claro→Oscuro desde el menú de Streamlit dentro de una misma
+sesión (sin recargar la página), la clase `tema-oscuro` NO se actualizaba — quedaba con el fondo
+grafito plano aunque el resto de la página (fondos, textos nativos de Streamlit) sí había cambiado
+a oscuro correctamente. Se investigó la causa antes de intentar "arreglarlo":
+
+- `st.context.theme.type` sólo refleja el tema vigente al momento en que se abrió/conectó la
+  sesión del navegador — no se actualiza con un `rerun` de script disparado dentro de la misma
+  conexión, sólo con una recarga completa de la página (confirmado forzando un rerun sin recargar:
+  la clase seguía sin actualizarse; y confirmado que sí se actualiza correctamente tras
+  `page.reload()`).
+- Se buscó una alternativa puramente CSS (variables CSS custom properties, atributos en
+  `<html>`/`<body>`/`.stApp`) para detectar el tema sin depender de Python, para que no dependiera de
+  un rerun. No existe: Streamlit resuelve los colores de tema generando clases CSS-in-JS (Emotion)
+  con colores literales en cada carga, no expone el tema vía variables CSS consultables. Se decidió
+  no compensar esto con JavaScript inyectado (leer el DOM y togglear la clase a mano), porque sería
+  un parche fragil y difícil de mantener para un caso de uso angosto.
+- **Se verificó el escenario real más común** — el que efectivamente van a tener los evaluadores o
+  el equipo si su sistema operativo/navegador está en oscuro y Streamlit está en su configuración
+  por defecto ("Usar configuración del sistema") — con una carga de página fresca simulando
+  preferencia de oscuro del sistema operativo (`prefers-color-scheme: dark`): en ese caso
+  `es_modo_oscuro()` sí detecta correctamente el tema oscuro desde el primer render, y la banda
+  aparece con el degradé rojo tal como se diseñó. También se confirmó que una recarga manual de
+  página después de cambiar el tema desde el menú de Streamlit soluciona el caso restante.
+
+**Conclusión, clasificada explícitamente:**
+
+1. *Regla/limitación verificada de la plataforma Streamlit* (no una regla CESIM, aclarado para no
+   confundir capas): el color de la banda oscura sigue el tema correctamente (a) en toda carga
+   fresca de página, con el tema que sea (sistema u oscuro/claro explícito), y (b) después de
+   recargar manualmente la página tras cambiar el tema desde el menú de Streamlit.
+2. *Limitación conocida, documentada, no corregida*: si alguien cambia de Claro a Oscuro desde el
+   menú de Streamlit y sigue navegando SIN recargar la página, la banda queda con el fondo plano
+   (no el degradé rojo) hasta la próxima recarga — el resto de la interfaz sí cambia de tema con
+   normalidad. Se documenta como limitación aceptada en vez de forzar un workaround con JavaScript.
+
+### Verificación de esta Adenda
+
+- Playwright, carga fresca con `prefers-color-scheme: dark` emulado: clase confirmada
+  `kpi-band-oscura tema-oscuro`, captura de pantalla adjunta al equipo.
+- Playwright, carga fresca + toggle a Oscuro + `page.reload()`: clase y `background-image`
+  (degradé) confirmados por `getComputedStyle`.
+- Playwright, toggle a Oscuro sin recargar + rerun forzado (click en radio ya seleccionado): clase
+  NO se actualiza — limitación confirmada y documentada, no un supuesto.
+
+## Adenda 18 — Extensión del piloto de estilo al resto de la app
+
+Con el modo oscuro ya verificado (Adenda 17), se extendió el patrón de "banda oscura para los
+KPIs más críticos" y "barra segmentada" a las demás secciones, con el mismo criterio de la
+Adenda 16: sólo donde el patrón representa algo real, nunca fabricando una composición o un
+"top 3" que la sección no tiene.
+
+### Dónde se aplicó
+
+- **Finanzas**: los 7 KPIs fijos de la sección se separaron en dos niveles. Los 3 que resumen
+  mejor la foto de la ronda — **EBITDA (USD)**, **Caja final (USD)** y **Deuda CP no planificada
+  (USD)** — pasan a la banda oscura, con la misma lógica de favorable/desfavorable que ya usa
+  Resultados (para Deuda CP no planificada el sentido se invierte: menos es favorable). Margen
+  bruto, ROS, Deuda LP y Calificación crediticia quedan como tarjetas claras debajo, igual que
+  antes.
+- **Operaciones**: las tarjetas de "Capacidad empleada" (por país) pasan al lenguaje visual de
+  barra segmentada (`stat-segment-card`), con dos segmentos: **Usado** y **Libre**. A diferencia
+  de "Estado de Alertas" (Adenda 16), acá el 100% SÍ es un universo fijo real — la capacidad
+  instalada de la planta — así que mostrar "Libre" como el complemento no es una proporción
+  inventada, es literalmente lo que dice el reporte de Cesim. Se agregaron las clases CSS
+  `.seg.uso` / `.seg.libre` (mismo componente, paleta propia, para no confundir "capacidad libre"
+  con los colores de severidad de alertas).
+
+### Dónde NO se aplicó, y por qué
+
+- **Mercado** y **RRHH y Sostenibilidad** no tienen una fila de "3 KPIs fijos de la sección" ni una
+  métrica de composición con universo fijo — son mayormente gráficos comparativos y de evolución.
+  Forzar una banda oscura o una barra segmentada ahí habría significado inventar un KPI resumen que
+  la sección no tiene, algo que va en contra del principio de no fabricar métricas del proyecto.
+  Ambas secciones sí heredan los cambios globales (sidebar oscuro, tipografía Plus Jakarta Sans).
+- Nota aparte, no vinculada al piloto de estilo: durante esta revisión se notó un gráfico de doble
+  eje en Mercado → Evolución → "Trayectoria de precio y características" (`fig_traj`, con
+  `yaxis`/`yaxis2`) que no estaba en la lista de 5 gráficos corregidos en la Adenda 15. Queda
+  anotado como pendiente para una próxima pasada de auditoría visual, no se tocó en este corte para
+  no mezclar el trabajo de estilo con más correcciones de gráficos sin que el equipo lo pida
+  explícitamente.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores.
+- Smoke test con Playwright sobre las 5 secciones (Resultados, Mercado, Operaciones, Finanzas,
+  RRHH y Sostenibilidad): ninguna muestra traceback ni error de Streamlit.
+- Capturas de pantalla de Finanzas y Operaciones, en claro y en oscuro nativo de Streamlit:
+  banda oscura y barra segmentada legibles y con contraste correcto en ambos modos.
+
+## Pendiente para el próximo corte (actualizado)
+
+- Corregir la fórmula de "Cuota de mercado CADIZ (promedio)" en el Excel (divide por 12 casilleros
+  en vez de ponderar por volumen) — sigue siendo el próximo paso de fondo, pospuesto varias veces
+  por la iteración de estilo.
+- Ítems estéticos 5 y 6 de la Adenda 15 (etiquetas superpuestas en "Precio Promedio vs Volumen" y
+  "Matriz Riesgo/Retorno", "Mix tecnológico" redundante) — pendientes de aprobación del equipo.
+- Nuevo hallazgo de esta Adenda: revisar el gráfico de doble eje "Trayectoria de precio y
+  características" en Mercado → Evolución (no estaba en el relevamiento original de la Adenda 15).
+- Resto de los pendientes de Adendas 12 y 13 sin cambios (ver arriba).
