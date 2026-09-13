@@ -932,6 +932,9 @@ ronda_ultima = ronda_snapshot
 try:
     st.markdown(f'<style>{open(os.path.join(BASE_DIR, "assets", "style.css"), encoding="utf-8").read()}</style>', unsafe_allow_html=True)
 except FileNotFoundError:
+    st.warning('No se encontró assets/style.css — el estilo visual (sidebar oscuro, banda de KPIs, '
+               'barras segmentadas) no se aplicó en este despliegue. Verificá que la carpeta '
+               '"assets" se haya subido junto con app.py.')
     pass
 # =================================================================
 # SECCIÓN 1 — RESULTADOS
