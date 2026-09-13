@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from cesim_parser import build_historico
 from gap_analysis import calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_PROYECCION_EXCEL
-from metric_crosswalk import CROSSWALK_FINANZAS
+from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
@@ -173,6 +173,22 @@ def chart_evolucion(sub: pd.DataFrame, titulo: str):
                                   name='Promedio', line=dict(color=color_ref, width=1, dash='dash'), marker=dict(size=4)))
     fig.update_layout(title=f'Evolución — {titulo}')
     mostrar(fig)
+def chart_evolucion_proyeccion(df_proy: pd.DataFrame, metric: str, region: str, titulo: str, team='CADIZ'):
+    """Evolución de una métrica que CADIZ proyecta pero que CESIM nunca publica en el RDOS (ej. FCF) --
+    a diferencia de chart_evolucion (que grafica el dato REAL de los 7 equipos), acá solo hay una
+    serie: la propia proyección de CADIZ, ronda a ronda. Se muestra igual, sin comparación, para no
+    perder de vista la tendencia de un indicador que de otro modo quedaría sin ningún gráfico."""
+    if df_proy is None:
+        return st.info('Sin proyección cargada.')
+    sub = df_proy[(df_proy['team'] == team) & (df_proy['metric'] == metric) & (df_proy['region'] == region)].copy()
+    sub['value'] = pd.to_numeric(sub['value'], errors='coerce')
+    sub = sub.dropna(subset=['value']).sort_values('round')
+    if sub.empty:
+        return st.info('Sin datos para evolución.')
+    fig = go.Figure(go.Scatter(x=sub['round'], y=sub['value'], mode='lines+markers', name=team,
+                                line=dict(color=COLOR_MAP.get(team, BRAND_ACCENT), width=3), marker=dict(size=6)))
+    fig.update_layout(title=f'Evolución de la proyección — {titulo}', xaxis_title='Ronda')
+    mostrar(fig)
 def sparkline(valores, color=None, invertir=False):
     """Minigráfico de tendencia para meter dentro de una tarjeta de KPI.
     Con 12-15 rondas, un número solo no dice nada: la forma de la serie sí."""
@@ -195,6 +211,10 @@ def _fmt_valor_cg(v, tipo):
         return '—'
     if tipo == 'usd':
         return format_num(v)
+    if tipo == 'unidades':
+        return f'{format_num(v)} u.'
+    if tipo == 'usd_accion':
+        return f'USD {v:,.2f}'
     if tipo == 'ratio':
         return f'{v * 100:,.1f}%'
     return str(v)
@@ -207,6 +227,11 @@ def _fmt_delta_cg(v):
         # mostrarlo como "-0" confundiría; se redondea al dólar y se omite si queda en 0.
         gap_redondeado = round(v['gap_abs'])
         return format_num(gap_redondeado) if gap_redondeado != 0 else None
+    if v['tipo'] == 'unidades':
+        gap_redondeado = round(v['gap_abs'])
+        return f'{gap_redondeado:+,.0f} u.' if gap_redondeado != 0 else None
+    if v['tipo'] == 'usd_accion':
+        return f"{v['gap_abs']:+,.2f}"
     if v['tipo'] == 'ratio':
         return f"{v['gap_abs'] * 100:+.1f} p.p."
     return None
@@ -232,7 +257,10 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
                 'la hoja `DATA_EXPORT`) — subilo con ese mismo nombre para ver el Control de Gestión.')
         return
     ronda_num = ronda_a_num(ronda_snapshot)
-    gaps = calcular_gaps(df_todas_rondas, df_proy, ronda_nombre=ronda_snapshot, ronda_num=ronda_num, crosswalk=crosswalk)
+    claves_no_publicadas = {k for k, spec in crosswalk.items() if spec.get('real_no_publicado')}
+    gaps_todos = calcular_gaps(df_todas_rondas, df_proy, ronda_nombre=ronda_snapshot, ronda_num=ronda_num, crosswalk=crosswalk)
+    gaps = {k: v for k, v in gaps_todos.items() if k not in claves_no_publicadas}
+    sin_publicar = {k: v for k, v in gaps_todos.items() if k in claves_no_publicadas}
     con_gap = {k: v for k, v in gaps.items() if v['estado'] in ('ok', 'sin_real')}
     sin_gap = {k: v for k, v in gaps.items() if v['estado'] in ('sin_datos', 'sin_proyeccion')}
     with st.container(border=True):
@@ -251,18 +279,28 @@ def panel_control_gestion(df_todas_rondas, ronda_snapshot, crosswalk=None, key_s
                         st.metric(v['label'], _fmt_valor_cg(v['real'], v['tipo']),
                                    delta=_fmt_delta_cg(v), delta_color=_DELTA_COLOR_CG[v['gap_favorable']])
                         st.caption(f"Real — proyectado {_fmt_valor_cg(v['proyectado'], v['tipo'])}")
-        if sin_gap:
-            st.caption('Sin comparación posible en esta ronda para estos indicadores (no forman parte '
-                       'de la proyección de CADIZ, o es una ronda de práctica) — se muestra su evolución:')
-    if sin_gap:
-        cols_ev = st.columns(2)
-        for i, (clave, v) in enumerate(sin_gap.items()):
+        if sin_gap or sin_publicar:
+            st.caption('Sin comparación posible para estos indicadores (no forman parte de la '
+                       'proyección de CADIZ, es una ronda de práctica, o CESIM no publica ese dato en '
+                       'el RDOS) — se muestra su evolución:')
+    if sin_gap or sin_publicar:
+        total = len(sin_gap) + len(sin_publicar)
+        cols_ev = st.columns(min(2, total))
+        i = 0
+        for clave, v in sin_gap.items():
             spec = crosswalk[clave]['real']
             sub = df_todas_rondas[(df_todas_rondas['Estado'] == spec['estado']) & (df_todas_rondas['Metrica'] == spec['metrica'])]
             if spec.get('seccion'):
                 sub = sub[sub['Seccion'] == spec['seccion']]
-            with cols_ev[i % 2]:
+            with cols_ev[i % len(cols_ev)]:
                 chart_evolucion(sub, v['label'])
+            i += 1
+        for clave, v in sin_publicar.items():
+            spec = crosswalk[clave]['proyeccion']
+            with cols_ev[i % len(cols_ev)]:
+                chart_evolucion_proyeccion(df_proy, spec['metric'], spec['region'], v['label'])
+                st.caption('CESIM no publica este dato en el RDOS — evolución de la proyección propia de CADIZ.')
+            i += 1
 
 def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None):
     """Serie histórica de una métrica para un equipo, ordenada por ronda.
@@ -449,11 +487,14 @@ if df_all.empty or ronda_snapshot not in df_all['Ronda'].unique():
     df_proy_bypass = get_proyeccion() if ronda_num_bypass is not None else None
     hay_proyeccion_cadiz = (df_proy_bypass is not None and not df_proy_bypass[
         (df_proy_bypass['round'] == ronda_num_bypass) & (df_proy_bypass['team'] == MY_COMPANY)].empty)
-    if hay_proyeccion_cadiz and seccion == 'Finanzas' and empresa_analisis == MY_COMPANY:
+    _CROSSWALK_POR_SECCION_BYPASS = {'Finanzas': CROSSWALK_FINANZAS, 'Mercado': CROSSWALK_MERCADO,
+                                      'Operaciones': CROSSWALK_OPERACIONES, 'Resultados': CROSSWALK_RESULTADOS}
+    if hay_proyeccion_cadiz and seccion in _CROSSWALK_POR_SECCION_BYPASS and empresa_analisis == MY_COMPANY:
         st.info(f"📁 CESIM todavía no publicó los RDOS de **{ronda_snapshot}** — el resto del tablero "
                 "no tiene datos para mostrar todavía, pero CADIZ ya cargó su proyección para esta "
                 "ronda en el modelo de gestión:")
-        panel_control_gestion(df_all.copy(), ronda_snapshot, key_suffix='finanzas_sin_real', mostrar_directo=True)
+        panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=_CROSSWALK_POR_SECCION_BYPASS[seccion],
+                               key_suffix=f'{seccion.lower()}_sin_real', mostrar_directo=True)
     else:
         st.info(f"📁 Faltan datos: No se encontraron archivos para **{ronda_snapshot}** en el entorno **{filtro_tipo}**.")
     st.stop()
@@ -467,6 +508,15 @@ except FileNotFoundError:
 # SECCIÓN 1 — RESULTADOS
 # =================================================================
 def seccion_resultado():
+    tab_resumen, tab_cg = st.tabs(['Resumen', 'Control de Gestión'])
+    with tab_resumen:
+        _seccion_resultado_resumen()
+    with tab_cg:
+        if empresa_analisis == MY_COMPANY:
+            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_RESULTADOS, key_suffix='resultados', mostrar_directo=True)
+        else:
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
+def _seccion_resultado_resumen():
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda_r1 = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
 
@@ -580,26 +630,50 @@ def seccion_resultado():
         fig.update_layout(title=titulo_ranking, xaxis=dict(range=[0, ranking['Valor'].max() * 1.25]))
         mostrar(fig, ocultar_eje_valores='x')
     st.divider()
-    col_c, col_d = st.columns(2)
-    with col_c:
-        ret_all = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Retorno total acumulado del accionista (p.a.), %')].copy()
-        ret_all['Valor'] = num(ret_all['Valor'])
-        puestos = ret_all.groupby(['Ronda', 'Ronda_Orden', 'Empresa'])['Valor'].sum().reset_index().sort_values('Ronda_Orden')
-        puestos['Puesto'] = puestos.groupby('Ronda')['Valor'].rank(ascending=False, method='min')
-        fig2 = px.line(puestos[puestos['Empresa'] == MY_COMPANY].sort_values('Ronda_Orden'), x='Ronda', y='Puesto', markers=True,
-                        title=f'Evolución de Posición ACUMULADA — {MY_COMPANY}')
-        fig2.update_yaxes(autorange='reversed', dtick=1)
-        fig2.update_traces(line=dict(color=BRAND_ACCENT, width=3), marker=dict(size=8))
-        mostrar(fig2)
-    with col_d:
-        cap_sub = df[(df['Estado'] == 'Valuación - Global') & (df['Metrica'] == 'Capitalización de mercado, miles USD')].copy()
-        chart_evolucion(cap_sub, 'Evolución Market Cap (USD)')
+    st.subheader('Cuota de mercado')
+    col_g, col_v = st.columns(2)
+    with col_g:
+        sub_global = df[(df['Estado'] == 'Informe de mercado, global') &
+                         (df['Seccion'] == 'Cuotas de mercado globales, %') & (df['Metrica'] == 'Total')]
+        chart_comparacion_equipos(sub_global, 'Cuota de mercado global, %')
+    with col_v:
+        # Value market share: CESIM no publica esta cifra directamente (los precios están en moneda
+        # local por mercado -- USD/RMB/EUR -- y sumarlos sin convertir daría un número sin sentido).
+        # Se calcula sobre "Ingresos por ventas, Global" (Cuenta de resultados), que CESIM SÍ publica
+        # ya convertido a USD para los 7 equipos: cuota por valor = ingresos de la empresa / Σ ingresos
+        # de los 7 equipos, para la ronda en foco.
+        ingresos_glob = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
+                            (df['Metrica'] == 'Ingresos por ventas') & (df['Ronda'] == ronda_snapshot)].copy()
+        ingresos_glob['Valor'] = num(ingresos_glob['Valor'])
+        total_ing = ingresos_glob['Valor'].sum()
+        if total_ing:
+            val_share = ingresos_glob.copy()
+            val_share['Valor'] = val_share['Valor'] / total_ing * 100
+            chart_comparacion_equipos(val_share, 'Cuota de mercado por valor ($), %')
+        else:
+            st.info('Sin datos de ingresos para calcular la cuota por valor en esta ronda.')
+    st.caption('Desglose regional — cuota de mercado, %')
+    col_us, col_cn, col_eu = st.columns(3)
+    for col, pais in zip([col_us, col_cn, col_eu], ['EE.UU.', 'China', 'Europa']):
+        with col:
+            sub_pais = df[(df['Estado'] == f'Informe de mercado, {pais}') &
+                          (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'] == 'Total')]
+            chart_comparacion_equipos(sub_pais, pais)
+    st.divider()
+    cap_sub = df[(df['Estado'] == 'Valuación - Global') & (df['Metrica'] == 'Capitalización de mercado, miles USD')].copy()
+    chart_evolucion(cap_sub, 'Evolución Market Cap (USD)')
 # =================================================================
 # SECCIÓN 2 — MERCADO
 # =================================================================
 def seccion_mercado():
-    tab_pos, tab_pan, tab_evo = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución'])
+    tab_pos, tab_pan, tab_evo, tab_cg = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución', 'Control de Gestión'])
     tecnologias = ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno']
+
+    with tab_cg:
+        if empresa_analisis == MY_COMPANY:
+            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_MERCADO, key_suffix='mercado', mostrar_directo=True)
+        else:
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
 
     with tab_pos:
         c1, c2 = st.columns(2)
@@ -717,26 +791,31 @@ def seccion_mercado():
         pais_evo = st.selectbox('Mercado', ['EE.UU.', 'China', 'Europa'], key='sel_evo_pais')
         estado_evo = f'Informe de mercado, {pais_evo}'
 
-        st.markdown('**Demanda total vs. ventas totales de la industria**')
-        st.caption('Toda la torta del mercado (7 equipos sumados): la brecha entre demanda y ventas es oportunidad que nadie capturó.')
-        dv_rows = []
+        st.markdown('**Demanda total vs. ventas totales de la industria, por tecnología**')
+        st.caption('Toda la torta del mercado (7 equipos sumados): la brecha entre demanda y ventas es oportunidad que nadie capturó. '
+                   'Un panel por tecnología para ver dónde está esa brecha, en vez de un solo total que mezcla las cuatro — '
+                   'se omite la tecnología que todavía no tiene ningún dato en este mercado.')
+        paneles_tech = []
         for tech in tecnologias:
             dem = df[(df['Estado'] == estado_evo) & (df['Seccion'] == tech) & (df['Metrica'] == 'Demanda, miles unidades')].copy()
             ven = df[(df['Estado'] == estado_evo) & (df['Seccion'] == tech) & (df['Metrica'] == 'Ventas, miles unidades')].copy()
             dem['Valor'] = num(dem['Valor']); ven['Valor'] = num(ven['Valor'])
-            for ronda, grupo in dem.groupby('Ronda'):
-                dv_rows.append({'Ronda': ronda, 'Ronda_Orden': grupo['Ronda_Orden'].iloc[0], 'Tipo': 'Demanda', 'Valor': grupo['Valor'].sum()})
-            for ronda, grupo in ven.groupby('Ronda'):
-                dv_rows.append({'Ronda': ronda, 'Ronda_Orden': grupo['Ronda_Orden'].iloc[0], 'Tipo': 'Ventas', 'Valor': grupo['Valor'].sum()})
-        dv_df = pd.DataFrame(dv_rows)
-        if not dv_df.empty:
-            dv_piv = dv_df.groupby(['Ronda', 'Ronda_Orden', 'Tipo'])['Valor'].sum().reset_index().sort_values('Ronda_Orden')
-            fig_dv = go.Figure()
-            for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', BRAND_ACCENT)]:
-                d_t = dv_piv[dv_piv['Tipo'] == tipo]
-                fig_dv.add_trace(go.Bar(x=d_t['Ronda'], y=d_t['Valor'], name=tipo, marker_color=color))
-            fig_dv.update_layout(barmode='group', title=f'Demanda vs. Ventas — industria, {pais_evo}')
-            mostrar(fig_dv)
+            dem_piv = dem.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().assign(Tipo='Demanda')
+            ven_piv = ven.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().assign(Tipo='Ventas')
+            piv = pd.concat([dem_piv, ven_piv], ignore_index=True)
+            if piv.empty or piv['Valor'].fillna(0).abs().sum() == 0:
+                continue  # tecnología sin ningún dato (>0) en este mercado -- no se muestra el panel
+            paneles_tech.append((tech, piv.sort_values('Ronda_Orden')))
+        if paneles_tech:
+            cols_dv = st.columns(2)
+            for i, (tech, piv) in enumerate(paneles_tech):
+                fig_dv = go.Figure()
+                for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', BRAND_ACCENT)]:
+                    d_t = piv[piv['Tipo'] == tipo]
+                    fig_dv.add_trace(go.Bar(x=d_t['Ronda'], y=d_t['Valor'], name=tipo, marker_color=color))
+                fig_dv.update_layout(barmode='group', title=f'{tech} — {pais_evo}')
+                with cols_dv[i % 2]:
+                    mostrar(fig_dv)
         else:
             st.info('Sin datos suficientes.')
 
@@ -773,7 +852,12 @@ def seccion_mercado():
 # SECCIÓN 3 — OPERACIONES
 # =================================================================
 def seccion_operaciones():
-    bloque1, bloque2 = st.tabs(['Capacidad y Costos', 'Inventario y Logística'])
+    bloque1, bloque2, tab_cg = st.tabs(['Capacidad y Costos', 'Inventario y Logística', 'Control de Gestión'])
+    with tab_cg:
+        if empresa_analisis == MY_COMPANY:
+            panel_control_gestion(df_all.copy(), ronda_snapshot, crosswalk=CROSSWALK_OPERACIONES, key_suffix='operaciones', mostrar_directo=True)
+        else:
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión (es sobre la proyección propia de CADIZ).')
     with bloque1:
         cap = df[(df['Estado'] == 'Detalles de fabricación') & (df['Seccion'] == 'Capacidad empleada, %') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) & (df['Subgrupo'].isin(['EE.UU.', 'China']))].copy()
         cap['Valor'] = num(cap['Valor'])
@@ -1013,17 +1097,20 @@ def seccion_finanzas():
     with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
     st.write('')
 
-    # Control de Gestión: es inherentemente sobre CADIZ (es nuestra propia proyección, no la de
-    # "Equipo en foco") -- si se está mirando otro equipo, se avisa en vez de mostrar el gap de
-    # CADIZ sin aclarar de quién es.
-    if empresa_analisis == MY_COMPANY:
-        panel_control_gestion(df, ronda_snapshot, key_suffix='finanzas')
-    else:
-        with st.expander('📊 Control de Gestión: Proyectado vs. Real (solo CADIZ)'):
-            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión.')
     st.write('')
 
-    tab_cp, tab_lp = st.tabs(['Corto Plazo: Liquidez y Operación', 'Largo Plazo: Estructura, Retorno y Competencia'])
+    tab_cp, tab_lp, tab_cg = st.tabs(['Corto Plazo: Liquidez y Operación', 'Largo Plazo: Estructura, Retorno y Competencia',
+                                       'Control de Gestión'])
+
+    # Control de Gestión: es inherentemente sobre CADIZ (es nuestra propia proyección, no la de
+    # "Equipo en foco") -- si se está mirando otro equipo, se avisa en vez de mostrar el gap de
+    # CADIZ sin aclarar de quién es. Convertido de toggle suelto a pestaña (Adenda 11) por
+    # consistencia con Resultados/Mercado/Operaciones, que ahora tienen la misma pestaña.
+    with tab_cg:
+        if empresa_analisis == MY_COMPANY:
+            panel_control_gestion(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True)
+        else:
+            st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver el control de gestión.')
 
     with tab_cp:
         # El detalle del sobregiro ya lo levanta el panel de alertas en Resultados: acá va

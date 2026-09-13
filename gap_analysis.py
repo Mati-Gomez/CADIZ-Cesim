@@ -24,7 +24,7 @@ import re
 import pandas as pd
 
 from export_proyeccion import read_dataframe, DEFAULT_EXCEL
-from metric_crosswalk import CROSSWALK_FINANZAS
+from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
 
 _RONDA_OFICIAL_RE = re.compile(r"^Ronda\s+(\d+)$")
 
@@ -81,15 +81,53 @@ def _valor_real(df_real, ronda_nombre, spec, team="CADIZ"):
         return val   # texto (p.ej. calificación crediticia)
 
 
+def _valor_real_utilizacion_capacidad(df_real, df_proy, ronda_nombre, ronda_num, region, team="CADIZ"):
+    """Reconstruye el % de utilización de capacidad REAL de un área (EE.UU./China) que el RDOS no
+    publica como un único dato -- lo publica desglosado por tecnología ('Detalles de fabricación' ->
+    Seccion='Capacidad empleada, %', Subgrupo=área, Metrica=tecnología). Se reconstruye con la MISMA
+    lógica que usa el motor Excel para su propio lado Plan: (Producción interna real, sumada todas
+    las tecnologías del área) / Capacidad operativa (cierre de ronda, leída de DATA_EXPORT -- no una
+    constante hardcodeada acá, para que se actualice sola si CADIZ invierte/desinvierte capacidad en
+    una ronda futura). Verificado EXACTO contra Ronda 1 real: 68,0% en ambas áreas.
+
+    Devuelve el resultado en escala 0-100 (mismo convención que el resto de los campos 'real' de
+    cesim_parser, p.ej. ROE=19.07 no 0.1907) para que _to_absoluto() lo procese sin necesitar un caso
+    especial -- 'ratio' ya divide /100 más abajo en el flujo normal."""
+    if df_real is None or df_proy is None or ronda_num is None:
+        return None
+    sub = df_real[(df_real["Ronda"] == ronda_nombre) & (df_real["Empresa"] == team) &
+                  (df_real["Estado"] == "Detalles de fabricación") &
+                  (df_real["Seccion"] == "Producción interna, miles unidades") &
+                  (df_real["Subgrupo"] == region)]
+    if sub.empty:
+        return None
+    prod_total_miles = pd.to_numeric(sub["Valor"], errors="coerce").sum()
+    if pd.isna(prod_total_miles):
+        return None
+    prod_total = prod_total_miles * 1000.0   # "miles unidades" -> unidades absolutas
+
+    cap_sub = df_proy[(df_proy["round"] == ronda_num) & (df_proy["team"] == team) &
+                       (df_proy["metric"] == "Capacidad operativa") & (df_proy["region"] == region)]
+    if cap_sub.empty:
+        return None
+    try:
+        cap_val = float(cap_sub.iloc[0]["value"])
+    except (TypeError, ValueError):
+        return None
+    if not cap_val:
+        return None
+    return prod_total / cap_val * 100.0
+
+
 def _to_absoluto(valor, spec_tipo, fuente):
-    """cesim_parser reporta USD en 'miles USD' (RDOS nativo) y % en escala 0-100 (p.ej. 19.99, no
-    0.1999) -- misma convención canónica de unidades que build_gestion_v2.py (Cambio 3, ver
-    Informe_V2.md): USD -> x1000, ratio -> /100. La proyección (DATA_EXPORT del Excel) ya viene en
-    esa convención canónica (USD absoluto, ratio 0-1) -- normalizar acá el lado 'real' para poder
-    restar directamente."""
+    """cesim_parser reporta USD y unidades físicas en 'miles' (RDOS nativo) y % en escala 0-100
+    (p.ej. 19.99, no 0.1999) -- misma convención canónica de unidades que build_gestion_v2.py (Cambio
+    3, ver Informe_V2.md): USD/unidades -> x1000, ratio -> /100. 'usd_accion' (p.ej. EPS) ya viene
+    absoluto de origen en el RDOS -- sin conversión. La proyección (DATA_EXPORT del Excel) ya viene en
+    esa convención canónica -- normalizar acá el lado 'real' para poder restar directamente."""
     if fuente != "real" or not isinstance(valor, (int, float)):
         return valor
-    if spec_tipo == "usd":
+    if spec_tipo in ("usd", "unidades"):
         return valor * 1000.0
     if spec_tipo == "ratio":
         return valor / 100.0
@@ -121,7 +159,11 @@ def calcular_gaps(df_real, df_proy, ronda_nombre, ronda_num, team="CADIZ", cross
     out = {}
     for clave, spec in crosswalk.items():
         proy_val, proy_status = _valor_proyeccion(df_proy, ronda_num, spec["proyeccion"], team)
-        real_val = _valor_real(df_real, ronda_nombre, spec["real"], team)
+        if spec.get("real_calc") == "utilizacion_capacidad":
+            real_val = _valor_real_utilizacion_capacidad(
+                df_real, df_proy, ronda_nombre, ronda_num, spec["real_calc_region"], team)
+        else:
+            real_val = _valor_real(df_real, ronda_nombre, spec["real"], team)
         real_val = _to_absoluto(real_val, spec["tipo"], "real")
 
         if proy_val is None and real_val is None:
@@ -134,7 +176,7 @@ def calcular_gaps(df_real, df_proy, ronda_nombre, ronda_num, team="CADIZ", cross
             estado = "ok"
 
         gap_abs = gap_pct = None
-        if estado == "ok" and spec["tipo"] in ("usd", "ratio") and isinstance(real_val, (int, float)) and isinstance(proy_val, (int, float)):
+        if estado == "ok" and spec["tipo"] in ("usd", "ratio", "unidades", "usd_accion") and isinstance(real_val, (int, float)) and isinstance(proy_val, (int, float)):
             gap_abs = real_val - proy_val
             if proy_val not in (0, None):
                 gap_pct = gap_abs / abs(proy_val) * 100.0
