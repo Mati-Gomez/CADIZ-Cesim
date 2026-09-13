@@ -196,39 +196,39 @@ def chart_evolucion_proyeccion(df_proy: pd.DataFrame, metric: str, region: str, 
                                 line=dict(color=COLOR_MAP.get(team, BRAND_ACCENT), width=3), marker=dict(size=6)))
     fig.update_layout(title=f'Evolución de la proyección — {titulo}', xaxis_title='Ronda')
     mostrar(fig)
+def _techo_apilado(y):
+    """Techo del eje con ~15% de aire arriba del máximo real -- ver nota en chart_dos_metricas_apiladas
+    sobre por qué no alcanza con rangemode='tozero' solo para barras."""
+    y_vals = [v for v in y if v is not None and not pd.isna(v)]
+    y_max = max(y_vals) if y_vals else 0
+    return y_max * 1.15 if y_max > 0 else 1
 def chart_dos_metricas_apiladas(titulo, x_a, y_a, nombre_a, color_a, tipo_a,
                                  x_b, y_b, nombre_b, color_b, tipo_b):
-    """Dos métricas de escala distinta, una arriba y otra abajo, cada una con SU PROPIO eje --
-    en vez de un gráfico de doble eje Y (dos escalas superpuestas en el mismo plano, que puede
-    sugerir una correlación que no está realmente ahí y hace más difícil leer cada serie por
-    separado). Comparten el eje X (misma Ronda) para poder seguir la evolución de ambas a la vez,
-    pero nunca comparten escala vertical. Reemplaza los 4 gráficos de RRHH que combinaban USD/personas
-    con % o un multiplicador en un solo eje. Sin subplot_titles (consumen alto): el nombre de cada
-    métrica va en el título del eje Y de su propio panel."""
-    from plotly.subplots import make_subplots
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15)
-    def _add(row, x, y, nombre, color, tipo):
+    """UN solo gráfico, eje X compartido (misma Ronda), con la primera métrica en el eje Y
+    izquierdo y la segunda en el eje Y derecho (doble eje Y superpuesto) -- a pedido explícito del
+    equipo, que prefirió esto a la versión anterior (dos paneles apilados, cada uno con su propio
+    eje). OJO: esto reintroduce a propósito el patrón de "doble eje Y" que se había evitado acá
+    mismo (y que se sacó del todo en Mercado -> Evolución, "Trayectoria de precio y
+    características", por el riesgo de sugerir una correlación entre las dos series que no está
+    probada) -- queda anotado por si conviene revisar el criterio más adelante, pero el pedido fue
+    explícito y puntual para ESTOS gráficos (RRHH y Beneficio vs. Deuda), no una vuelta atrás
+    general de criterio."""
+    fig = go.Figure()
+    def _trace(x, y, nombre, color, tipo, yaxis):
         if tipo == 'bar':
-            fig.add_trace(go.Bar(x=x, y=y, name=nombre, marker_color=color, showlegend=False), row=row, col=1)
-            # BUG REPORTADO Y CONFIRMADO (Playwright, screenshot real con datos de Ronda 1): con
-            # rangemode='tozero' a secas, Plotly arma el tope del eje justo en el valor máximo de la
-            # barra -- sin ningún margen arriba -- así que la barra queda pegada al borde superior del
-            # panel, casi tocando el título. Con 1-2 categorías (como acá, una por ronda) el efecto es
-            # más notorio: parece un bloque sólido "cortado" en vez de una barra normal, no un gráfico
-            # roto de verdad, pero se ve mal / poco profesional. Los paneles de línea (el 'else' de
-            # abajo) no tienen este problema -- Plotly sí les da margen incluso con tozero -- así que el
-            # fix se limita a barras: se calcula el máximo a mano y se fuerza un 15% de aire arriba.
-            y_vals = [v for v in y if v is not None and not pd.isna(v)]
-            y_max = max(y_vals) if y_vals else 0
-            techo = y_max * 1.15 if y_max > 0 else 1
-            fig.update_yaxes(title_text=nombre, title_font=dict(size=10), range=[0, techo], row=row, col=1)
+            fig.add_trace(go.Bar(x=x, y=y, name=nombre, marker_color=color, yaxis=yaxis, opacity=0.85))
         else:
             fig.add_trace(go.Scatter(x=x, y=y, name=nombre, mode='lines+markers',
-                                      line=dict(color=color, width=3), showlegend=False), row=row, col=1)
-            fig.update_yaxes(title_text=nombre, title_font=dict(size=10), rangemode='tozero', row=row, col=1)
-    _add(1, x_a, y_a, nombre_a, color_a, tipo_a)
-    _add(2, x_b, y_b, nombre_b, color_b, tipo_b)
-    fig.update_layout(title=titulo)
+                                      line=dict(color=color, width=3), yaxis=yaxis))
+    _trace(x_a, y_a, nombre_a, color_a, tipo_a, 'y1')
+    _trace(x_b, y_b, nombre_b, color_b, tipo_b, 'y2')
+    fig.update_layout(
+        title=titulo,
+        yaxis=dict(title=nombre_a, title_font=dict(size=10, color=color_a), tickfont=dict(color=color_a),
+                   range=[0, _techo_apilado(y_a)], side='left'),
+        yaxis2=dict(title=nombre_b, title_font=dict(size=10, color=color_b), tickfont=dict(color=color_b),
+                    range=[0, _techo_apilado(y_b)], overlaying='y', side='right', showgrid=False),
+        legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
     mostrar(fig)
 def sparkline(valores, color=None, invertir=False):
     """Minigráfico de tendencia para meter dentro de una tarjeta de KPI.
