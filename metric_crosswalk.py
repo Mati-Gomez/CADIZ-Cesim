@@ -144,16 +144,20 @@ CROSSWALK_MERCADO = {
 # si la capacidad cambia en una ronda futura, el real se recalcula solo, sin tocar la web. Verificado
 # EXACTO contra Ronda 1 real: (336+616)/1.400 = 68,0% EE.UU., (240+100)/500 = 68,0% China -- coincide
 # con el 68% ya confirmado por el equipo (no el 85% que se había calculado mal en un intento anterior).
+#  "Capacidad empleada" (antes "Utilización de capacidad" acá) -- mismo término que usa la tarjeta
+#  nativa de Operaciones > Capacidad y Costos ("Capacidad empleada — EE.UU./China", desglosada por
+#  tecnología); el "(total)" aclara que este KPI es el agregado de planta, no el desglose por
+#  tecnología que se ve en esa otra pestaña -- mismo dato, mismo nombre base, alcance distinto.
 CROSSWALK_OPERACIONES = {
     "utilizacion_capacidad_eeuu": {
-        "label": "Utilización de capacidad — EE.UU.",
+        "label": "Capacidad empleada — EE.UU. (total)",
         "proyeccion": {"metric": "Utilización de capacidad", "region": "EE.UU."},
         "real": {"estado": "Detalles de fabricación", "metrica": "Capacidad empleada, %", "seccion": None},
         "real_calc": "utilizacion_capacidad", "real_calc_region": "EE.UU.",
         "tipo": "ratio", "gap_favorable": None,
     },
     "utilizacion_capacidad_china": {
-        "label": "Utilización de capacidad — China",
+        "label": "Capacidad empleada — China (total)",
         "proyeccion": {"metric": "Utilización de capacidad", "region": "China"},
         "real": {"estado": "Detalles de fabricación", "metrica": "Capacidad empleada, %", "seccion": None},
         "real_calc": "utilizacion_capacidad", "real_calc_region": "China",
@@ -171,7 +175,9 @@ CROSSWALK_OPERACIONES = {
 # etiqueta como PROXY en el propio label para no confundirlo con una regla CESIM verificada.
 CROSSWALK_RESULTADOS = {
     "eps": {
-        "label": "EPS",
+        # "Ganancias por Acción (EPS)" -- mismo nombre que el campo real de CESIM ("Ganancias por
+        # acción (EPS), USD"), antes acá decía solo la sigla en inglés sin la traducción.
+        "label": "Ganancias por Acción (EPS)",
         "proyeccion": {"metric": "EPS", "region": "Global"},
         "real": {"estado": "Ratios e indicadores financieros clave",
                  "metrica": "Ganancias por acción (EPS), USD", "seccion": None},
@@ -189,7 +195,10 @@ CROSSWALK_RESULTADOS = {
         "real_no_publicado": True,
     },
     "retorno_accionista": {
-        "label": "Retorno total acumulado del accionista [PROXY]",
+        # Acortado y sin corchetes en mayúscula ("Retorno acumulado del accionista (Proxy)") -- mismo
+        # término base que el KPI nativo de Resultados ("Retorno acum. del accionista"), antes decía
+        # acá "Retorno TOTAL ACUMULADO del accionista [PROXY]", una variante de nombre distinta.
+        "label": "Retorno acumulado del accionista (Proxy)",
         "proyeccion": {"metric": "Retorno total acumulado del accionista (PROXY)", "region": "Global"},
         "real": {"estado": "Ratios e indicadores financieros clave",
                  "metrica": "Retorno total acumulado del accionista (p.a.), %", "seccion": None},

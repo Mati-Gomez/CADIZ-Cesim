@@ -78,12 +78,15 @@ def get_proyeccion():
     return _cargar_proyeccion_cached(DEFAULT_PROYECCION_EXCEL, os.path.getmtime(DEFAULT_PROYECCION_EXCEL))
 def num(series):
     return pd.to_numeric(series, errors='coerce')
-def format_num(val, dec=0):
+def format_num(val, dec=1):
+    """Al menos un decimal en todos los rangos (antes el corte de miles truncaba a entero, ej.
+    '638k' en vez de '638.2k' -- perdía precisión visible justo en el rango donde más se usa)."""
     if pd.isna(val) or val is None: return ""
     try:
         val = float(val)
+        dec = max(dec, 1)
         if abs(val) >= 1_000_000: return f"{val/1_000_000:,.1f}M"
-        if abs(val) >= 1_000: return f"{val/1_000:,.0f}k"
+        if abs(val) >= 1_000: return f"{val/1_000:,.1f}k"
         return f"{val:,.{dec}f}"
     except (ValueError, TypeError):
         return ""
@@ -207,29 +210,57 @@ def sparkline(valores, color=None, invertir=False):
                        xaxis=dict(visible=False), yaxis=dict(visible=False, autorange='reversed' if invertir else True),
                        showlegend=False)
     return fig
-def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyectado', nombre_frente='Real'):
-    """Bullet chart genérico: una barra horizontal gruesa y apagada (`valor_fondo`) con una barra fina
-    superpuesta en BRAND_ACCENT (`valor_frente`), barmode='overlay' -- lectura inmediata de si el
-    valor de referencia (Plan, o Punto de Equilibrio) fue superado o no. Reutilizado por la Fila 2 de
-    la Comparativa Plan vs. Real (Proyectado vs. Real) y por el gráfico de Punto de Equilibrio de
-    Operaciones (Volumen de Equilibrio vs. Volumen Real Vendido) -- mismo patrón visual, distinto par
-    de valores."""
+def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyectado', nombre_frente='Real',
+                  color_excedente=None):
+    """Barra de progreso con desborde apilado: `valor_fondo` (Proyectado, o Punto de Equilibrio) define
+    el 100% = el largo de la pista de referencia. `valor_frente` (Real) se dibuja como relleno DENTRO
+    de esa pista; si la supera, el excedente se apila como un segmento aparte que sobresale del final
+    de la pista en vez de superponer dos barras independientes (diseño anterior) -- así se ve de un
+    vistazo si el Real se pasó del Proyectado y por cuánto, no solo que son distintos.
+
+    `color_excedente` tiñe ese segmento de sobra: quien llama puede pasar el color que corresponda a
+    si pasarse del Proyectado es favorable o no para esa métrica puntual (ej. superar el Punto de
+    Equilibrio es bueno; superar una Deuda CP no planificada, no) -- por defecto un ámbar neutro
+    ('se pasó de la referencia', sin prejuzgar si es bueno o malo) para cuando no se sabe.
+
+    Reutilizado por la Fila 2 de la Comparativa Plan vs. Real (Proyectado vs. Real) y por el gráfico
+    de Punto de Equilibrio de Operaciones (Volumen de Equilibrio vs. Volumen Real Vendido)."""
     if valor_fondo is None or valor_frente is None:
         return st.info('Sin dato para graficar.')
-    # Los valores de texto van como st.caption (no como texto 'outside' de cada barra): al ser una
-    # sola fila horizontal, dos barras con longitud parecida (p.ej. Plan≈Real) hacen que sus textos
-    # 'outside' se dibujen en el mismo punto y queden ilegibles superpuestos -- un caption plano al
-    # pie no tiene ese problema y es igual de legible.
-    color_fondo = 'rgba(140,151,166,0.55)'
+    plan, real = float(valor_fondo), float(valor_frente)
+    color_excedente = color_excedente or COLOR_METRICA['riesgo']
+    color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=[valor_fondo], y=[''], orientation='h', name=nombre_fondo,
-                          marker_color=color_fondo, width=0.6))
-    fig.add_trace(go.Bar(x=[valor_frente], y=[''], orientation='h', name=nombre_frente,
-                          marker_color=BRAND_ACCENT, width=0.25))
-    fig.update_layout(barmode='overlay', title=titulo, xaxis_title=None,
-                       legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
-    mostrar(fig, ocultar_eje_valores='y')
-    st.caption(f'{nombre_fondo}: {_fmt_valor_cg(valor_fondo, tipo)} · {nombre_frente}: {_fmt_valor_cg(valor_frente, tipo)}')
+    if plan > 0:
+        # Normalizado a % del Proyectado: la pista siempre mide 100 = Plan, así el "se pasó de largo"
+        # es directamente visual (el segmento de excedente empieza justo donde termina la pista) y
+        # comparable entre KPIs de escalas muy distintas (USD, unidades, %) en la misma fila de columnas.
+        pct_real = real / plan * 100
+        dentro = min(pct_real, 100)
+        excedente = max(0.0, pct_real - 100)
+        fig.add_trace(go.Bar(x=[100], y=[''], orientation='h', name=nombre_fondo, base=0, width=0.55,
+                              marker_color='rgba(140,151,166,0.30)', hoverinfo='skip'))
+        fig.add_trace(go.Bar(x=[dentro], y=[''], orientation='h', name=nombre_frente, base=0, width=0.55,
+                              marker_color=BRAND_ACCENT,
+                              hovertemplate=f'{nombre_frente}: {_fmt_valor_cg(real, tipo)}<extra></extra>'))
+        if excedente > 0:
+            fig.add_trace(go.Bar(x=[excedente], y=[''], orientation='h', name='Excedente sobre el plan',
+                                  base=100, width=0.55, marker_color=color_excedente,
+                                  hovertemplate=f'Excedente: +{pct_real - 100:,.1f} p.p. sobre el plan<extra></extra>'))
+        fig.add_vline(x=100, line_dash='dot', line_width=1.5, line_color=color_ref)
+        fig.update_layout(barmode='overlay', title=titulo, xaxis_title=None,
+                           xaxis=dict(ticksuffix='%', range=[0, max(100, pct_real) * 1.15]),
+                           legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
+        mostrar(fig, ocultar_eje_valores='y')
+        cumplimiento = f' ({pct_real:,.1f}% del plan)'
+    else:
+        # Proyectado <= 0: expresarlo como % del plan no tiene sentido (división por ~0) -- se cae a
+        # una barra simple en valor absoluto, sin pista de referencia, y se avisa en el caption.
+        fig.add_trace(go.Bar(x=[real], y=[''], orientation='h', name=nombre_frente, marker_color=BRAND_ACCENT, width=0.55))
+        fig.update_layout(title=titulo, xaxis_title=None, showlegend=False)
+        mostrar(fig, ocultar_eje_valores='y')
+        cumplimiento = ' — Proyectado ≤ 0, no expresable como % de avance'
+    st.caption(f'{nombre_fondo}: {_fmt_valor_cg(plan, tipo)} · {nombre_frente}: {_fmt_valor_cg(real, tipo)}{cumplimiento}')
 
 # --- COMPARATIVA PLAN VS. REAL: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs.
 # Real (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
@@ -263,6 +294,15 @@ def _fmt_delta_cg(v):
         return f"{v['gap_abs'] * 100:+.1f} p.p."
     return None
 _DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
+# Mismo mapeo de favorabilidad que _DELTA_COLOR_CG, pero como color de relleno para el segmento de
+# excedente de chart_bullet(): si más Real es mejor (real_mayor), pasarse del plan es favorable
+# (verde). Para 'real_menor' (ej. deuda no planificada) se probó primero con BRAND_ACCENT (rojo) para
+# marcarlo como desfavorable, pero es EL MISMO rojo que ya usa el relleno "Real" del propio bullet --
+# el segmento de excedente quedaba invisible, fundido con la barra (ver test visual). Ámbar neutro
+# funciona para ambos casos sin esa colisión: sigue leyéndose como "atención, se pasó de la
+# referencia" sea o no favorable (la flecha de color del delta, un renglón más arriba, ya dice si eso
+# es bueno o malo).
+_COLOR_EXCEDENTE_CG = {'real_mayor': COLOR_POSITIVE, 'real_menor': COLOR_METRICA['riesgo'], None: COLOR_METRICA['riesgo']}
 def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False):
     """Botón 'Comparativa Plan vs. Real': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
     KPIs del crosswalk dado. Un KPI sin proyección para esta ronda (el modelo no lo cubre, o es una
@@ -317,7 +357,11 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
                 cols_b = st.columns(min(4, len(con_ambos)))
                 for i, (clave, v) in enumerate(con_ambos.items()):
                     with cols_b[i % len(cols_b)]:
-                        chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'])
+                        # Mismo criterio de favorabilidad que ya colorea la flecha del delta en la
+                        # tarjeta de arriba (_DELTA_COLOR_CG) -- así el excedente de la barra de
+                        # progreso no contradice al delta que el usuario ya vio un renglón más arriba.
+                        chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'],
+                                     color_excedente=_COLOR_EXCEDENTE_CG.get(v['gap_favorable']))
         if sin_gap or sin_publicar:
             st.caption('Sin comparación posible para estos indicadores (no forman parte de la '
                        'proyección de CADIZ, es una ronda de práctica, o CESIM no publica ese dato en '
@@ -370,15 +414,20 @@ def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
         orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'total'],
         x=[e[0] for e in etapas], y=[e[1] for e in etapas],
         text=[format_num(v) for _, v in etapas], textposition='outside',
-        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': MUTED_PALETTE[2]}},
+        # Color = favorable/desfavorable para CADIZ (verde/ámbar), no "sube/baja" -- antes el desvío
+        # desfavorable usaba MUTED_PALETTE[2], un verde grisáceo casi del mismo matiz que el favorable
+        # (COLOR_POSITIVE): a simple vista ambos leían "verde" y no se distinguía cuál desvío ayudó y
+        # cuál perjudicó. Ahora es el mismo par verde/ámbar que el resto de los gráficos de desvío.
+        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
         totals={'marker': {'color': BRAND_ACCENT}}))
-    fig.update_layout(title=f'Ingresos — Plan vs. Real, {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]})')
+    fig.update_layout(title=f'Ingresos — Proyectado vs. Real, {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]})')
     mostrar(fig, ocultar_eje_valores='y')
-    st.caption(f'En moneda nativa de {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se convierte a USD '
-               'para no asumir un tipo de cambio que el simulador no publica.')
+    st.caption(f'Verde = desvío que sumó Ingresos; ámbar = desvío que restó. En moneda nativa de {mercado_sel} '
+               f'({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se convierte a USD para no asumir un tipo de cambio '
+               'que el simulador no publica.')
 
 def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
-    st.markdown('###### Cuota de mercado — Objetivo (Plan) vs. Real, por tecnología')
+    st.markdown('###### Cuota de mercado — Proyectado vs. Real, por tecnología')
     mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_mercado_cuota')
     datos = cuota_mercado_objetivo_vs_real(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
     if not datos:
@@ -386,15 +435,17 @@ def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
         return
     filas = []
     for tech, d in datos.items():
+        # "Proyectado" en todos lados (antes decía "Objetivo (Plan)" acá, distinto del resto de la
+        # Comparativa) -- mismo término que chart_bullet, la Fila 1 de KPIs y las demás Filas 3.
         if d['objetivo'] is not None:
-            filas.append({'Tecnología': tech, 'Tipo': 'Objetivo (Plan)', 'Cuota': d['objetivo'] * 100})
+            filas.append({'Tecnología': tech, 'Tipo': 'Proyectado', 'Cuota': d['objetivo'] * 100})
         if d['real'] is not None:
             filas.append({'Tecnología': tech, 'Tipo': 'Real', 'Cuota': d['real'] * 100})
     if not filas:
         return st.info('Sin datos suficientes.')
     dfc = pd.DataFrame(filas)
     fig = px.bar(dfc, x='Tecnología', y='Cuota', color='Tipo', barmode='group',
-                 color_discrete_map={'Objetivo (Plan)': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
+                 color_discrete_map={'Proyectado': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
                  text=dfc['Cuota'].apply(lambda v: f'{v:.1f}%'), title=f'Cuota de mercado — {mercado_sel}, {ronda_snapshot}')
     fig.update_traces(textposition='outside', cliponaxis=False)
     fig.update_layout(yaxis_title='% del mercado total')
@@ -427,7 +478,7 @@ def _costo_fabricacion_ponderado(datos_area):
     return {'plan_pond': plan_pond, 'real_pond': real_pond, 'gaps': gaps}
 
 def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy):
-    st.markdown('###### Desvío en Unit Economics — Costo unitario de fabricación (Plan vs. Real)')
+    st.markdown('###### Desvío en Costo Unitario de Fabricación (Proyectado vs. Real)')
     st.caption('Alcance: solo costo de FABRICACIÓN (propia + contratada), ponderado por producción real. '
                'Transporte/aranceles y promoción se reportan por mercado de destino (no por área de origen) '
                'y no están incluidos acá — por eso este desvío no reconcilia el 100% de la Contribución '
@@ -437,27 +488,42 @@ def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy
     if not datos:
         return st.info(f'Sin datos de costo unitario de fabricación en {area_sel} para {ronda_snapshot}.')
     if all(d['cu_propia_plan'] is None and d['cu_terc_plan'] is None for d in datos.values()):
-        # Mismo motivo que en el waterfall de Ingresos: sin esto, Plan=0 le atribuiría el 100% del
-        # costo real a un "GAP" que en realidad es solo ausencia de proyección (Ronda 0/1, antes de
-        # que el modelo de CADIZ empezara a proyectar en Ronda 2).
+        # Mismo motivo que en el waterfall de Ingresos: sin esto, Proyectado=0 le atribuiría el 100%
+        # del costo real a un "Desvío" que en realidad es solo ausencia de proyección (Ronda 0/1,
+        # antes de que el modelo de CADIZ empezara a proyectar en Ronda 2).
         return st.info(f'CADIZ no tiene una proyección de costo unitario cargada para {area_sel} en {ronda_snapshot} '
                         '— el modelo de gestión proyecta recién desde Ronda 2, no hay Plan con el que comparar.')
     pond = _costo_fabricacion_ponderado(datos)
     if not pond:
         return st.info(f'Sin datos de producción real en {area_sel} para {ronda_snapshot}.')
-    etapas = [('Costo Plan', pond['plan_pond'])]
+    # "Desvío {tecnología}" (antes "GAP {tecnología}", en inglés y sin explicar qué significa): cuánto
+    # empujó ESA tecnología al costo unitario PONDERADO total, de Proyectado a Real -- no es "cuánto le
+    # costó de más esa tecnología en el vacío", es su aporte a la diferencia total, ponderado por su
+    # propia producción real. La suma de todos los "Desvío X" + Costo Proyectado da EXACTO el Costo
+    # Real (reconciliación por construcción, ver _costo_fabricacion_ponderado) -- por eso tiene sentido
+    # como cascada/waterfall y no como barras sueltas.
+    etapas = [('Costo Proyectado', pond['plan_pond'])]
     for g in pond['gaps']:
         if abs(g['gap']) > 1e-9:
-            etapas.append((f"GAP {g['tech']}", g['gap']))
+            etapas.append((f"Desvío {g['tech']}", g['gap']))
     etapas.append(('Costo Real', pond['real_pond']))
     fig = go.Figure(go.Waterfall(
         orientation='v', measure=['absolute'] + ['relative'] * (len(etapas) - 2) + ['total'],
         x=[e[0] for e in etapas], y=[e[1] for e in etapas],
         text=[format_num(v) for _, v in etapas], textposition='outside',
-        increasing={'marker': {'color': MUTED_PALETTE[2]}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
+        # Verde = desvío que ayudó a bajar el costo (favorable); ámbar = lo empujó hacia arriba
+        # (desfavorable) -- mismo par de colores y mismo criterio (favorable/desfavorable, no
+        # sube/baja) que el waterfall de Ingresos de más arriba. Antes usaba MUTED_PALETTE[2] (un
+        # verde grisáceo) para el costo que SUBE y COLOR_POSITIVE (verde pleno) para el que BAJA --
+        # dos verdes casi del mismo matiz para significados opuestos, imposible de leer de un vistazo.
+        increasing={'marker': {'color': COLOR_METRICA['riesgo']}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
         totals={'marker': {'color': BRAND_ACCENT}}))
     fig.update_layout(title=f'Costo unitario de fabricación — {area_sel}, {ronda_snapshot}')
     mostrar(fig, ocultar_eje_valores='y')
+    st.caption('Cada barra "Desvío {tecnología}" es cuánto empujó esa tecnología el costo unitario ponderado '
+               'total, de Proyectado a Real (ponderado por su propia producción real) — no el costo de esa '
+               'tecnología en sí. Verde = empujó el costo hacia abajo (favorable); ámbar = lo empujó hacia '
+               'arriba. Costo Proyectado + todos los desvíos = Costo Real, exacto.')
 
 def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
     st.markdown('###### Composición del Flujo de Caja — Plan vs. Real (Global)')
@@ -742,7 +808,10 @@ def _seccion_resultado_resumen():
     prom_ret_acum = np.nanmean([v for v in retorno_acum_vals.values() if v is not None]) if any(v is not None for v in retorno_acum_vals.values()) else None
     val_ret_acum = retorno_acum_vals.get(empresa_analisis)
     delta_ret_acum = ((val_ret_acum - prom_ret_acum) / abs(prom_ret_acum) * 100) if prom_ret_acum and val_ret_acum is not None else None
-    kpi_con_tendencia(c1, 'Retorno acumulado', f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
+    # "Retorno acum. del accionista" -- mismo término base que usa el crosswalk de Resultados
+    # ("Retorno acumulado del accionista (Proxy)") en la Comparativa Plan vs. Real, antes decía acá
+    # solo "Retorno acumulado" (sin "del accionista"), inconsistente con el resto del tablero.
+    kpi_con_tendencia(c1, 'Retorno acum. del accionista', f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
                        serie_metrica('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %', empresa_analisis),
                        delta=f'{delta_ret_acum:+.1f}% vs Prom' if delta_ret_acum is not None else None)
 
@@ -767,7 +836,9 @@ def _seccion_resultado_resumen():
     prom_cap = np.nanmean([v for v in cap_vals.values() if v is not None]) if any(v is not None for v in cap_vals.values()) else None
     val_cap = cap_vals.get(empresa_analisis)
     delta_cap = ((val_cap - prom_cap)/prom_cap*100) if prom_cap and val_cap else None
-    kpi_con_tendencia(c4, 'Market Cap (USD)', format_num(val_cap),
+    # "Capitalización de mercado" (antes "Market Cap", en inglés) -- mismo nombre que usa el propio
+    # campo de CESIM ('Capitalización de mercado, miles USD'), nombres en español en todo el tablero.
+    kpi_con_tendencia(c4, 'Capitalización de mercado (USD)', format_num(val_cap),
                        serie_metrica('Valuación - Global', 'Capitalización de mercado, miles USD', empresa_analisis),
                        delta=f'{delta_cap:+.1f}% vs Prom' if delta_cap else None)
 
@@ -814,37 +885,82 @@ def _seccion_resultado_resumen():
         mostrar(fig, ocultar_eje_valores='x')
     st.divider()
     st.subheader('Cuota de mercado')
-    col_g, col_v = st.columns(2)
-    with col_g:
-        sub_global = df[(df['Estado'] == 'Informe de mercado, global') &
-                         (df['Seccion'] == 'Cuotas de mercado globales, %') & (df['Metrica'] == 'Total')]
-        chart_comparacion_equipos(sub_global, 'Cuota de mercado global, %')
-    with col_v:
-        # Value market share: CESIM no publica esta cifra directamente (los precios están en moneda
-        # local por mercado -- USD/RMB/EUR -- y sumarlos sin convertir daría un número sin sentido).
-        # Se calcula sobre "Ingresos por ventas, Global" (Cuenta de resultados), que CESIM SÍ publica
-        # ya convertido a USD para los 7 equipos: cuota por valor = ingresos de la empresa / Σ ingresos
-        # de los 7 equipos, para la ronda en foco.
-        ingresos_glob = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
-                            (df['Metrica'] == 'Ingresos por ventas') & (df['Ronda'] == ronda_snapshot)].copy()
-        ingresos_glob['Valor'] = num(ingresos_glob['Valor'])
-        total_ing = ingresos_glob['Valor'].sum()
-        if total_ing:
-            val_share = ingresos_glob.copy()
-            val_share['Valor'] = val_share['Valor'] / total_ing * 100
-            chart_comparacion_equipos(val_share, 'Cuota de mercado por valor ($), %')
-        else:
-            st.info('Sin datos de ingresos para calcular la cuota por valor en esta ronda.')
-    st.caption('Desglose regional — cuota de mercado, %')
-    col_us, col_cn, col_eu = st.columns(3)
-    for col, pais in zip([col_us, col_cn, col_eu], ['EE.UU.', 'China', 'Europa']):
-        with col:
-            sub_pais = df[(df['Estado'] == f'Informe de mercado, {pais}') &
-                          (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'] == 'Total')]
-            chart_comparacion_equipos(sub_pais, pais)
+    # Antes: 5 gráficos de barra casi idénticos (global, por valor, EE.UU., China, Europa) -- mismo
+    # tipo de gráfico repetido 5 veces es exactamente la queja de "muchos gráficos de barra". Acá se
+    # reemplazan por DOS formas distintas, cada una elegida por el trabajo que hace mejor:
+    #   1) Dumbbell (dos puntos + línea): compara cuota por UNIDADES vs. cuota por VALOR por equipo en
+    #      un solo gráfico -- la distancia entre los dos puntos de cada equipo ES el dato interesante
+    #      (vender una porción de unidades distinta a la de ingresos implica un mix de precio propio).
+    #   2) Heatmap: cuota por país (EE.UU./China/Europa) x equipo en una sola grilla -- reemplaza 3
+    #      barras por 1 sola lectura de matriz, con la tabla de datos completa abajo por accesibilidad.
+    sub_global = df[(df['Estado'] == 'Informe de mercado, global') &
+                     (df['Seccion'] == 'Cuotas de mercado globales, %') & (df['Metrica'] == 'Total') &
+                     (df['Ronda'] == ronda_snapshot)].copy()
+    sub_global['Valor'] = num(sub_global['Valor'])
+    cuota_unidades = sub_global.set_index('Empresa')['Valor'].to_dict()
+    # Cuota por valor ($): CESIM no publica esta cifra directamente (los precios están en moneda local
+    # por mercado -- USD/RMB/EUR -- y sumarlos sin convertir daría un número sin sentido). Se calcula
+    # sobre "Ingresos por ventas, Global" (Cuenta de resultados), que CESIM SÍ publica ya convertido a
+    # USD para los 7 equipos: cuota por valor = ingresos de la empresa / Σ ingresos de los 7 equipos.
+    ingresos_glob = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
+                        (df['Metrica'] == 'Ingresos por ventas') & (df['Ronda'] == ronda_snapshot)].copy()
+    ingresos_glob['Valor'] = num(ingresos_glob['Valor'])
+    total_ing = ingresos_glob['Valor'].sum()
+    cuota_valor = (ingresos_glob.set_index('Empresa')['Valor'] / total_ing * 100).to_dict() if total_ing else {}
+    filas_dumbbell = [{'Empresa': e, 'Unidades': cuota_unidades.get(e), 'Valor': cuota_valor.get(e)} for e in COMPANIES]
+    dfd = pd.DataFrame(filas_dumbbell).dropna(subset=['Unidades', 'Valor'])
+    if not dfd.empty:
+        dfd = dfd.sort_values('Valor')
+        fig_d = go.Figure()
+        for _, r in dfd.iterrows():
+            es_cadiz = r['Empresa'] == MY_COMPANY
+            fig_d.add_trace(go.Scatter(x=[r['Unidades'], r['Valor']], y=[r['Empresa'], r['Empresa']], mode='lines',
+                                        line=dict(color=BRAND_ACCENT if es_cadiz else 'rgba(140,151,166,0.45)',
+                                                  width=2.5 if es_cadiz else 1.5),
+                                        showlegend=False, hoverinfo='skip'))
+        fig_d.add_trace(go.Scatter(x=dfd['Unidades'], y=dfd['Empresa'], mode='markers', name='Cuota por unidades, %',
+                                    marker=dict(size=11, color=MUTED_PALETTE[0]),
+                                    hovertemplate='%{y} — Unidades: %{x:.1f}%<extra></extra>'))
+        fig_d.add_trace(go.Scatter(x=dfd['Valor'], y=dfd['Empresa'], mode='markers', name='Cuota por valor ($), %',
+                                    marker=dict(size=11, color=BRAND_ACCENT, symbol='diamond'),
+                                    hovertemplate='%{y} — Valor: %{x:.1f}%<extra></extra>'))
+        fig_d.update_layout(title=f'Cuota de mercado global — unidades vs. valor, {ronda_snapshot}', xaxis_title='%',
+                             legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
+        mostrar(fig_d)
+    else:
+        st.info('Sin datos suficientes de cuota global (unidades y valor) para esta ronda.')
+    st.caption('Cada línea conecta la cuota de UN equipo en dos monedas de medida: unidades vendidas y valor en '
+               'USD. Cuando el punto de Valor queda a la derecha del de Unidades, ese equipo vende más caro que '
+               'el promedio (o con mejor mix); si queda a la izquierda, más barato.')
+    paises = ['EE.UU.', 'China', 'Europa']
+    filas_hm = []
+    for pais in paises:
+        sub_pais = df[(df['Estado'] == f'Informe de mercado, {pais}') &
+                      (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'] == 'Total') &
+                      (df['Ronda'] == ronda_snapshot)].copy()
+        sub_pais['Valor'] = num(sub_pais['Valor'])
+        for _, row in sub_pais.dropna(subset=['Valor']).iterrows():
+            filas_hm.append({'Empresa': row['Empresa'], 'País': pais, 'Cuota': row['Valor']})
+    if filas_hm:
+        dfh = pd.DataFrame(filas_hm)
+        piv = dfh.pivot(index='Empresa', columns='País', values='Cuota').reindex(columns=paises)
+        piv = piv.reindex(piv.mean(axis=1).sort_values(ascending=False).index)  # ranking, no alfabético
+        fig_hm = go.Figure(go.Heatmap(
+            z=piv.values, x=list(piv.columns), y=list(piv.index),
+            colorscale=[[0, 'rgba(179,38,30,0.06)'], [1, BRAND_ACCENT]],  # secuencial, un solo matiz (marca)
+            text=[[f'{v:.1f}%' if pd.notna(v) else '' for v in fila] for fila in piv.values],
+            texttemplate='%{text}', textfont=dict(size=12),
+            hovertemplate='%{y} — %{x}: %{z:.1f}%<extra></extra>', showscale=False,
+            xgap=3, ygap=3))  # gap entre celdas -- separador de superficie, no una grilla de líneas
+        fig_hm.update_layout(title=f'Cuota de mercado por país, % — {ronda_snapshot}')
+        mostrar(fig_hm)
+        with st.expander('Ver como tabla'):
+            st.dataframe(piv.style.format('{:.1f}%', na_rep='—'), use_container_width=True)
+    else:
+        st.info('Sin datos de cuota de mercado por país para esta ronda.')
     st.divider()
     cap_sub = df[(df['Estado'] == 'Valuación - Global') & (df['Metrica'] == 'Capitalización de mercado, miles USD')].copy()
-    chart_evolucion(cap_sub, 'Evolución Market Cap (USD)')
+    chart_evolucion(cap_sub, 'Evolución de la Capitalización de Mercado (USD)')
 # =================================================================
 # SECCIÓN 2 — MERCADO
 # =================================================================
@@ -1175,8 +1291,8 @@ def seccion_operaciones():
             st.info('Sin datos de proveedores para esta combinación.')
         st.divider()
         c3, c4 = st.columns(2)
-        pais_ue = c3.selectbox('País Unit Econ', ['EE.UU.', 'China', 'Europa'], key='sel_op_pais')
-        tech_ue = c4.selectbox('Tech Unit Econ', ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno'], key='sel_op_tech')
+        pais_ue = c3.selectbox('País — Margen Unitario', ['EE.UU.', 'China', 'Europa'], key='sel_op_pais')
+        tech_ue = c4.selectbox('Tecnología — Margen Unitario', ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno'], key='sel_op_tech')
         margen = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_ue}') & (df['Seccion'] == tech_ue) & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
         mercado = df[(df['Estado'] == f'Informe de mercado, {pais_ue}') & (df['Seccion'] == tech_ue) & (df['Ronda'] == ronda_snapshot)]
         unidades = valor_fuzzy(mercado, '^Ventas', empresa=empresa_analisis)
@@ -1195,7 +1311,7 @@ def seccion_operaciones():
                 decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
                 totals={'marker': {'color': COLOR_POSITIVE if m_bruto > 0 else BRAND_ACCENT}}
             ))
-            fig_ue.update_layout(title=f'Unit Economics — {tech_ue} {pais_ue}')
+            fig_ue.update_layout(title=f'Margen Unitario — {tech_ue}, {pais_ue}')
             mostrar(fig_ue, ocultar_eje_valores='y')
             costo_total_unit = -(c_prod + c_flete + c_caract)
             markup_pct = (m_bruto / costo_total_unit * 100) if costo_total_unit else None
@@ -1225,7 +1341,8 @@ def seccion_operaciones():
             volumen_equilibrio = (costos_fijos_miles * 1000.0) / cm_unitaria if cm_unitaria else None
             if volumen_equilibrio is not None and volumen_equilibrio > 0:
                 chart_bullet(f'Punto de Equilibrio — {empresa_analisis}, {ronda_snapshot}', volumen_equilibrio, volumen_real,
-                             'unidades', nombre_fondo='Volumen de Equilibrio', nombre_frente='Volumen Real Vendido')
+                             'unidades', nombre_fondo='Volumen de Equilibrio', nombre_frente='Volumen Real Vendido',
+                             color_excedente=COLOR_POSITIVE)  # vender por encima del equilibrio es favorable
                 st.caption('Costos Fijos = Depreciación + I+D + Administración (real, Global). Contribución Marginal '
                            'Unitaria Ponderada = Margen de contribución total / unidades totales vendidas, sumado en '
                            'los 3 mercados donde el equipo vende.')
@@ -1236,7 +1353,7 @@ def seccion_operaciones():
     with bloque2:
         c1, c2 = st.columns(2)
         pais_sel = c1.selectbox('País Inventario', ['EE.UU.', 'China', 'Europa'], key='sel_inv_pais')
-        tech_sel = c2.selectbox('Tech Inventario', ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno'], key='sel_inv_tech')
+        tech_sel = c2.selectbox('Tecnología — Inventario', ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno'], key='sel_inv_tech')
         log = df[(df['Estado'] == 'Detalles de logística') & (df['Empresa'] == empresa_analisis) & (df['Seccion'] == f'{tech_sel}, miles unidades') & (df['Subgrupo'] == pais_sel) & (df['Ronda'] == ronda_snapshot)].copy()
         log['Valor'] = num(log['Valor'])
         d = log.set_index('Metrica')['Valor']

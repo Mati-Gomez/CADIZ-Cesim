@@ -400,3 +400,155 @@ dibuja esa barra, sin baseline falso que inventar.
 - Cuando CESIM publique los RDOS reales de Ronda 2: agregar el archivo a `data/raw/practicas/
   oficial/`, y todos los paneles de Comparativa Plan vs. Real pasan solos de "real pendiente" a
   mostrar el gap real — no requiere ningún cambio de código.
+
+## Adenda 13 — Feedback visual: barra de progreso, unificación de nombres, decimales, Resultados y GAP de Unit Economics
+
+Fecha: 2026-09-13. A pedido del equipo tras ver la Adenda 12 en vivo en producción (Streamlit Cloud):
+seis cambios puntuales de diseño/legibilidad, ninguno toca la lógica de cálculo de `gap_analysis.py`
+(solo `app.py` y `metric_crosswalk.py` — nombres, formato, colores y tipos de gráfico).
+
+### 1. `chart_bullet()` — de barras superpuestas a barra de progreso con desborde apilado
+
+Diseño anterior (Adenda 12): dos barras horizontales superpuestas (`barmode='overlay'`), una gruesa
+apagada (Proyectado) y una fina en `BRAND_ACCENT` (Real), ambas en la escala nativa del dato. El
+equipo lo encontró poco intuitivo y pidió explícitamente "una barra de progreso en donde el total sea
+lo proyectado y si es mayor que se pase de largo tipo barra apilada".
+
+Rediseño: el Proyectado se normaliza a 100% (`pct_real = real/plan*100`) y se dibuja como una pista de
+referencia; el Real se dibuja como relleno DENTRO de esa pista (`min(pct_real, 100)`); si el Real
+supera el Proyectado, el excedente (`max(0, pct_real-100)`) se apila como un segmento aparte con
+`base=100`, que sobresale visualmente del final de la pista — barra apilada real (mismo eje, mismo
+trace type, distinto `base`), no un efecto visual. Una línea vertical punteada en x=100 marca el borde
+del Proyectado. Normalizar a % (en vez de mantener la escala nativa) tiene una ventaja adicional: los
+bullet charts de columnas contiguas (EBITDA en USD, Demanda en unidades, Margen en %) quedan
+visualmente comparables en la misma fila, cosa que antes no pasaba.
+
+**Color del excedente = favorabilidad, no un color fijo.** Se agregó un parámetro opcional
+`color_excedente` y un mapeo `_COLOR_EXCEDENTE_CG` que reutiliza el mismo criterio que ya colorea la
+flecha del delta de la tarjeta de arriba (`_DELTA_COLOR_CG`, de la Adenda 12): si más Real es mejor
+(`real_mayor`, ej. Ingresos), pasarse del plan es favorable → verde (`COLOR_POSITIVE`); si no hay
+dirección favorable definida (`None`) o si menos Real es mejor (`real_menor`, ej. Deuda CP no
+planificada), ámbar neutro (`COLOR_METRICA['riesgo']`). **Nota de auditoría**: se probó primero con
+`BRAND_ACCENT` (rojo de marca) para `real_menor`, pero es el MISMO rojo que ya usa el relleno "Real"
+del propio bullet — el segmento de excedente quedaba invisible, fundido con la barra (encontrado con
+una prueba visual dedicada, ver Verificación). Se resolvió unificando `real_menor` y `None` al mismo
+ámbar — sigue leyéndose "atención, se pasó de la referencia" sin necesidad de un tercer color.
+
+El llamador de Operaciones (Punto de Equilibrio) pasa `color_excedente=COLOR_POSITIVE` explícito
+(vender por encima del equilibrio siempre es favorable, sin ambigüedad).
+
+**Caso borde nuevo**: si el Proyectado es ≤ 0, expresar el Real como % de un Plan de referencia no
+tiene sentido matemático (división por ~0) — se cae a una barra simple en valor absoluto, sin pista de
+referencia, y el caption lo aclara ("Proyectado ≤ 0, no expresable como % de avance").
+
+### 2. Unificación de nombres entre la Comparativa y las vistas nativas
+
+Antes había 3 términos distintos para "el valor planificado" en distintas partes del tablero: "Plan"
+(Operaciones, Fila 3), "Objetivo (Plan)" (Mercado, Fila 3), "Proyectado" (todo lo demás). Se unificó
+TODO a **"Proyectado"** — término que ya usaba `chart_bullet()`, la Fila 1 de KPIs y el resto de la
+Comparativa:
+
+- `fila3_mercado_cuota_objetivo()`: "Objetivo (Plan)" → "Proyectado" (título del gráfico, columna
+  `Tipo` del DataFrame, `color_discrete_map`).
+- `fila3_operaciones_gap_fabricacion()`: "Costo Plan" → "Costo Proyectado"; "GAP {tecnología}" →
+  "Desvío {tecnología}" (ver punto 6 — "GAP" en inglés era parte de la confusión reportada).
+- `fila3_resultados_ingresos()`: título "Ingresos — Plan vs. Real" → "Ingresos — Proyectado vs. Real".
+
+KPI nativo de Resultados renombrado para compartir raíz con el crosswalk: "Retorno acumulado" →
+**"Retorno acum. del accionista"** (mismo término base que "Retorno acumulado del accionista (Proxy)"
+del crosswalk — antes decían cosas distintas para el mismo concepto).
+
+### 3. Nombres en español (sin anglicismos sueltos)
+
+- KPI "Market Cap (USD)" → **"Capitalización de mercado (USD)"** (mismo nombre que el propio campo de
+  CESIM, `'Capitalización de mercado, miles USD'`); "Evolución Market Cap (USD)" →
+  "Evolución de la Capitalización de Mercado (USD)".
+- Waterfall de Operaciones "Unit Economics — {tecnología} {país}" → **"Margen Unitario — {tecnología},
+  {país}"**; selectores "País Unit Econ" / "Tech Unit Econ" → "País — Margen Unitario" /
+  "Tecnología — Margen Unitario"; "Tech Inventario" → "Tecnología — Inventario".
+- `metric_crosswalk.py`: "EPS" → **"Ganancias por Acción (EPS)"** (mismo nombre que el campo real,
+  `'Ganancias por acción (EPS), USD'`); "Retorno total acumulado del accionista [PROXY]" →
+  "Retorno acumulado del accionista (Proxy)" (más corto, sin mayúsculas de énfasis); "Utilización de
+  capacidad — EE.UU./China" → **"Capacidad empleada — EE.UU. (total)/China (total)"** (mismo término
+  que ya usa la tarjeta nativa de Operaciones → Capacidad y Costos, desglosada por tecnología — el
+  "(total)" aclara que el KPI del crosswalk es el agregado de planta, no el desglose).
+
+### 4. `format_num()` — al menos un decimal siempre
+
+Antes: el corte de "miles" (`>= 1_000`) truncaba a entero (`638k` en vez de `638,2k`) mientras el corte
+de "millones" ya usaba 1 decimal — inconsistente, y justo en el rango donde más se usa (la mayoría de
+los montos del tablero caen en miles). Se cambió `f"{val/1_000:,.0f}k"` → `f"{val/1_000:,.1f}k"`, el
+default de `dec` de 0 a 1 (con `dec = max(dec, 1)` para que ningún llamador pueda pedir menos de 1
+decimal por accidente). Sin llamadores que pasaran `dec=` explícito (verificado con `grep`), el cambio
+es transparente en todos los ~15 puntos de uso.
+
+### 5. Resultados → Resumen: menos gráficos de barra, más variedad
+
+El equipo reportó "muchos gráficos de barra" en esta pestaña. Auditoría: la sub-sección "Cuota de
+mercado" tenía 5 `px.bar` casi idénticos (global, por valor, EE.UU., China, Europa) — más el ranking
+horizontal y el waterfall de arriba, ~7 gráficos de la familia "barra" sobre 9 gráficos totales en la
+pestaña. Se reemplazaron esos 5 por dos formas elegidas por el trabajo que hacen mejor (criterio de la
+skill de dataviz — la forma la elige el trabajo del dato, no la costumbre):
+
+- **Dumbbell chart** (2 puntos + línea por equipo): Cuota por unidades vs. Cuota por valor ($) en un
+  solo gráfico — la distancia entre los dos puntos de cada equipo ES el dato interesante (vender una
+  porción de unidades distinta a la de ingresos implica un mix de precio propio; antes esto vivía en
+  dos barras separadas, sin conexión visual entre ambas). Fila de CADIZ resaltada con línea más gruesa
+  y en `BRAND_ACCENT`.
+- **Heatmap** (empresa × país): reemplaza las 3 barras de desglose regional (EE.UU./China/Europa) por
+  una sola grilla, con expander "Ver como tabla" debajo (accesibilidad — la skill de dataviz pide que
+  siempre exista una vista de tabla). Escala de color secuencial de un solo matiz (transparente →
+  `BRAND_ACCENT`), sin arcoíris.
+- Se mantiene: 5 sparklines de KPI, el waterfall "Puente de Beneficio Neto" (decomposición — la forma
+  correcta para eso), el ranking horizontal (comparación de magnitud entre 7 equipos — bar sigue siendo
+  la forma correcta ahí, no se cambió), y la evolución de línea de Market Cap al final.
+
+### 6. Aclaración del waterfall "Desvío en Costo Unitario de Fabricación" (antes "Unit Economics")
+
+El equipo reportó explícitamente no entender este gráfico (`fila3_operaciones_gap_fabricacion()`).
+Auditoría de causa: el waterfall coloreaba "sube el costo" (`increasing`) con `MUTED_PALETTE[2]` (un
+verde grisáceo) y "baja el costo" (`decreasing`) con `COLOR_POSITIVE` (verde pleno) — **dos verdes del
+mismo matiz para significados opuestos**, imposible de distinguir de un vistazo (y el waterfall de
+Ingresos de al lado usaba el mismo par invertido — incoherencia extra entre ambos gráficos). Se
+corrigió a un criterio único en los dos waterfalls de desvío (Ingresos y Costo unitario): **verde =
+favorable para CADIZ, ámbar (`COLOR_METRICA['riesgo']`) = desfavorable**, sin importar si la barra
+individual "sube" o "baja" — un costo que SUBE es desfavorable → ámbar; un ingreso que SUBE es
+favorable → verde. Se agregó además: (a) el nombre "GAP {tecnología}" → "Desvío {tecnología}" (en
+inglés y sin explicar qué significaba); (b) un caption nuevo explicando literalmente qué es cada barra
+("cuánto empujó esa tecnología el costo unitario ponderado total, de Proyectado a Real — no el costo
+de esa tecnología en sí") y la identidad de reconciliación (Costo Proyectado + todos los desvíos =
+Costo Real, exacto); (c) el título de la sección, sin el anglicismo "Unit Economics". No se cambió la
+estructura de waterfall en sí (se decidió no reemplazarla por un gráfico más simple): la decomposición
+por tecnología es información real y verificada (reconcilia exacto por construcción, Adenda 12), y el
+problema diagnosticado fue de color/nombre, no de tipo de gráfico — si el equipo confirma que la
+confusión era otra cosa, hay que revisar de nuevo con ese detalle puntual.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` y `metric_crosswalk.py` — 0 errores de sintaxis.
+- `chart_bullet()` probado de forma aislada (script standalone con Streamlit + Playwright, sin
+  depender de datos CESIM) en 6 casos: Real < Plan, Real ≈ Plan, Real > Plan favorable, Real > Plan
+  desfavorable, Real > Plan sin favorabilidad definida, Plan ≤ 0 — los 6 renderizan correctamente
+  (fue en este proceso donde se encontró y corrigió la colisión de color rojo-sobre-rojo del punto 1).
+  Verificado también en vivo dentro de la app: Operaciones → Punto de Equilibrio, Ronda Práctica 1,
+  Volumen Real Vendido muy por encima del Volumen de Equilibrio (519,3% del plan) — el segmento de
+  excedente en verde se ve correctamente por encima de la pista de 100%.
+- Los dos waterfalls de desvío (Costo unitario de fabricación e Ingresos) probados de forma aislada con
+  datos sintéticos — verde/ámbar se distingue con claridad en ambos, mismo criterio en los dos.
+- Dumbbell y heatmap de "Cuota de mercado" probados en vivo con datos reales de Ronda Práctica 1 —
+  ambos renderizan correctamente, incluida la tabla del expander.
+- **No probado con datos Plan+Real reales combinados** (mismo motivo que la Adenda 12: este entorno de
+  prueba solo tiene RDOS de rondas de Práctica y Ronda 1 oficial, sin Plan cargado desde Ronda 2) — los
+  cambios de nombre/color de la Fila 3 (puntos 2 y 6) no se vieron con datos reales de ambos lados a la
+  vez, solo con datos sintéticos. Verificar visualmente en cuanto CESIM publique el RDOS de Ronda 2.
+
+## Pendiente para el próximo corte (actualizado)
+
+- Todo lo pendiente de la Adenda 12 sigue pendiente (ver arriba) — nada de esta Adenda lo resuelve.
+- Verificar con el equipo si la aclaración del punto 6 (color + nombres + caption) resolvió la
+  confusión reportada sobre el waterfall de Costo Unitario de Fabricación, o si el problema era otro
+  (ej. el concepto de "desvío ponderado por tecnología" en sí, no la forma en que se mostraba) — en ese
+  caso, considerar reemplazar el waterfall por una comparación directa de 2 barras (Proyectado vs.
+  Real) con el desglose por tecnología movido a una tabla secundaria.
+- Verificar visualmente los gráficos de Fila 3 (nombres/colores de esta Adenda) con datos Plan+Real
+  reales combinados en cuanto CESIM publique el RDOS de Ronda 2 (mismo pendiente que la Adenda 12).
