@@ -210,10 +210,22 @@ def chart_dos_metricas_apiladas(titulo, x_a, y_a, nombre_a, color_a, tipo_a,
     def _add(row, x, y, nombre, color, tipo):
         if tipo == 'bar':
             fig.add_trace(go.Bar(x=x, y=y, name=nombre, marker_color=color, showlegend=False), row=row, col=1)
+            # BUG REPORTADO Y CONFIRMADO (Playwright, screenshot real con datos de Ronda 1): con
+            # rangemode='tozero' a secas, Plotly arma el tope del eje justo en el valor máximo de la
+            # barra -- sin ningún margen arriba -- así que la barra queda pegada al borde superior del
+            # panel, casi tocando el título. Con 1-2 categorías (como acá, una por ronda) el efecto es
+            # más notorio: parece un bloque sólido "cortado" en vez de una barra normal, no un gráfico
+            # roto de verdad, pero se ve mal / poco profesional. Los paneles de línea (el 'else' de
+            # abajo) no tienen este problema -- Plotly sí les da margen incluso con tozero -- así que el
+            # fix se limita a barras: se calcula el máximo a mano y se fuerza un 15% de aire arriba.
+            y_vals = [v for v in y if v is not None and not pd.isna(v)]
+            y_max = max(y_vals) if y_vals else 0
+            techo = y_max * 1.15 if y_max > 0 else 1
+            fig.update_yaxes(title_text=nombre, title_font=dict(size=10), range=[0, techo], row=row, col=1)
         else:
             fig.add_trace(go.Scatter(x=x, y=y, name=nombre, mode='lines+markers',
                                       line=dict(color=color, width=3), showlegend=False), row=row, col=1)
-        fig.update_yaxes(title_text=nombre, title_font=dict(size=10), rangemode='tozero', row=row, col=1)
+            fig.update_yaxes(title_text=nombre, title_font=dict(size=10), rangemode='tozero', row=row, col=1)
     _add(1, x_a, y_a, nombre_a, color_a, tipo_a)
     _add(2, x_b, y_b, nombre_b, color_b, tipo_b)
     fig.update_layout(title=titulo)
@@ -269,7 +281,18 @@ def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyecta
             fig.add_trace(go.Bar(x=[excedente], y=[''], orientation='h', name='Excedente sobre el plan',
                                   base=100, width=0.55, marker_color=color_excedente,
                                   hovertemplate=f'Excedente: +{pct_real - 100:,.1f} p.p. sobre el plan<extra></extra>'))
-        fig.add_vline(x=100, line_dash='dot', line_width=1.5, line_color=color_ref)
+        # BUG REPORTADO Y CONFIRMADO (Playwright, caso real "Punto de Equilibrio" con Ronda 1 de
+        # CADIZ, donde Real = 302.8% del plan): la pista de referencia (nombre_fondo, gris muy claro)
+        # queda TOTALMENTE tapada en cuanto dentro llega a 100 -- porque barmode='overlay' dibuja la
+        # barra de "Real" exactamente encima, mismo ancho y misma fila. El resultado: solo se ven los
+        # colores de "Real" y "Excedente", la referencia desaparece del todo salvo por su nombre en la
+        # leyenda -- que es justo el reporte del equipo ("el punto de equilibrio no se ve"). La línea
+        # punteada de acá abajo YA marcaba el 100% pero sin ninguna etiqueta -- ahora lleva el nombre
+        # de la referencia (nombre_fondo) escrito directamente sobre el gráfico, así el dato clave
+        # (dónde está el equilibrio) queda visible pase lo que pase con las barras de abajo.
+        fig.add_vline(x=100, line_dash='dot', line_width=1.5, line_color=color_ref,
+                      annotation_text=nombre_fondo, annotation_position='top',
+                      annotation_font_size=11, annotation_font_color=color_ref)
         fig.update_layout(barmode='overlay', title=titulo, xaxis_title=None,
                            xaxis=dict(ticksuffix='%', range=[0, max(100, pct_real) * 1.15]),
                            legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
@@ -853,6 +876,16 @@ st.sidebar.markdown(f'<div class="sidebar-status"><span class="dot"></span>{rond
                      unsafe_allow_html=True)
 empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0, key='select_equipo')
 st.sidebar.divider()
+# BUG REPORTADO Y CONFIRMADO -- es una limitación de la plataforma, no de este código: Streamlit
+# expone el tema elegido (Settings > claro/oscuro/uso del sistema) vía st.context.theme.type, pero
+# esa lectura se toma UNA VEZ por corrida del script, y alternar el tema en el menú de Settings no
+# siempre dispara una corrida nueva por sí solo. Resultado: si tocás el toggle de tema, los colores
+# que dependen de es_modo_oscuro() (banda de KPIs, sidebar, gráficos) pueden quedar con el tema
+# VIEJO hasta que algo más fuerce un rerun -- cambiar de Ronda, de Equipo o de Sección, como ya
+# venía notando el equipo. Este botón es el atajo más chico y confiable para lo mismo, sin tener
+# que tocar otro control de la app.
+if st.sidebar.button('🔄 Actualizar tema', help='Usalo si cambiaste entre modo claro/oscuro en Settings y los colores de la app no se actualizaron solos.'):
+    st.rerun()
 SECCIONES = ['Resultados', 'Mercado', 'Operaciones', 'Finanzas', 'RRHH y Sostenibilidad']
 seccion = st.sidebar.radio('Sección', SECCIONES, key='select_seccion_router')
 df_all = get_data(filtro_tipo)
@@ -1293,33 +1326,16 @@ def seccion_mercado():
 
         st.divider()
         st.markdown(f'**Evolución de la cuota de mercado — {pais_evo}**')
-        st.caption('Los 7 equipos, CADIZ resaltado. Complementa el gráfico de abajo: acá se ve el resultado, abajo la jugada (precio/características) que lo explica.')
+        st.caption('Los 7 equipos, CADIZ resaltado.')
         share_hist = df[(df['Estado'] == estado_evo) & (df['Seccion'] == f'{pais_evo} cuotas de mercado, %') &
                          (df['Metrica'].str.strip() == 'Total')].copy()
         chart_evolucion(share_hist, f'Cuota de mercado, % — {pais_evo}')
-
-        st.divider()
-        st.markdown(f'**Trayectoria de {empresa_analisis}: precio y características en el tiempo**')
-        tech_traj = st.selectbox('Tecnología', tecnologias, key='sel_evo_tech')
-        traj = df[(df['Estado'] == estado_evo) & (df['Seccion'] == tech_traj) & (df['Empresa'] == empresa_analisis) &
-                  (df['Metrica'].isin(['Precio de venta, USD', 'Cantidad de características ofrecidas']))].copy()
-        traj['Valor'] = num(traj['Valor'])
-        traj = traj.dropna(subset=['Valor']).sort_values('Ronda_Orden')
-        if not traj.empty:
-            precio_t = traj[traj['Metrica'] == 'Precio de venta, USD']
-            caract_t = traj[traj['Metrica'] == 'Cantidad de características ofrecidas']
-            fig_traj = go.Figure()
-            fig_traj.add_trace(go.Scatter(x=precio_t['Ronda'], y=precio_t['Valor'], name='Precio, USD', mode='lines+markers',
-                                           line=dict(color=BRAND_ACCENT, width=3), yaxis='y1'))
-            fig_traj.add_trace(go.Scatter(x=caract_t['Ronda'], y=caract_t['Valor'], name='Características', mode='lines+markers',
-                                           line=dict(color=MUTED_PALETTE[0], width=3, dash='dot'), yaxis='y2'))
-            fig_traj.update_layout(title=f'{empresa_analisis} — {tech_traj}, {pais_evo}',
-                                    yaxis=dict(title='Precio, USD', side='left', rangemode='tozero'),
-                                    yaxis2=dict(title='Características', overlaying='y', side='right', showgrid=False, rangemode='tozero'),
-                                    legend=dict(orientation="h", yanchor="top", y=-0.30, xanchor="center", x=0.5))
-            mostrar(fig_traj)
-        else:
-            st.info(f'{empresa_analisis} no tiene datos de {tech_traj} en {pais_evo}.')
+        # NOTA: hasta acá había un gráfico "Trayectoria de {empresa}: precio y características en el
+        # tiempo" (Precio, USD vs. Cantidad de características, cada uno en su propio eje Y superpuesto
+        # en el mismo plano -- yaxis / yaxis2 con overlaying='y'). Era el único gráfico de doble eje Y
+        # de verdad que quedaba en la app (el resto ya se había migrado a paneles apilados, ver
+        # chart_dos_metricas_apiladas) -- señalado como pendiente en la Adenda 18 y sacado a pedido
+        # explícito del equipo.
 # =================================================================
 # SECCIÓN 3 — OPERACIONES
 # =================================================================
