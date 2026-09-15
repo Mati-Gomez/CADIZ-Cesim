@@ -1160,38 +1160,66 @@ def seccion_mercado():
 
         ventas_data = [{'Empresa': emp, 'Volumen': valor_fuzzy(sub[sub['Empresa'] == emp], 'Ventas')} for emp in COMPANIES]
         vol_df = pd.DataFrame(ventas_data).dropna()
-        def scatter_posicionamiento(keyword_metrica, titulo_x):
-            eje_x_df = sub[sub['Metrica'].str.contains(rf'^{keyword_metrica}', case=False, na=False)][['Empresa', 'Valor']].rename(columns={'Valor': titulo_x})
-            if vol_df.empty or eje_x_df.empty: return None
-            pos = eje_x_df.merge(vol_df, on='Empresa').dropna()
-            pos[titulo_x] = num(pos[titulo_x])
-            if pos.empty: return None
-            fig = px.scatter(pos, x=titulo_x, y='Volumen', color='Empresa', color_discrete_map=COLOR_MAP, size='Volumen', text='Empresa', title=f'{titulo_x} vs Volumen')
-            fig.update_traces(textposition='top center', showlegend=False)
-            linea_media(fig, pos['Volumen'].mean(), eje='y', etiqueta='Vol Prom')
-            linea_media(fig, pos[titulo_x].mean(), eje='x', etiqueta=f'{titulo_x} Prom')
-            mostrar(fig)
-            return True
-        col_a, col_b = st.columns(2)
-        with col_a: scatter_posicionamiento('Precio', 'Precio Promedio')
-        with col_b: scatter_posicionamiento('Cantidad de características', 'Características')
+
+        # Adenda 22 (a pedido del equipo): antes había DOS scatter separados (Precio vs Volumen,
+        # Características vs Volumen) -- se reemplazan por UNA sola Matriz de Valor con Precio y
+        # Características en los dos ejes y el Volumen como tamaño de burbuja, para ver la
+        # propuesta de valor completa de cada equipo de un vistazo.
+        st.subheader('Matriz de Valor')
+        st.caption('Precio vs. Características, tamaño de burbuja = Volumen de ventas. Arriba a la derecha = propuesta '
+                   'de valor alta (mucho producto, precio alto); abajo a la izquierda = jugador de precio bajo / pocas '
+                   'características. Sirve para ver en qué cuadrante de la propuesta de valor compite cada equipo.')
+        precio_df = sub[sub['Metrica'].str.contains(r'^Precio', case=False, na=False)][['Empresa', 'Valor']].rename(columns={'Valor': 'Precio'})
+        carac_df = sub[sub['Metrica'].str.contains(r'^Cantidad de características', case=False, na=False)][['Empresa', 'Valor']].rename(columns={'Valor': 'Características'})
+        if not vol_df.empty and not precio_df.empty and not carac_df.empty:
+            mv = precio_df.merge(carac_df, on='Empresa').merge(vol_df, on='Empresa').dropna()
+            mv['Precio'] = num(mv['Precio']); mv['Características'] = num(mv['Características'])
+            mv = mv[mv['Volumen'] > 0]
+            if not mv.empty:
+                fig_mv = px.scatter(mv, x='Precio', y='Características', size='Volumen', color='Empresa',
+                                     color_discrete_map=COLOR_MAP, text='Empresa',
+                                     title=f'Matriz de Valor — {tech_sel}, {pais_sel}, {ronda_snapshot}')
+                fig_mv.update_traces(textposition='top center', showlegend=False)
+                linea_media(fig_mv, mv['Precio'].mean(), eje='x', etiqueta='Precio Prom')
+                linea_media(fig_mv, mv['Características'].mean(), eje='y', etiqueta='Caract. Prom')
+                mostrar(fig_mv)
+            else:
+                st.info('Sin volumen de ventas positivo para graficar en esta combinación.')
+        else:
+            st.info('Sin datos suficientes de Precio/Características/Volumen para esta combinación.')
+
         st.divider()
-        st.subheader('Eficiencia Comercial')
-        mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Seccion'] == tech_sel) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
-        if mkt_sub.empty:
-            mkt_sub = df[(df['Estado'].str.contains(f'Cuenta de resultados.*{pais_sel}', case=False, na=False)) & (df['Metrica'].str.contains('Promoción', case=False, na=False)) & (df['Ronda'] == ronda_snapshot)]
-        mkt_df = mkt_sub[['Empresa', 'Valor']].rename(columns={'Valor': 'Marketing (USD)'}).dropna()
-        mkt_df['Marketing (USD)'] = num(mkt_df['Marketing (USD)'])
-        if not vol_df.empty and not mkt_df.empty:
-            efi = vol_df.merge(mkt_df, on='Empresa').dropna()
-            if not efi.empty:
-                fig_efi = px.scatter(efi, x='Marketing (USD)', y='Volumen', color='Empresa', color_discrete_map=COLOR_MAP, size='Volumen', text='Empresa', title='Marketing vs. Retorno en Ventas')
-                fig_efi.update_traces(textposition='top center', showlegend=False)
-                linea_media(fig_efi, efi['Volumen'].mean(), eje='y')
-                linea_media(fig_efi, efi['Marketing (USD)'].mean(), eje='x')
-                mostrar(fig_efi)
-            else: st.info("Sin datos consolidados de Marketing.")
-        else: st.info("Sin datos de Marketing para analizar eficiencia.")
+        # Adenda 22 (a pedido del equipo): reemplaza el scatter "Eficiencia Comercial" (Marketing
+        # vs. Volumen) por la matriz "Trampa del Volumen" (Margen de Contribución Unitario vs.
+        # Volume Market Share), pensada para detectar equipos que ganan participación sacrificando
+        # rentabilidad por unidad.
+        st.subheader('"Trampa del Volumen" — Margen vs. Participación')
+        st.caption('Eje X = Volume Market Share (% de las unidades vendidas de esta tecnología en este mercado que son de '
+                   'cada equipo, dato que publica CESIM). Eje Y = Margen de Contribución Unitario (USD/unidad) = Margen de '
+                   'contribución total de la tecnología / unidades vendidas. Abajo a la derecha = mucho volumen pero poco '
+                   'margen por unidad — la "trampa del volumen". Arriba a la izquierda = poco volumen pero alto margen unitario.')
+        share_tv = df[(df['Estado'] == estado_pais) & (df['Seccion'] == f'{pais_sel} cuotas de mercado, %') &
+                      (df['Metrica'] == tech_sel) & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'Share'}).copy()
+        share_tv['Share'] = num(share_tv['Share'])
+        margen_tot_tv = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_sel}') & (df['Seccion'] == tech_sel) &
+                           (df['Metrica'] == 'Margen de contribución') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'MargenTotal'}).copy()
+        margen_tot_tv['MargenTotal'] = num(margen_tot_tv['MargenTotal'])
+        ventas_tv = df[(df['Estado'] == estado_pais) & (df['Seccion'] == tech_sel) &
+                       (df['Metrica'] == 'Ventas, miles unidades') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'VentasMiles'}).copy()
+        ventas_tv['VentasMiles'] = num(ventas_tv['VentasMiles'])
+        tv = share_tv.merge(margen_tot_tv, on='Empresa').merge(ventas_tv, on='Empresa').dropna()
+        tv = tv[tv['VentasMiles'] > 0]
+        if not tv.empty:
+            tv['MargenUnitario'] = tv['MargenTotal'] / tv['VentasMiles']  # miles USD / miles u. = USD/u.
+            fig_tv = px.scatter(tv, x='Share', y='MargenUnitario', color='Empresa', color_discrete_map=COLOR_MAP,
+                                 text='Empresa', title=f'Margen Unitario vs. Share — {tech_sel}, {pais_sel}, {ronda_snapshot}')
+            fig_tv.update_traces(textposition='top center', showlegend=False, marker=dict(size=14))
+            fig_tv.update_layout(xaxis_title='Volume Market Share, %', yaxis_title='Margen de Contribución Unitario, USD/u.')
+            linea_media(fig_tv, tv['Share'].mean(), eje='x', etiqueta='Share Prom')
+            linea_media(fig_tv, tv['MargenUnitario'].mean(), eje='y', etiqueta='Margen Prom')
+            mostrar(fig_tv)
+        else:
+            st.info('Sin datos suficientes de Share/Margen/Ventas para esta combinación.')
 
         st.divider()
         st.subheader('Share of Voice (SOV) vs. Share of Market (SOM)')
@@ -1889,19 +1917,65 @@ def seccion_rrhh_sostenibilidad():
         chart_comparacion_equipos(sub_amb, f'{ind} — {pais_esg}')
 
         st.divider()
-        st.subheader('Reputación ESG y cuota de mercado')
-        esg = df[(df['Estado'] == 'Informe ESG') & (df['Subgrupo'] == 'Puntuación final') & (df['Metrica'] == 'Reputación ESG') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].copy()
-        esg['Valor'] = num(esg['Valor'])
-        cols = st.columns(3)
-        for i, pais in enumerate(['EE.UU.', 'China', 'Europa']):
-            with cols[i]:
-                mkt = df[(df['Estado'] == f'Informe de mercado, {pais}') & (df['Seccion'] == f'{pais} cuotas de mercado, %') & (df['Metrica'].str.strip() == 'Total') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].rename(columns={'Valor': 'Share'})
-                mkt['Share'] = num(mkt['Share'])
-                d = esg.merge(mkt, on='Empresa').dropna()
-                if len(d) > 1:
-                    fig2 = px.scatter(d, x='Valor', y='Share', color='Empresa', color_discrete_map=COLOR_MAP, text='Empresa', title=f'ESG vs Share - {pais}')
-                    fig2.update_traces(textposition='top center', showlegend=False)
-                    mostrar(fig2)
+        # Adenda 22 (a pedido del equipo): reemplaza el scatter "Reputación ESG y cuota de mercado"
+        # (un único score agregado por País vs. Share) por dos vistas más ricas construidas sobre
+        # 'Informe ESG' -> Sección 'Impactos en la demanda', que trae el detalle línea por línea de
+        # CADA variable Ambiental/Social/Gobernanza y su % de impacto sobre la demanda -- filtrando
+        # SIEMPRE Subgrupo != 'Puntuación final' porque esas 4 filas (Ambiental (E), Social (S),
+        # Gobernanza (G), Reputación ESG) son un score en una escala absoluta (~2,5-3,7) que NO es la
+        # suma de los % de abajo (verificado: para CADIZ Ronda 1 los 5 ítems de Ambiental (E) suman
+        # -11,8%, muy distinto del score 2,52 de 'Ambiental (E)' en Puntuación final) -- mezclar
+        # ambas unidades en el mismo gráfico sería engañoso.
+        def _pct(series):
+            return pd.to_numeric(series.astype(str).str.rstrip('%'), errors='coerce')
+
+        imp_esg = df[(df['Estado'] == 'Informe ESG') & (df['Seccion'] == 'Impactos en la demanda') &
+                     (df['Subgrupo'] != 'Puntuación final') & (df['Ronda'] == ronda_snapshot)][['Empresa', 'Subgrupo', 'Metrica', 'Valor']].copy()
+        imp_esg['Valor'] = _pct(imp_esg['Valor'])
+        imp_esg = imp_esg.dropna(subset=['Valor'])
+
+        st.subheader('ESG Impact Heatmap')
+        st.caption('% de impacto de cada variable ESG sobre la demanda, ronda ' + str(ronda_snapshot) +
+                   ', los 7 equipos. Verde = impacto positivo sobre la demanda, rojo = negativo. Filas agrupadas '
+                   'por Ambiental (E) / Social (S) / Gobernanza (G) -- NO incluye los scores agregados de '
+                   '"Puntuación final" (otra escala, ver nota).')
+        if not imp_esg.empty:
+            orden_metricas = (imp_esg[['Subgrupo', 'Metrica']].drop_duplicates()
+                               .sort_values(['Subgrupo', 'Metrica'])['Metrica'].tolist())
+            piv_heat = imp_esg.pivot_table(index='Metrica', columns='Empresa', values='Valor', aggfunc='mean')
+            piv_heat = piv_heat.reindex(orden_metricas)
+            max_abs = max(1.0, float(piv_heat.abs().max().max()) if not piv_heat.empty else 1.0)
+            fig_heat = px.imshow(piv_heat, color_continuous_scale='RdYlGn', color_continuous_midpoint=0,
+                                  zmin=-max_abs, zmax=max_abs, text_auto='.1f', aspect='auto',
+                                  labels=dict(color='% impacto'))
+            fig_heat.update_xaxes(side='top')
+            fig_heat.update_layout(title=f'Impactos en la demanda, % — Ronda {ronda_snapshot}', height=420)
+            mostrar(fig_heat)
+        else:
+            st.info('Sin datos de "Impactos en la demanda" para esta ronda.')
+
+        st.divider()
+        st.subheader('Balance Neto ESG')
+        st.caption('Suma de los % de impacto sobre la demanda de cada bloque (Ambiental, Social, Gobernanza) por equipo '
+                   '-- el total de la barra es el Impacto Neto en la demanda de todo el informe ESG, no un promedio.')
+        if not imp_esg.empty:
+            balance = imp_esg.groupby(['Empresa', 'Subgrupo'], as_index=False)['Valor'].sum()
+            netos = balance.groupby('Empresa', as_index=False)['Valor'].sum().rename(columns={'Valor': 'Neto'})
+            orden_emp = netos.sort_values('Neto', ascending=False)['Empresa'].tolist()
+            colores_subgrupo = {'Ambiental (E)': MUTED_PALETTE[2] if len(MUTED_PALETTE) > 2 else BRAND_ACCENT,
+                                 'Social (S)': BRAND_ACCENT,
+                                 'Gobernanza (G)': MUTED_PALETTE[0]}
+            fig_bal = px.bar(balance, x='Empresa', y='Valor', color='Subgrupo', barmode='relative',
+                              category_orders={'Empresa': orden_emp},
+                              color_discrete_map=colores_subgrupo,
+                              title=f'Balance Neto ESG (Ambiental + Social + Gobernanza) — Ronda {ronda_snapshot}')
+            fig_bal.update_layout(yaxis_title='% impacto en la demanda (suma)')
+            fig_bal.add_trace(go.Scatter(x=netos['Empresa'], y=netos['Neto'], mode='markers+text',
+                                          text=netos['Neto'].apply(lambda v: f'{v:+.1f}%'), textposition='top center',
+                                          marker=dict(size=1, color='rgba(0,0,0,0)'), showlegend=False, hoverinfo='skip'))
+            mostrar(fig_bal)
+        else:
+            st.info('Sin datos de "Impactos en la demanda" para esta ronda.')
 # ---------------- Router ----------------
 st.title(seccion)
 if seccion == SECCIONES[0]: seccion_resultado()
