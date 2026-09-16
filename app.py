@@ -111,7 +111,7 @@ def es_modo_oscuro():
         return st.context.theme.type == 'dark'
     except Exception:
         return True
-def mostrar(fig, ocultar_eje_valores=None, en_card=True, **kwargs):
+def mostrar(fig, ocultar_eje_valores=None, en_card=True, altura=None, **kwargs):
     oscuro = es_modo_oscuro()
     # Si la figura ya trae leyenda propia posicionada abajo (y<0), necesita más alto/margen
     # para que la leyenda no quede tapando el gráfico.
@@ -124,7 +124,11 @@ def mostrar(fig, ocultar_eje_valores=None, en_card=True, **kwargs):
     # (CHART_HEIGHT, +20, +60, 280) y las que tenían leyenda abajo crecían: dos gráficos en
     # columnas contiguas terminaban de distinto alto. Ahora la tarjeta siempre mide lo mismo y
     # lo único que cambia es cuánto de ese alto se reserva abajo para la leyenda.
-    altura = ALTURA_TARJETA
+    # Adenda 23: 'altura' opcional para paneles que agrupan varios KPIs en una sola figura (ej.
+    # chart_bullet_panel) -- necesitan más alto que ALTURA_TARJETA cuando tienen muchas filas, y
+    # menos cuando tienen pocas; el resto de los llamados no pasa este parámetro y sigue con el
+    # alto fijo de siempre (ALTURA_TARJETA), sin cambio de comportamiento.
+    altura = altura or ALTURA_TARJETA
     margen_b = 110 if leyenda_abajo else 20
     color_linea_eje = '#4A4642' if oscuro else '#D8D3CC'
     fig.update_layout(template='plotly_dark' if oscuro else 'plotly_white',
@@ -307,6 +311,55 @@ def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyecta
         cumplimiento = ' — Proyectado ≤ 0, no expresable como % de avance'
     st.caption(f'{nombre_fondo}: {_fmt_valor_cg(plan, tipo)} · {nombre_frente}: {_fmt_valor_cg(real, tipo)}{cumplimiento}')
 
+def chart_bullet_panel(items):
+    """Adenda 23 (a pedido del equipo): versión COMPACTA de chart_bullet() para cuando hay VARIOS
+    KPIs para comparar Plan vs. Real a la vez (ej. la Fila 2 de 'Comparativa Plan vs. Real' de
+    Finanzas -- EBITDA, Margen bruto, ROS, etc.). Antes cada KPI dibujaba su PROPIO chart_bullet()
+    en una grilla de columnas -- con 8 KPIs eso son 2 filas de gráficos de altura completa, mucho
+    espacio vertical para escanear poco. Acá es UN solo gráfico con una fila horizontal por KPI
+    (mismo lenguaje visual: pista de Plan normalizada a 100%, relleno de Real, excedente apilado si
+    se pasa), todas comparten el mismo eje X (% del Plan) y se leen de arriba hacia abajo.
+
+    `items`: lista de dicts {'label', 'plan', 'real', 'tipo', 'color_excedente'} en el orden en que
+    deben listarse (de arriba hacia abajo). Los que tienen Plan<=0 (no expresable como % de avance,
+    ver chart_bullet) se devuelven aparte para que el llamador los grafique con chart_bullet() normal
+    -- son la excepción, no vale la pena forzarlos al panel compacto."""
+    validos = [it for it in items if it.get('plan') not in (None, 0) and it['plan'] > 0 and it.get('real') is not None]
+    if not validos:
+        return
+    color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
+    fig = go.Figure()
+    max_pct = 100.0
+    filas = [it['label'] for it in validos]
+    for i, it in enumerate(validos):
+        plan, real, tipo = float(it['plan']), float(it['real']), it['tipo']
+        pct = real / plan * 100
+        max_pct = max(max_pct, pct)
+        dentro = min(pct, 100)
+        excedente = max(0.0, pct - 100)
+        color_exc = it.get('color_excedente') or COLOR_METRICA['riesgo']
+        fig.add_trace(go.Bar(x=[100], y=[it['label']], orientation='h', base=0, width=0.55,
+                              name='Plan (100%)', marker_color='rgba(140,151,166,0.30)',
+                              showlegend=(i == 0), hoverinfo='skip'))
+        fig.add_trace(go.Bar(x=[dentro], y=[it['label']], orientation='h', base=0, width=0.55,
+                              name='Real', marker_color=BRAND_ACCENT, showlegend=(i == 0),
+                              hovertemplate=f"Real: {_fmt_valor_cg(real, tipo)} ({pct:,.0f}% del plan)<extra></extra>"))
+        if excedente > 0:
+            fig.add_trace(go.Bar(x=[excedente], y=[it['label']], orientation='h', base=100, width=0.55,
+                                  name='Excedente sobre el plan', marker_color=color_exc, showlegend=(i == 0),
+                                  hovertemplate=f'Excedente: +{pct - 100:,.1f} p.p. sobre el plan<extra></extra>'))
+        fig.add_annotation(x=max(pct, 100) + max_pct * 0.03, y=it['label'], xanchor='left', showarrow=False,
+                            text=f"{_fmt_valor_cg(real, tipo)} · {pct:,.0f}%", font=dict(size=10, color=color_ref))
+    fig.add_vline(x=100, line_dash='dot', line_width=1.5, line_color=color_ref,
+                  annotation_text='Plan', annotation_position='top',
+                  annotation_font_size=11, annotation_font_color=color_ref)
+    altura = min(520, 70 + 36 * len(validos))
+    fig.update_layout(barmode='overlay', title='Proyectado vs. Real',
+                       xaxis=dict(ticksuffix='%', range=[0, max_pct * 1.4]), xaxis_title=None,
+                       yaxis=dict(categoryorder='array', categoryarray=list(reversed(filas))),
+                       legend=dict(orientation='h', yanchor='top', y=-0.06 - 0.02 * len(validos), xanchor='center', x=0.5))
+    mostrar(fig, altura=altura)
+
 # --- COMPARATIVA PLAN VS. REAL: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs.
 # Real (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
 def _fmt_valor_cg(v, tipo):
@@ -399,12 +452,21 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
             con_ambos = {k: v for k, v in con_gap.items() if v['estado'] == 'ok' and v['tipo'] != 'texto'}
             if con_ambos:
                 st.markdown('###### Proyectado vs. Real')
-                cols_b = st.columns(min(4, len(con_ambos)))
-                for i, (clave, v) in enumerate(con_ambos.items()):
-                    with cols_b[i % len(cols_b)]:
-                        # Mismo criterio de favorabilidad que ya colorea la flecha del delta en la
-                        # tarjeta de arriba (_DELTA_COLOR_CG) -- así el excedente de la barra de
-                        # progreso no contradice al delta que el usuario ya vio un renglón más arriba.
+                # Adenda 23 (a pedido del equipo, storytelling de Finanzas): panel COMPACTO de una
+                # sola figura con una fila horizontal por KPI, en vez de un chart_bullet() por
+                # columna -- mucho menos alto para escanear varios KPIs (EBITDA, ROS, etc.) de
+                # arriba hacia abajo. Mismo criterio de favorabilidad que ya colorea la flecha del
+                # delta de la tarjeta de arriba (_DELTA_COLOR_CG), pasado como color del excedente.
+                items_panel = [
+                    {'label': v['label'], 'plan': v['proyectado'], 'real': v['real'], 'tipo': v['tipo'],
+                     'color_excedente': _COLOR_EXCEDENTE_CG.get(v['gap_favorable'])}
+                    for v in con_ambos.values()
+                ]
+                chart_bullet_panel(items_panel)
+                # Plan<=0 no es expresable como % de avance (ver chart_bullet) -- caso raro, se
+                # grafica aparte con el chart_bullet() de siempre en vez de forzarlo al panel.
+                for clave, v in con_ambos.items():
+                    if v['proyectado'] is not None and v['proyectado'] <= 0:
                         chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'],
                                      color_excedente=_COLOR_EXCEDENTE_CG.get(v['gap_favorable']))
         if sin_gap or sin_publicar:
@@ -577,28 +639,43 @@ def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy
                'arriba. Costo Proyectado + todos los desvíos = Costo Real, exacto.')
 
 def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
-    st.markdown('###### Composición del Flujo de Caja — Plan vs. Real (Global)')
+    # Adenda 23 (a pedido del equipo): reemplaza las barras agrupadas (Proyectado vs. Real, un grupo
+    # de barras por componente) por un puente/Cascada (Waterfall) que cuenta la historia de cómo se
+    # llega de CFO a CFI a CFF hasta la Variación Neta de Caja de la ronda -- una Cascada por
+    # Proyectado y otra por Real, para poder seguir mirando ambas lado a lado.
+    st.markdown('###### Composición del Flujo de Caja — Puente CFO → CFI → CFF (Global)')
     res = flujo_caja_plan_real_global(df_all, df_proy, ronda_snapshot, ronda_num, team=MY_COMPANY)
     plan, real = res['plan'], res['real']
-    etiquetas = {'cfo': 'Act. Operativas (CFO)', 'cfi': 'Act. de Inversión (CFI)', 'cff': 'Act. Financieras (CFF)'}
-    filas = []
-    for k, label in etiquetas.items():
-        if plan.get(k) is not None:
-            filas.append({'Componente': label, 'Tipo': 'Proyectado', 'Valor': plan[k]})
-        if real.get(k) is not None:
-            filas.append({'Componente': label, 'Tipo': 'Real', 'Valor': real[k]})
-    if not filas:
-        return st.info(f'Sin datos de Flujo de Caja (Plan o Real) para {ronda_snapshot}.')
-    dff = pd.DataFrame(filas)
-    fig = px.bar(dff, x='Componente', y='Valor', color='Tipo', barmode='group',
-                 color_discrete_map={'Proyectado': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
-                 text=dff['Valor'].apply(format_num), title=f'Composición del Flujo de Caja — Global, {ronda_snapshot}')
-    fig.update_traces(textposition='outside', cliponaxis=False)
-    mostrar(fig, ocultar_eje_valores='y')
-    if all(plan.get(k) is None for k in etiquetas):
-        st.caption('CADIZ no proyecta Flujo de Caja para esta ronda en el modelo de gestión (recién desde Ronda 2).')
-    if all(real.get(k) is None for k in etiquetas):
-        st.caption('CESIM todavía no publicó el RDOS real de esta ronda — se muestra solo lo proyectado.')
+
+    def _waterfall_flujo(titulo, valores):
+        if all(valores.get(k) is None for k in ('cfo', 'cfi', 'cff')):
+            return False
+        cfo, cfi, cff = valores.get('cfo') or 0.0, valores.get('cfi') or 0.0, valores.get('cff') or 0.0
+        total = cfo + cfi + cff
+        etapas = [('CFO', cfo), ('CFI', cfi), ('CFF', cff), ('= Variación Neta de Caja', total)]
+        fig = go.Figure(go.Waterfall(
+            orientation='v', measure=['absolute', 'relative', 'relative', 'total'],
+            x=[e[0] for e in etapas], y=[v for _, v in etapas],
+            text=[format_num(v) for _, v in etapas], textposition='outside',
+            # Verde = suma caja (flujo positivo), ámbar = consume caja (flujo negativo) -- mismo
+            # criterio y mismo par de colores que los demás Waterfall de la app (costo unitario,
+            # margen unitario): no es "sube/baja" sino "favorable/desfavorable" para la caja.
+            increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
+            totals={'marker': {'color': COLOR_POSITIVE if total >= 0 else BRAND_ACCENT}}))
+        fig.update_layout(title=titulo)
+        mostrar(fig, ocultar_eje_valores='y')
+        return True
+
+    col_p, col_r = st.columns(2)
+    with col_p:
+        if not _waterfall_flujo(f'Proyectado — {ronda_snapshot}', plan):
+            st.info('CADIZ no proyecta Flujo de Caja para esta ronda en el modelo de gestión (recién desde Ronda 2).')
+    with col_r:
+        if not _waterfall_flujo(f'Real — {ronda_snapshot}', real):
+            st.info('CESIM todavía no publicó el RDOS real de esta ronda.')
+    st.caption('Cada barra es cuánta caja aportó o consumió ese bloque de actividades (Operativas / Inversión / '
+               'Financieras) hasta llegar a la Variación Neta de Caja de la ronda — no es el saldo de caja del '
+               'Balance, es el cambio de esta ronda puntual.')
 
 def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None):
     """Serie histórica de una métrica para un equipo, ordenada por ronda.
@@ -1509,10 +1586,19 @@ def seccion_operaciones():
             mostrar(fig_ue, ocultar_eje_valores='y')
             costo_total_unit = -(c_prod + c_flete + c_caract)
             markup_pct = (m_bruto / costo_total_unit * 100) if costo_total_unit else None
+            # Adenda 23 (a pedido del equipo): la tarjeta de Contribución Marginal Unitaria mostraba
+            # solo el valor absoluto (USD/u.) -- se le suma el margen en % (Contribución Marginal /
+            # Precio de Venta) como delta, calculado dinámicamente para el país/tecnología elegidos,
+            # sin tocar el Waterfall de arriba (sigue siendo el desglose en USD/u.).
+            margen_pct = (m_bruto / p_venta * 100) if p_venta else None
             col_cm, col_mk = st.columns(2)
-            col_cm.metric('Contribución Marginal Unitaria', f'USD {m_bruto:,.0f}')
+            col_cm.metric('Contribución Marginal Unitaria', f'USD {m_bruto:,.0f}',
+                          delta=f'{margen_pct:,.1f}% del precio' if margen_pct is not None else None,
+                          delta_color='off')
             col_mk.metric('Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—')
-            st.caption('Mark-up = Contribución Marginal Unitaria / Costo unitario total (fabricación + logística + características).')
+            st.caption('Margen % = Contribución Marginal Unitaria / Precio de Venta. Mark-up = Contribución Marginal '
+                       'Unitaria / Costo unitario total (fabricación + logística + características) — mismo numerador, '
+                       'denominador distinto (precio vs. costo), no confundir uno con otro.')
 
         st.divider()
         st.markdown(f'**Punto de equilibrio — {empresa_analisis}, {ronda_snapshot}**')
@@ -1789,12 +1875,42 @@ def seccion_finanzas():
             mostrar(fig_tasas)
             st.caption('Tasas más altas en general reflejan menor calificación crediticia (la tarjeta de arriba).')
 
+        # Adenda 23 (a pedido del equipo): ROA no lo publica CESIM como ratio propio (verificado --
+        # no está en 'Ratios e indicadores financieros clave') así que se calcula acá con la fórmula
+        # estándar Beneficio Neto / Activos Totales (Global) -- es una métrica de análisis financiero
+        # de manual de cátedra, no una regla CESIM, así que se documenta como tal.
+        def _roa(emp):
+            ben = valor_de(pl_ronda, 'Beneficio de la ronda', emp)
+            act = valor_de(bal_ronda, 'Activos Totales', emp)
+            if ben is None or not act:
+                return None
+            return ben / act * 100
+
         datos_lp = {
             'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
             'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
+            'ROA': {e: _roa(e) for e in COMPANIES},
             'Apalancamiento': {e: valor_de(ratios_ronda, 'Endeudamiento neto/patrimonio (apalancamiento)', e) for e in COMPANIES},
             'WACC': {e: wacc(e) for e in COMPANIES},
         }
+        # Spread de Creación de Valor = ROCE - WACC (mismo par de unidades, ambos en puntos
+        # porcentuales) -- positivo significa que la empresa gana, sobre el capital que empleó, más
+        # de lo que le cuesta financiarlo (crea valor); negativo, lo contrario, aunque el ROCE en sí
+        # sea positivo. Es el mismo criterio de "creación de valor" del material de cátedra, no una
+        # cifra que publique CESIM.
+        datos_lp['Spread ROCE-WACC'] = {
+            e: (datos_lp['ROCE'][e] - datos_lp['WACC'][e])
+            if pd.notna(datos_lp['ROCE'].get(e)) and pd.notna(datos_lp['WACC'].get(e)) else None
+            for e in COMPANIES
+        }
+        spread_cadiz = datos_lp['Spread ROCE-WACC'].get(empresa_analisis)
+        if spread_cadiz is not None:
+            st.metric(f'Spread de Creación de Valor — {empresa_analisis}',
+                      f"{datos_lp['ROCE'].get(empresa_analisis):,.1f}% ROCE",
+                      delta=f"{spread_cadiz:+.1f} p.p. vs. WACC ({datos_lp['WACC'].get(empresa_analisis):,.1f}%)")
+            st.caption('Spread = ROCE − WACC. Positivo (flecha verde) = el retorno sobre el capital empleado supera '
+                       'lo que cuesta financiarlo — crea valor. Negativo (flecha roja) = destruye valor aunque el '
+                       'ROCE sea positivo.')
         ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
         if ejes_validos:
             color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
@@ -1805,7 +1921,7 @@ def seccion_finanzas():
                 vcadiz = vals.get(empresa_analisis)
                 rango = (vmax - vmin) or 1
                 pos = lambda x: (x - vmin) / rango * 100
-                suf = "%" if nombre in ['ROCE', 'ROE', 'WACC'] else "x"
+                suf = "%" if nombre in ['ROCE', 'ROE', 'WACC', 'ROA'] else ("p.p." if nombre == 'Spread ROCE-WACC' else "x")
             
                 fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
                 fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[1], line_width=2), showlegend=False))
