@@ -17,6 +17,9 @@
        migrar, no una tercera variable válida. */
     --color-cadiz: #7C5CA8;       /* Lila Ciruela CÁDIZ */
     --color-negative: #B3261E;    /* Rojo -- negativo/crítico */
+    --color-positive: #94D02D;    /* Verde lima -- positivo/favorable (Adenda 25, para las nuevas
+                                      tarjetas de KPI con doble delta -- mismo verde que ya usan
+                                      los gráficos en cascada de la app, no uno nuevo). */
     --brand-dark: #1A1714;        /* Negro/Grafito */
     --brand-light: #F5F2ED;       /* Crema */
     --brand-secondary: #7A1913;   /* Rojo oscuro */
@@ -248,6 +251,32 @@ details[data-testid="stExpander"] { border-radius: var(--radius-md) !important; 
     border: 1px solid rgba(124, 92, 168, 0.45);
 }
 .kpi-band-oscura.tema-oscuro .kpi-band-item { border-left-color: rgba(255, 255, 255, 0.18); }
+
+/* ══ TARJETA KPI CON DOS DELTAS (vs. Ronda Anterior + vs. Industria) ════════════
+   Adenda 25 (a pedido del equipo: "no quiero ver solamente la variación vs el
+   promedio, que quede la variación con ronda anterior también, en todos los
+   casos"): st.metric solo admite UN delta, así que kpi_doble_delta() arma esta
+   card en HTML -- calcada del estilo de las cards st.metric nativas (mismo borde
+   izquierdo lila, fondo, borde y sombra -- ver div[data-testid="stMetric"] más
+   arriba) para que las dos convivan sin desentonar en la misma fila de columnas. */
+.kpi-card-doble {
+    background-color: var(--secondary-background-color, rgba(128, 128, 128, 0.06));
+    border: 1px solid var(--border-soft);
+    border-left: 4px solid var(--color-cadiz);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    padding: 1rem 1.1rem;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    margin-bottom: 0.5rem;
+}
+.kpi-card-label { font-weight: 600; opacity: 0.62; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 2px; }
+.kpi-card-value { font-weight: 700; font-size: 1.5rem; letter-spacing: -0.01em; margin-bottom: 2px; }
+.kpi-card-delta { font-size: 0.8rem; font-weight: 500; line-height: 1.4; }
+.kpi-card-delta.up   { color: var(--color-positive); }
+.kpi-card-delta.down { color: var(--color-negative); }
 
 /* ══ CHIPS DE ESTRATEGIA ═══════════════════════════════════════ */
 .chip-estrategia {
