@@ -6,7 +6,17 @@
    roja/grafito en vez del verde lima de esa plataforma.
    ══════════════════════════════════════════════════════════════ */
 :root {
-    --brand-accent: #B3261E;      /* Rojo CÁDIZ */
+    /* Adenda 25 (a pedido del equipo, mockup aprobado -- Opción B "Ciruela"): --brand-accent hacía
+       doble trabajo -- acento de marca/UI (pestañas, toggles, sliders) Y semántica de "crítico/
+       negativo" (alertas) -- por eso casi todo el tablero se leía como negativo con solo mirar el
+       color. Se separan en dos variables, cada una con un solo uso:
+         --color-cadiz    -- acento de MARCA/UI (identidad CADIZ, decorativo -- pestañas activas,
+                             toggles, sliders, borde de las tarjetas de KPI, título del sidebar).
+         --color-negative -- SOLO semántica negativo/crítico (alertas críticas). Mismo rojo que antes.
+       --brand-accent queda retirado -- si aparece en algún selector es una referencia vieja sin
+       migrar, no una tercera variable válida. */
+    --color-cadiz: #7C5CA8;       /* Lila Ciruela CÁDIZ */
+    --color-negative: #B3261E;    /* Rojo -- negativo/crítico */
     --brand-dark: #1A1714;        /* Negro/Grafito */
     --brand-light: #F5F2ED;       /* Crema */
     --brand-secondary: #7A1913;   /* Rojo oscuro */
@@ -52,7 +62,7 @@ section[data-testid="stSidebar"] {
 }
 section[data-testid="stSidebar"] * { color: var(--brand-light) !important; }
 section[data-testid="stSidebar"] h3 {
-    border-bottom: 3px solid var(--brand-accent);
+    border-bottom: 3px solid var(--color-cadiz);
     padding-bottom: 6px;
     display: inline-block;
     letter-spacing: 0.01em !important;
@@ -106,7 +116,7 @@ div[data-testid="stMetric"] {
     box-shadow: var(--shadow-card) !important;
 }
 div[data-testid="stMetric"] {
-    border-left: 4px solid var(--brand-accent) !important;
+    border-left: 4px solid var(--color-cadiz) !important;
     padding: 1rem 1.1rem !important;
     min-height: 100px; /* cards parejas dentro de la misma fila de KPIs, con o sin delta */
     display: flex;
@@ -131,7 +141,7 @@ div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 50
    quedaba texto blanco sobre fondo blanco y la pestaña activa se volvía invisible en modo claro.
    Hay que apuntar al botón de la pestaña, y forzar el color también en los hijos. */
 .stTabs [data-baseweb="tab"][aria-selected="true"] {
-    background-color: var(--brand-accent) !important;
+    background-color: var(--color-cadiz) !important;
     color: #FFFFFF !important;
     font-weight: 600 !important;
 }
@@ -143,11 +153,11 @@ div[data-testid="stMetricDelta"] { font-size: 0.8rem !important; font-weight: 50
 .stTabs [data-baseweb="tab-border"] { display: none !important; }
 
 /* ══ RADIO / TOGGLE / SLIDER ═══════════════════════════════════ */
-div[role="radiogroup"] label:hover { background-color: rgba(179, 38, 30, 0.08) !important; border-radius: var(--radius-sm); }
-[data-testid="stToggle"] label div[data-checked="true"] { background-color: var(--brand-accent) !important; }
+div[role="radiogroup"] label:hover { background-color: rgba(124, 92, 168, 0.08) !important; border-radius: var(--radius-sm); }
+[data-testid="stToggle"] label div[data-checked="true"] { background-color: var(--color-cadiz) !important; }
 div[data-baseweb="slider"] div[role="slider"], div[data-baseweb="slider"] > div > div {
-    background-color: var(--brand-accent) !important;
-    border-color: var(--brand-accent) !important;
+    background-color: var(--color-cadiz) !important;
+    border-color: var(--color-cadiz) !important;
 }
 
 /* ══ ALERTAS — más redondeadas, en línea con el resto ══════════ */
@@ -173,28 +183,32 @@ details[data-testid="stExpander"] { border-radius: var(--radius-md) !important; 
 .stat-segment-label { font-weight: 600; opacity: 0.62; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 10px; }
 .stat-segment-bar { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: rgba(128, 128, 128, 0.18); margin-bottom: 9px; }
 .stat-segment-bar .seg { height: 100%; }
-.stat-segment-bar .seg.critico { background-color: var(--brand-accent); }
+.stat-segment-bar .seg.critico { background-color: var(--color-negative); }
 .stat-segment-bar .seg.aviso   { background-color: #C9922E; }
 .stat-segment-bar .seg.ok      { background-color: #4E9A4E; }
 .stat-segment-legend { display: flex; gap: 20px; font-size: 0.85rem; font-weight: 600; }
 .stat-segment-legend .pt { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
-.stat-segment-legend .critico { color: var(--brand-accent); } .stat-segment-legend .critico .pt { background-color: var(--brand-accent); }
+.stat-segment-legend .critico { color: var(--color-negative); } .stat-segment-legend .critico .pt { background-color: var(--color-negative); }
 .stat-segment-legend .aviso   { color: #C9922E; } .stat-segment-legend .aviso .pt { background-color: #C9922E; }
 .stat-segment-legend .ok      { color: #4E9A4E; } .stat-segment-legend .ok .pt { background-color: #4E9A4E; }
 /* Variante "uso/libre": a diferencia de Estado de Alertas, acá el 100% SÍ es un universo fijo
-   real (capacidad instalada de la planta) -- ver seccion_operaciones() en app.py. */
+   real (capacidad instalada de la planta) -- ver seccion_operaciones() en app.py. "Usado" no es
+   ni identidad ni negativo/positivo (más uso de capacidad no es "malo" en sí) -- antes compartía
+   el rojo/lila de marca sin necesidad; ahora un azul neutro propio (Adenda 25). */
 .stat-segment-value { font-size: 1.6rem; font-weight: 700; margin-bottom: 6px; }
-.stat-segment-bar .seg.uso    { background-color: var(--brand-accent); }
+.stat-segment-bar .seg.uso    { background-color: #3E7CB1; }
 .stat-segment-bar .seg.libre  { background-color: rgba(128, 128, 128, 0.35); }
-.stat-segment-legend .uso     { color: var(--brand-accent); } .stat-segment-legend .uso .pt   { background-color: var(--brand-accent); }
+.stat-segment-legend .uso     { color: #3E7CB1; } .stat-segment-legend .uso .pt   { background-color: #3E7CB1; }
 .stat-segment-legend .libre   { opacity: 0.65; } .stat-segment-legend .libre .pt { background-color: rgba(128, 128, 128, 0.5); }
 
 /* ══ PANEL DE ALERTAS ══════════════════════════════════════════ */
 .alerta-fila {
+    /* Base = severidad "crítico" (ver clases en panel_alertas(), app.py: 'critico' usa esta clase
+       sin modificador) -- semántica negativa, no identidad, así que usa --color-negative. */
     display: flex; align-items: center; gap: 10px;
     padding: 9px 14px; margin-bottom: 6px;
     border-radius: var(--radius-sm);
-    border-left: 3px solid var(--brand-accent);
+    border-left: 3px solid var(--color-negative);
     background-color: rgba(179, 38, 30, 0.07);
     font-size: 0.88rem;
 }
@@ -226,11 +240,12 @@ details[data-testid="stExpander"] { border-radius: var(--radius-md) !important; 
 /* Con el TEMA NATIVO de Streamlit en oscuro, el resto de la página ya es oscura -- un panel
    "más oscuro todavía" no se distingue de las tarjetas de al lado (verificado activando Dark desde
    el menú de Streamlit: la banda literalmente desaparecía). Se resuelve distinguiendo por COLOR
-   (rojo de marca, en vez de más oscuridad): vidrio esmerilado con tinte rojo y borde del mismo tono.
+   (lila de marca, en vez de más oscuridad): vidrio esmerilado con tinte lila y borde del mismo tono
+   -- antes era rojo (Adenda 25: es identidad de marca, no negativo, así que pasa a --color-cadiz).
    app.py agrega la clase "tema-oscuro" cuando es_modo_oscuro() es True. */
 .kpi-band-oscura.tema-oscuro {
-    background: linear-gradient(135deg, rgba(179, 38, 30, 0.32), rgba(179, 38, 30, 0.10));
-    border: 1px solid rgba(179, 38, 30, 0.45);
+    background: linear-gradient(135deg, rgba(124, 92, 168, 0.32), rgba(124, 92, 168, 0.10));
+    border: 1px solid rgba(124, 92, 168, 0.45);
 }
 .kpi-band-oscura.tema-oscuro .kpi-band-item { border-left-color: rgba(255, 255, 255, 0.18); }
 
