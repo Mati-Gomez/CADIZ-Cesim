@@ -44,10 +44,21 @@ MUTED_PALETTE = ['#8C97A6', '#A68C6E', '#7E9E8C', '#9E8CA0', '#A69B6E', '#7E8C9E
 # Fix adicional (feedback "ya casi"): sacar el marrón no alcanzaba -- MUTED_PALETTE[5] y [0] son dos
 # grises azulados casi idénticos (distancia RGB ~19.5, muy por debajo del resto de la paleta) y
 # MUTED_PALETTE[4] (kaki) está a solo ~15 de distancia del marrón baneado, o sea que seguía leyéndose
-# como una variante de marrón. Se reemplazan ambos por dos tonos nuevos, verificados por distancia
-# RGB para separarse bien entre sí y de los colores reservados (lila CADIZ, verde/rojo de sentimiento):
-# '#58759D' (azul acero) y '#B67C8F' (rosa apagado).
-MUTED_SIN_MARRON = [MUTED_PALETTE[0], MUTED_PALETTE[2], '#B67C8F', MUTED_PALETTE[3], '#58759D']
+# como una variante de marrón. Se reemplazaron por '#58759D' (azul acero) y '#B67C8F' (rosa apagado).
+# Adenda 28 (feedback "poca diferencia entre colores, seguí una paleta única"): la versión anterior
+# de MUTED_SIN_MARRON (gris azulado + sage + rosa apagado + lila grisáceo + azul acero) fue auditada
+# con el validador de contraste de la skill dataviz (validate_palette.js, método OKLab/CVD) y
+# reprobó: el par gris/sage medía apenas ΔE 5.3 en visión normal (piso mínimo aceptable: 15) y el
+# par ámbar/sage del gráfico de WACC medía ΔE 13.4, también por debajo del piso. Paleta nueva,
+# verificada con el mismo validador (5 colores, modo claro, lista de pares adyacentes -- el uso real
+# es en barras/torta/chips, no en dispersión, así que ese es el criterio correcto de la skill):
+# TODOS los checks pasan (Lightness band, Chroma floor, CVD separation, Normal-vision floor). Los
+# primeros dos colores son deliberadamente los mismos hex que COLOR_METRICA['riesgo'] (ámbar) y
+# COLOR_METRICA['dinero'] (azul, definido más abajo -- no se puede referenciar el dict acá porque
+# todavía no existe en este punto del archivo) -- ya usados en el resto de la app -- para que el
+# gráfico de Mix tecnológico y el de Deuda/Equity del WACC compartan una paleta única y reconocible,
+# en vez de dos sets de colores distintos sin relación entre sí.
+MUTED_SIN_MARRON = ['#C9922E', '#3E7CB1', '#1BAF7A', '#E87BA4', '#4A3AA7']
 # Color por CONCEPTO, no por orden de aparición. El lila de marca queda reservado para
 # identificar a CÁDIZ entre los equipos; las métricas usan colores con significado propio
 # y estable en toda la app (antes el rojo era "Salario" en un gráfico y "Rotación" en el de al lado).
@@ -2366,8 +2377,12 @@ def seccion_finanzas():
                 fig_wacc_c.add_trace(go.Bar(x=[peso_deuda], y=['Estructura'], orientation='h', name='Deuda',
                                              marker_color=COLOR_METRICA['riesgo'],
                                              text=f'Deuda {peso_deuda:.0f}%', textposition='inside'))
+                # Adenda 28 (feedback "más contraste, paleta única"): Equity pasa de MUTED_PALETTE[2]
+                # (sage -- reprobó el validador de contraste, ΔE 13.4 contra el ámbar de Deuda, por
+                # debajo del piso de 15) a COLOR_METRICA['dinero'] (azul), el mismo azul que ahora abre
+                # MUTED_SIN_MARRON -- así este gráfico y el de Mix tecnológico comparten paleta.
                 fig_wacc_c.add_trace(go.Bar(x=[peso_equity], y=['Estructura'], orientation='h', name='Patrimonio Neto (Equity)',
-                                             marker_color=MUTED_PALETTE[2],
+                                             marker_color=COLOR_METRICA['dinero'],
                                              text=f'Equity {peso_equity:.0f}%', textposition='inside'))
                 fig_wacc_c.update_layout(barmode='stack', showlegend=False,
                                           title=f'Composición de Estructura de Capital (ponderación del WACC) — {empresa_analisis}',
