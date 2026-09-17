@@ -16,14 +16,26 @@ from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OP
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
-BRAND_ACCENT = '#B3261E'       # Rojo CÁDIZ
+# Adenda 25 (a pedido del equipo, mockup aprobado -- Opción B "Ciruela"): antes un solo rojo
+# (BRAND_ACCENT) hacía DOBLE trabajo -- identificar a CÁDIZ Y marcar negativo/crítico -- por eso
+# casi todo el tablero "se veía mal" con solo ver el color. Se separan en dos constantes con un
+# solo uso cada una:
+#   COLOR_CADIZ    -- SOLO identidad ("esto es CADIZ", o el equipo en foco cuando coincide con
+#                     CADIZ). Nunca se usa para positivo/negativo.
+#   COLOR_NEGATIVE -- SOLO semántica negativo/crítico, universal para cualquier equipo (antes
+#                     BRAND_ACCENT). COLOR_POSITIVE (verde) es su contraparte, sin cambios.
+# BRAND_ACCENT queda retirado del código -- si aparece en algún lugar es una referencia vieja sin
+# migrar, no una tercera opción válida.
+COLOR_CADIZ = '#7C5CA8'        # Lila Ciruela -- identidad CADIZ
+COLOR_NEGATIVE = '#B3261E'     # Rojo -- semántica negativo/crítico (mismo rojo que antes, ahora sin
+                                # doble uso)
 COLOR_POSITIVE = '#94D02D'     # Verde Lima
 BRAND_DARK = '#1A1714'         # Negro Grafito
 BRAND_LIGHT = '#F5F2ED'        # Crema
 # Tonos apagados pero CON matiz (no gris puro) para distinguir competidores de un vistazo,
-# sin competir visualmente con el rojo CADIZ.
+# sin competir visualmente con el lila de identidad de CADIZ.
 MUTED_PALETTE = ['#8C97A6', '#A68C6E', '#7E9E8C', '#9E8CA0', '#A69B6E', '#7E8C9E']
-# Color por CONCEPTO, no por orden de aparición. El rojo de marca queda reservado para
+# Color por CONCEPTO, no por orden de aparición. El lila de marca queda reservado para
 # identificar a CÁDIZ entre los equipos; las métricas usan colores con significado propio
 # y estable en toda la app (antes el rojo era "Salario" en un gráfico y "Rotación" en el de al lado).
 COLOR_METRICA = {
@@ -31,11 +43,21 @@ COLOR_METRICA = {
     'personas':    '#8C97A6',   # gris azulado — headcount, contrataciones
     'eficiencia':  '#4E9A4E',   # verde — indicadores donde más es mejor
     'riesgo':      '#C9922E',   # ámbar — rotación, deuda, alertas blandas
-    'critico':     BRAND_ACCENT # rojo  — problemas y la propia CÁDIZ
+    'critico':     COLOR_NEGATIVE # rojo  — problemas (ya no comparte color con "es CADIZ")
 }
-COLOR_MAP = {MY_COMPANY: BRAND_ACCENT}
+COLOR_MAP = {MY_COMPANY: COLOR_CADIZ}
 for i, c in enumerate([c for c in COMPANIES if c != MY_COMPANY]):
     COLOR_MAP[c] = MUTED_PALETTE[i % len(MUTED_PALETTE)]
+
+def _hex_a_rgba(hex_color, alpha):
+    """Convierte '#RRGGBB' a 'rgba(r,g,b,alpha)' -- para fills semitransparentes que tienen que
+    matchear el color de línea que sea (antes varios fills estaban hardcodeados al rojo/lila de
+    marca sin importar qué color se pasara)."""
+    h = (hex_color or '').lstrip('#')
+    if len(h) != 6:
+        return f'rgba(140,151,166,{alpha})'
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f'rgba({r},{g},{b},{alpha})'
 CHART_HEIGHT = 260      # alto del área de ploteo de referencia
 ALTURA_TARJETA = 370    # alto FIJO de toda tarjeta de gráfico, con o sin leyenda abajo:
                         # es lo que garantiza que dos gráficos en columnas queden parejos
@@ -111,7 +133,7 @@ def es_modo_oscuro():
         return st.context.theme.type == 'dark'
     except Exception:
         return True
-def mostrar(fig, ocultar_eje_valores=None, en_card=True, altura=None, **kwargs):
+def mostrar(fig, ocultar_eje_valores=None, en_card=True, altura=None, margen_b=None, **kwargs):
     oscuro = es_modo_oscuro()
     # Si la figura ya trae leyenda propia posicionada abajo (y<0), necesita más alto/margen
     # para que la leyenda no quede tapando el gráfico.
@@ -129,7 +151,15 @@ def mostrar(fig, ocultar_eje_valores=None, en_card=True, altura=None, **kwargs):
     # menos cuando tienen pocas; el resto de los llamados no pasa este parámetro y sigue con el
     # alto fijo de siempre (ALTURA_TARJETA), sin cambio de comportamiento.
     altura = altura or ALTURA_TARJETA
-    margen_b = 110 if leyenda_abajo else 20
+    # Adenda 24: 'margen_b' opcional -- BUG REPORTADO (leyenda y anotaciones tapando las barras en
+    # chart_bullet_panel): el margen inferior fijo (110px) se restaba de un 'altura' que en paneles
+    # de pocas filas quedaba demasiado chica, dejando un área de ploteo casi nula -- ahí cualquier
+    # offset de leyenda (que es una FRACCIÓN del área de ploteo, no de la figura entera) terminaba en
+    # unos pocos píxeles, es decir prácticamente pegado al eje X, encima de las barras y anotaciones.
+    # Quien llama con pocas filas ahora puede pedir un margen distinto sin afectar los ~40 llamados
+    # existentes que no lo pasan (siguen con 110/20 de siempre).
+    if margen_b is None:
+        margen_b = 110 if leyenda_abajo else 20
     color_linea_eje = '#4A4642' if oscuro else '#D8D3CC'
     fig.update_layout(template='plotly_dark' if oscuro else 'plotly_white',
                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
@@ -197,7 +227,7 @@ def chart_evolucion_proyeccion(df_proy: pd.DataFrame, metric: str, region: str, 
     if sub.empty:
         return st.info('Sin datos para evolución.')
     fig = go.Figure(go.Scatter(x=sub['round'], y=sub['value'], mode='lines+markers', name=team,
-                                line=dict(color=COLOR_MAP.get(team, BRAND_ACCENT), width=3), marker=dict(size=6)))
+                                line=dict(color=COLOR_MAP.get(team, COLOR_CADIZ), width=3), marker=dict(size=6)))
     fig.update_layout(title=f'Evolución de la proyección — {titulo}', xaxis_title='Ronda')
     mostrar(fig)
 def _techo_apilado(y):
@@ -236,13 +266,19 @@ def chart_dos_metricas_apiladas(titulo, x_a, y_a, nombre_a, color_a, tipo_a,
     mostrar(fig)
 def sparkline(valores, color=None, invertir=False):
     """Minigráfico de tendencia para meter dentro de una tarjeta de KPI.
-    Con 12-15 rondas, un número solo no dice nada: la forma de la serie sí."""
+    Con 12-15 rondas, un número solo no dice nada: la forma de la serie sí.
+
+    Adenda 25: el default ya NO es el lila/rojo de marca -- sparkline() es un helper genérico que no
+    sabe de qué equipo es la serie (los dos llamadores lo usan para el equipo EN FOCO, que puede no
+    ser CADIZ), así que asumir un color de identidad acá era el mismo bug de fondo que motivó esta
+    limpieza de paleta. El default es un gris neutro; quien llama y sabe de qué equipo se trata debe
+    pasar `color=COLOR_MAP.get(ese_equipo, ...)` explícito (ver _seccion_resultado_resumen)."""
     serie = [v for v in valores if v is not None and not pd.isna(v)]
     if len(serie) < 2:
         return None
-    color = color or BRAND_ACCENT
+    color = color or MUTED_PALETTE[0]
     fig = go.Figure(go.Scatter(y=serie, mode='lines', line=dict(color=color, width=2),
-                                fill='tozeroy', fillcolor='rgba(179,38,30,0.10)', hoverinfo='skip'))
+                                fill='tozeroy', fillcolor=_hex_a_rgba(color, 0.12), hoverinfo='skip'))
     fig.update_layout(height=46, margin=dict(l=0, r=0, t=0, b=0),
                        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
                        xaxis=dict(visible=False), yaxis=dict(visible=False, autorange='reversed' if invertir else True),
@@ -278,8 +314,11 @@ def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyecta
         excedente = max(0.0, pct_real - 100)
         fig.add_trace(go.Bar(x=[100], y=[''], orientation='h', name=nombre_fondo, base=0, width=0.55,
                               marker_color='rgba(140,151,166,0.30)', hoverinfo='skip'))
+        # COLOR_CADIZ (identidad, no semántica): esta barra "Real" en chart_bullet() siempre es de
+        # CADIZ -- es el único equipo con Plan/Proyección cargado, así que Plan vs. Real acá nunca
+        # compara a otro equipo (Adenda 25).
         fig.add_trace(go.Bar(x=[dentro], y=[''], orientation='h', name=nombre_frente, base=0, width=0.55,
-                              marker_color=BRAND_ACCENT,
+                              marker_color=COLOR_CADIZ,
                               hovertemplate=f'{nombre_frente}: {_fmt_valor_cg(real, tipo)}<extra></extra>'))
         if excedente > 0:
             fig.add_trace(go.Bar(x=[excedente], y=[''], orientation='h', name='Excedente sobre el plan',
@@ -305,7 +344,7 @@ def chart_bullet(titulo, valor_fondo, valor_frente, tipo, nombre_fondo='Proyecta
     else:
         # Proyectado <= 0: expresarlo como % del plan no tiene sentido (división por ~0) -- se cae a
         # una barra simple en valor absoluto, sin pista de referencia, y se avisa en el caption.
-        fig.add_trace(go.Bar(x=[real], y=[''], orientation='h', name=nombre_frente, marker_color=BRAND_ACCENT, width=0.55))
+        fig.add_trace(go.Bar(x=[real], y=[''], orientation='h', name=nombre_frente, marker_color=COLOR_CADIZ, width=0.55))
         fig.update_layout(title=titulo, xaxis_title=None, showlegend=False)
         mostrar(fig, ocultar_eje_valores='y')
         cumplimiento = ' — Proyectado ≤ 0, no expresable como % de avance'
@@ -342,7 +381,7 @@ def chart_bullet_panel(items):
                               name='Plan (100%)', marker_color='rgba(140,151,166,0.30)',
                               showlegend=(i == 0), hoverinfo='skip'))
         fig.add_trace(go.Bar(x=[dentro], y=[it['label']], orientation='h', base=0, width=0.55,
-                              name='Real', marker_color=BRAND_ACCENT, showlegend=(i == 0),
+                              name='Real', marker_color=COLOR_CADIZ, showlegend=(i == 0),
                               hovertemplate=f"Real: {_fmt_valor_cg(real, tipo)} ({pct:,.0f}% del plan)<extra></extra>"))
         if excedente > 0:
             fig.add_trace(go.Bar(x=[excedente], y=[it['label']], orientation='h', base=100, width=0.55,
@@ -353,12 +392,28 @@ def chart_bullet_panel(items):
     fig.add_vline(x=100, line_dash='dot', line_width=1.5, line_color=color_ref,
                   annotation_text='Plan', annotation_position='top',
                   annotation_font_size=11, annotation_font_color=color_ref)
-    altura = min(520, 70 + 36 * len(validos))
+    # Adenda 24 -- BUG REPORTADO Y CONFIRMADO (leyenda y anotaciones superpuestas a las barras, con
+    # apenas 1-2 filas): el alto total se calculaba SIN separar "área de ploteo" de "margen para la
+    # leyenda" -- mostrar() reserva un margen inferior FIJO (110px, ver esa función) para la leyenda,
+    # pero con pocas filas el 'altura' de acá (70+36xn) apenas superaba ese margen fijo, dejando un
+    # área de ploteo casi nula. Como la posición de la leyenda (fig.layout.legend.y) es una FRACCIÓN
+    # del área de ploteo (no de la figura completa), un área de ploteo de pocos píxeles convertía
+    # cualquier offset negativo en apenas 1-2 píxeles reales -- la leyenda terminaba pegada al eje X,
+    # justo encima de las barras y las anotaciones de valor. Ahora se separan explícitamente: un área
+    # de ploteo mínima garantizada (para que las filas no queden apretadas) + un margen inferior propio
+    # (en vez del fijo de mostrar()) dimensionado para la leyenda, y la posición de la leyenda se
+    # calcula en función del área de ploteo real (no de un % arbitrario) para que caiga siempre dentro
+    # de ese margen, sea cual sea la cantidad de filas.
+    n = len(validos)
+    plot_alto = max(120, 34 * n)              # área de ploteo: nunca menos de 120px, aunque haya 1 fila
+    margen_b = 70                              # espacio fijo para la leyenda horizontal de abajo
+    altura = min(620, 45 + margen_b + plot_alto)
+    y_leyenda = -34 / plot_alto                # ~34px por debajo del eje X, constante en píxeles
     fig.update_layout(barmode='overlay', title='Proyectado vs. Real',
                        xaxis=dict(ticksuffix='%', range=[0, max_pct * 1.4]), xaxis_title=None,
                        yaxis=dict(categoryorder='array', categoryarray=list(reversed(filas))),
-                       legend=dict(orientation='h', yanchor='top', y=-0.06 - 0.02 * len(validos), xanchor='center', x=0.5))
-    mostrar(fig, altura=altura)
+                       legend=dict(orientation='h', yanchor='top', y=y_leyenda, xanchor='center', x=0.5))
+    mostrar(fig, altura=altura, margen_b=margen_b)
 
 # --- COMPARATIVA PLAN VS. REAL: Proyectado (CADIZ_Gestion_v2.xlsx, vía export_proyeccion.py) vs.
 # Real (RDOS de CESIM, ya parseados más arriba por cesim_parser) ---
@@ -394,9 +449,9 @@ def _fmt_delta_cg(v):
 _DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
 # Mismo mapeo de favorabilidad que _DELTA_COLOR_CG, pero como color de relleno para el segmento de
 # excedente de chart_bullet(): si más Real es mejor (real_mayor), pasarse del plan es favorable
-# (verde). Para 'real_menor' (ej. deuda no planificada) se probó primero con BRAND_ACCENT (rojo) para
-# marcarlo como desfavorable, pero es EL MISMO rojo que ya usa el relleno "Real" del propio bullet --
-# el segmento de excedente quedaba invisible, fundido con la barra (ver test visual). Ámbar neutro
+# (verde). Para 'real_menor' (ej. deuda no planificada) se probó primero con COLOR_NEGATIVE (rojo) para
+# marcarlo como desfavorable, pero el relleno "Real" del propio bullet ya usa un color fijo (COLOR_CADIZ) --
+# el segmento de excedente quedaba muy parecido, poco distinguible (ver test visual). Ámbar neutro
 # funciona para ambos casos sin esa colisión: sigue leyéndose como "atención, se pasó de la
 # referencia" sea o no favorable (la flecha de color del delta, un renglón más arriba, ya dice si eso
 # es bueno o malo).
@@ -526,7 +581,7 @@ def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
         # (COLOR_POSITIVE): a simple vista ambos leían "verde" y no se distinguía cuál desvío ayudó y
         # cuál perjudicó. Ahora es el mismo par verde/ámbar que el resto de los gráficos de desvío.
         increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
-        totals={'marker': {'color': BRAND_ACCENT}}))
+        totals={'marker': {'color': COLOR_CADIZ}}))  # total = "Ingresos Reales" -- identidad CADIZ, no sentimiento
     fig.update_layout(title=f'Ingresos — Proyectado vs. Real, {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]})')
     mostrar(fig, ocultar_eje_valores='y')
     st.caption(f'Verde = desvío que sumó Ingresos; ámbar = desvío que restó. En moneda nativa de {mercado_sel} '
@@ -552,7 +607,7 @@ def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
         return st.info('Sin datos suficientes.')
     dfc = pd.DataFrame(filas)
     fig = px.bar(dfc, x='Tecnología', y='Cuota', color='Tipo', barmode='group',
-                 color_discrete_map={'Proyectado': MUTED_PALETTE[0], 'Real': BRAND_ACCENT},
+                 color_discrete_map={'Proyectado': MUTED_PALETTE[0], 'Real': COLOR_CADIZ},
                  text=dfc['Cuota'].apply(lambda v: f'{v:.1f}%'), title=f'Cuota de mercado — {mercado_sel}, {ronda_snapshot}')
     fig.update_traces(textposition='outside', cliponaxis=False)
     fig.update_layout(yaxis_title='% del mercado total')
@@ -630,7 +685,7 @@ def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy
         # verde grisáceo) para el costo que SUBE y COLOR_POSITIVE (verde pleno) para el que BAJA --
         # dos verdes casi del mismo matiz para significados opuestos, imposible de leer de un vistazo.
         increasing={'marker': {'color': COLOR_METRICA['riesgo']}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
-        totals={'marker': {'color': BRAND_ACCENT}}))
+        totals={'marker': {'color': COLOR_CADIZ}}))  # total = "Costo Real" -- identidad CADIZ, no sentimiento
     fig.update_layout(title=f'Costo unitario de fabricación — {area_sel}, {ronda_snapshot}')
     mostrar(fig, ocultar_eje_valores='y')
     st.caption('Cada barra "Desvío {tecnología}" es cuánto empujó esa tecnología el costo unitario ponderado '
@@ -661,7 +716,7 @@ def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
             # criterio y mismo par de colores que los demás Waterfall de la app (costo unitario,
             # margen unitario): no es "sube/baja" sino "favorable/desfavorable" para la caja.
             increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
-            totals={'marker': {'color': COLOR_POSITIVE if total >= 0 else BRAND_ACCENT}}))
+            totals={'marker': {'color': COLOR_POSITIVE if total >= 0 else COLOR_NEGATIVE}}))
         fig.update_layout(title=titulo)
         mostrar(fig, ocultar_eje_valores='y')
         return True
@@ -690,6 +745,22 @@ def serie_metrica(estado, metrica, empresa=None, hasta_orden=None, seccion=None)
     if hasta_orden is not None:
         d = d[d['Ronda_Orden'] <= hasta_orden]
     return d.sort_values('Ronda_Orden')['Valor'].tolist()
+
+def ronda_anterior_de(ronda):
+    """Adenda 24 -- helper genérico para el patrón 'variación vs. ronda anterior' que ya usaba
+    _seccion_resultado_resumen() de forma manual (ver más abajo) -- se extrae acá para reusarlo en
+    todos los KPIs del tablero que necesiten ese delta, sin repetir la lógica de Ronda_Orden en cada
+    lugar. Devuelve el NOMBRE de la ronda anterior (ej. 'Ronda 1'), o None si `ronda` es la primera
+    ronda disponible en los datos cargados (no hay anterior con la cual comparar)."""
+    ordenes = sorted(df['Ronda_Orden'].dropna().unique())
+    sub_act = df[df['Ronda'] == ronda]['Ronda_Orden']
+    if sub_act.empty or sub_act.iloc[0] not in ordenes:
+        return None
+    idx = ordenes.index(sub_act.iloc[0])
+    if idx == 0:
+        return None
+    sub_prev = df[df['Ronda_Orden'] == ordenes[idx - 1]]['Ronda']
+    return sub_prev.iloc[0] if not sub_prev.empty else None
 
 def kpi_con_tendencia(col, label, valor_txt, serie, delta=None, color=None, invertir=False):
     """Tarjeta de KPI + sparkline debajo, para ver nivel y tendencia sin cambiar de sección."""
@@ -1087,8 +1158,13 @@ def _seccion_resultado_resumen():
     # Posición en el ranking y Retorno de la ronda son más de contexto que de "número que decide
     # la creación de valor" -- se quedan como tarjetas claras con sparkline, más chicas.
     c2, c5 = st.columns(2)
+    # color=COLOR_MAP.get(empresa_analisis): antes el sparkline caía al default de la función, que
+    # (Adenda 25) dejó de asumir el lila/rojo de marca -- acá SÍ corresponde el color de identidad del
+    # equipo en foco (COLOR_MAP ya resuelve lila para CADIZ y el tono muted que le toque a cualquier
+    # otro equipo), así que se pasa explícito.
     # invertir: en el ranking, "para arriba" en el gráfico tiene que ser mejorar de puesto
-    kpi_con_tendencia(c2, 'Posición en el ranking', f'{pos}° de {len(COMPANIES)}', serie_puesto, invertir=True)
+    kpi_con_tendencia(c2, 'Posición en el ranking', f'{pos}° de {len(COMPANIES)}', serie_puesto,
+                       color=COLOR_MAP.get(empresa_analisis), invertir=True)
 
     prom_ret_ronda = np.nanmean([v for v in retorno_ronda_vals.values() if v is not None]) if any(v is not None for v in retorno_ronda_vals.values()) else None
     val_ret_ronda = retorno_ronda_vals.get(empresa_analisis)
@@ -1098,7 +1174,8 @@ def _seccion_resultado_resumen():
     kpi_con_tendencia(c5, 'Retorno de la acción',
                        f'{val_ret_ronda:+,.1f}%' if val_ret_ronda is not None else '—',
                        serie_metrica('Ratios e indicadores financieros clave', 'Precio de la acción al final de la ronda, USD', empresa_analisis),
-                       delta=f'{delta_ret_ronda:+.1f}% vs Prom' if delta_ret_ronda is not None else None)
+                       delta=f'{delta_ret_ronda:+.1f}% vs Prom' if delta_ret_ronda is not None else None,
+                       color=COLOR_MAP.get(empresa_analisis))
     st.caption('El retorno acumulado es per-annum y no es aditivo entre rondas — para ver cómo fue *esta* ronda usá '
                '"Retorno de la acción", que es variación simple de precio. En la primera ronda del ecosistema no hay '
                'ronda previa con la cual compararla.')
@@ -1119,7 +1196,7 @@ def _seccion_resultado_resumen():
                 y=[ingresos, -costos_prod, -costos_op, -depr, -ints, -imp, ben],
                 text=[format_num(v) for v in [ingresos, -costos_prod, -costos_op, -depr, -ints, -imp, ben]], textposition='outside',
                 decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
-                totals={'marker': {'color': COLOR_POSITIVE if ben > 0 else BRAND_ACCENT}}
+                totals={'marker': {'color': COLOR_POSITIVE if ben > 0 else COLOR_NEGATIVE}}
             ))
             fig.update_layout(title=f'Puente de Beneficio Neto — {empresa_analisis}')
             mostrar(fig, ocultar_eje_valores='y')
@@ -1165,14 +1242,17 @@ def _seccion_resultado_resumen():
         for _, r in dfd.iterrows():
             es_cadiz = r['Empresa'] == MY_COMPANY
             fig_d.add_trace(go.Scatter(x=[r['Unidades'], r['Valor']], y=[r['Empresa'], r['Empresa']], mode='lines',
-                                        line=dict(color=BRAND_ACCENT if es_cadiz else 'rgba(140,151,166,0.45)',
+                                        line=dict(color=COLOR_CADIZ if es_cadiz else 'rgba(140,151,166,0.45)',
                                                   width=2.5 if es_cadiz else 1.5),
                                         showlegend=False, hoverinfo='skip'))
+        # OJO: estos dos marcadores son por TIPO de medida (unidades vs. valor), para los 7 equipos a
+        # la vez -- no son identidad de CADIZ (esa ya se marca en la línea de arriba, por es_cadiz),
+        # así que van con tonos muted genéricos, no con el lila de marca.
         fig_d.add_trace(go.Scatter(x=dfd['Unidades'], y=dfd['Empresa'], mode='markers', name='Cuota por unidades, %',
                                     marker=dict(size=11, color=MUTED_PALETTE[0]),
                                     hovertemplate='%{y} — Unidades: %{x:.1f}%<extra></extra>'))
         fig_d.add_trace(go.Scatter(x=dfd['Valor'], y=dfd['Empresa'], mode='markers', name='Cuota por valor ($), %',
-                                    marker=dict(size=11, color=BRAND_ACCENT, symbol='diamond'),
+                                    marker=dict(size=11, color=MUTED_PALETTE[1], symbol='diamond'),
                                     hovertemplate='%{y} — Valor: %{x:.1f}%<extra></extra>'))
         fig_d.update_layout(title=f'Cuota de mercado global — unidades vs. valor, {ronda_snapshot}', xaxis_title='%',
                              legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
@@ -1197,7 +1277,10 @@ def _seccion_resultado_resumen():
         piv = piv.reindex(piv.mean(axis=1).sort_values(ascending=False).index)  # ranking, no alfabético
         fig_hm = go.Figure(go.Heatmap(
             z=piv.values, x=list(piv.columns), y=list(piv.index),
-            colorscale=[[0, 'rgba(179,38,30,0.06)'], [1, BRAND_ACCENT]],  # secuencial, un solo matiz (marca)
+            # Secuencial de un solo matiz, sin sentido de identidad ni sentimiento (esto muestra a los
+            # 7 equipos, no solo a CADIZ) -- se usa el azul de COLOR_METRICA['dinero'] en vez del lila/
+            # rojo de marca (Adenda 25).
+            colorscale=[[0, _hex_a_rgba(COLOR_METRICA['dinero'], 0.06)], [1, COLOR_METRICA['dinero']]],
             text=[[f'{v:.1f}%' if pd.notna(v) else '' for v in fila] for fila in piv.values],
             texttemplate='%{text}', textfont=dict(size=12),
             hovertemplate='%{y} — %{x}: %{z:.1f}%<extra></extra>', showscale=False,
@@ -1318,7 +1401,7 @@ def seccion_mercado():
             comp_sov = sov_df.merge(som_df, on='Empresa', how='outer')
             comp_sov_long = comp_sov.melt(id_vars='Empresa', value_vars=['SOV', 'SOM'], var_name='Indicador', value_name='Pct').dropna(subset=['Pct'])
             fig_sov = px.bar(comp_sov_long, x='Empresa', y='Pct', color='Indicador', barmode='group',
-                              color_discrete_map={'SOV': MUTED_PALETTE[0], 'SOM': BRAND_ACCENT},
+                              color_discrete_map={'SOV': MUTED_PALETTE[0], 'SOM': MUTED_PALETTE[1]},
                               text=comp_sov_long['Pct'].apply(lambda v: f'{v:,.1f}%'),
                               title=f'SOV vs. SOM — {tech_sel}, {pais_sel}, {ronda_snapshot}')
             fig_sov.update_traces(textposition='outside', cliponaxis=False)
@@ -1341,7 +1424,8 @@ def seccion_mercado():
             # Mapa de color FIJO por estrategia (antes usaba el color automático de Plotly, que
             # reasigna colores según el orden de aparición en cada gráfico — por eso "Marca"
             # salía de un color acá y de otro allá).
-            estrategia_colores = dict(zip(estrategias, [BRAND_ACCENT, MUTED_PALETTE[0], MUTED_PALETTE[1], MUTED_PALETTE[2], MUTED_PALETTE[3]]))
+            # 5 categorías genéricas (no hay identidad ni sentimiento acá) -- las 5 usan tonos muted.
+            estrategia_colores = dict(zip(estrategias, [MUTED_PALETTE[0], MUTED_PALETTE[1], MUTED_PALETTE[2], MUTED_PALETTE[3], MUTED_PALETTE[4]]))
             est = est.copy().sort_values('Empresa')
             # Antes era un gráfico de barras todas de la misma altura: el eje Y no codificaba nada
             # y el texto iba rotado adentro de la barra. Peor todavía, px.bar parte el dataframe en
@@ -1372,7 +1456,7 @@ def seccion_mercado():
         with col_mix1:
             if not mix_df.empty:
                 fig_mix = px.pie(mix_df, names='Tecnología', values='Ventas', hole=0.5,
-                                  color_discrete_sequence=[BRAND_ACCENT] + MUTED_PALETTE,
+                                  color_discrete_sequence=MUTED_PALETTE,  # 4 tecnologías, genérico
                                   title=f'Toda la industria — {pais_pan}, {ronda_snapshot}')
                 mostrar(fig_mix)
             else:
@@ -1390,7 +1474,7 @@ def seccion_mercado():
                 totales = mix_emp_df.groupby('Empresa')['Ventas'].transform('sum')
                 mix_emp_df['Pct'] = mix_emp_df['Ventas'] / totales * 100
                 fig_mix_emp = px.bar(mix_emp_df, x='Empresa', y='Pct', color='Tecnología', barmode='stack',
-                                      color_discrete_sequence=[BRAND_ACCENT] + MUTED_PALETTE,
+                                      color_discrete_sequence=MUTED_PALETTE,  # 4 tecnologías, genérico
                                       title=f'Por equipo — {pais_pan}, {ronda_snapshot}')
                 fig_mix_emp.update_layout(yaxis_title='% de ventas')
                 mostrar(fig_mix_emp)
@@ -1420,7 +1504,7 @@ def seccion_mercado():
             cols_dv = st.columns(2)
             for i, (tech, piv) in enumerate(paneles_tech):
                 fig_dv = go.Figure()
-                for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', BRAND_ACCENT)]:
+                for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', MUTED_PALETTE[1])]:
                     d_t = piv[piv['Tipo'] == tipo]
                     fig_dv.add_trace(go.Bar(x=d_t['Ronda'], y=d_t['Valor'], name=tipo, marker_color=color))
                 fig_dv.update_layout(barmode='group', title=f'{tech} — {pais_evo}')
@@ -1497,7 +1581,7 @@ def seccion_operaciones():
         with col_pp:
             if not prod.empty:
                 fig_prod = px.bar(prod, x='Subgrupo', y='Valor', color='Tipo', barmode='group',
-                                   color_discrete_map={'Interna': BRAND_ACCENT, 'Contratada': MUTED_PALETTE[0]},
+                                   color_discrete_map={'Interna': MUTED_PALETTE[1], 'Contratada': MUTED_PALETTE[0]},
                                    text=prod['Valor'].apply(lambda v: f'{v:,.0f}'),
                                    title=f'Producción propia vs. contratada — {ronda_snapshot}')
                 fig_prod.update_traces(textposition='outside', cliponaxis=False)
@@ -1511,7 +1595,7 @@ def seccion_operaciones():
             fab_piv = fab_all.groupby(['Empresa', 'Metrica'], as_index=False)['Valor'].sum()
             if not fab_piv.empty:
                 fig_fab = px.bar(fab_piv, x='Empresa', y='Valor', color='Metrica', barmode='stack',
-                                  color_discrete_map={'EE.UU.': BRAND_ACCENT, 'China': MUTED_PALETTE[0]},
+                                  color_discrete_map={'EE.UU.': MUTED_PALETTE[1], 'China': MUTED_PALETTE[0]},
                                   text=fab_piv['Valor'].apply(lambda v: f'{v:,.0f}'),
                                   title=f'Fábricas por equipo — {ronda_snapshot}')
                 fig_fab.update_traces(textposition='inside')
@@ -1527,14 +1611,25 @@ def seccion_operaciones():
         def g(metrica): return valor_de(pl, metrica) or 0.0
         ingresos = g('Ingresos por ventas')
         if ingresos > 0:
-            etapas = [('Ingresos', ingresos), ('- Fab. Interna', ingresos - g('Costos de fabricación interna'))]
-            etapas.append(('- Caract.', etapas[-1][1] - g('Costos de la característica')))
-            etapas.append(('- Fab. Contratada', etapas[-1][1] - g('Costos de fabricación contratada')))
-            etapas.append(('- Logística', etapas[-1][1] - g('Costos de transporte y aranceles')))
-            etapas.append(('- Op/Admin', etapas[-1][1] - g('I+D') - g('Promoción') - g('Administración')))
-            ebitda = etapas[-1][1]
+            # Adenda 24 (a pedido del equipo): las etiquetas anteriores ("- Fab. Interna", "- Caract.",
+            # etc.) nombraban el COSTO que se resta en cada escalón, pero el valor graficado en ESE
+            # escalón es el MARGEN REMANENTE después de restarlo (ingresos acumulados menos todos los
+            # costos restados hasta ahí) -- no el costo en sí. Eso es lo que confundía: la etiqueta y
+            # el número no describían la misma cosa. Se renombra cada escalón para que diga el estado
+            # del margen que efectivamente muestra la barra.
+            # De paso, el diseño anterior tenía un escalón "- Op/Admin" y el escalón final "= EBITDA"
+            # con el MISMO valor (el EBITDA se calculaba como el valor del escalón anterior, sin restar
+            # nada más) -- dos barras idénticas seguidas, sin una razón que lo justifique. Se lo
+            # corrige acá restando I+D/Promoción/Administración directamente en el cálculo del EBITDA,
+            # sin un escalón intermedio duplicado.
+            etapas = [('Ingresos por Ventas', ingresos)]
+            etapas.append(('Margen tras Fab. Interna', etapas[-1][1] - g('Costos de fabricación interna')))
+            etapas.append(('Margen tras Características', etapas[-1][1] - g('Costos de la característica')))
+            etapas.append(('Margen tras Fab. Contratada', etapas[-1][1] - g('Costos de fabricación contratada')))
+            etapas.append(('Margen tras Logística', etapas[-1][1] - g('Costos de transporte y aranceles')))
+            ebitda = etapas[-1][1] - g('I+D') - g('Promoción') - g('Administración')
             etapas.append(('= EBITDA', ebitda))
-            colores = [COLOR_POSITIVE] + [MUTED_PALETTE[2]]*(len(etapas)-2) + [COLOR_POSITIVE if ebitda > 0 else BRAND_ACCENT]
+            colores = [COLOR_POSITIVE] + [MUTED_PALETTE[2]]*(len(etapas)-2) + [COLOR_POSITIVE if ebitda > 0 else COLOR_NEGATIVE]
             # textinfo='value+...' usa el formateo automático de Plotly, que muestra decimales sin
             # redondear ("45.91583M") -- inconsistente con format_num() (1 decimal) que se usa en el
             # resto del tablero, incluida la waterfall de "Puente de Beneficio Neto" con estos mismos
@@ -1542,7 +1637,7 @@ def seccion_operaciones():
             fig = go.Figure(go.Funnel(y=[e[0] for e in etapas], x=[e[1] for e in etapas],
                                        text=[format_num(e[1]) for e in etapas], textinfo='text+percent initial',
                                        marker={'color': colores}))
-            fig.update_layout(title='Estructura Macro de Costos (Funnel)')
+            fig.update_layout(title='Estructura Macro de Costos (Funnel) — margen remanente en cada etapa')
             mostrar(fig, ocultar_eje_valores='x')
 
         st.divider()
@@ -1580,25 +1675,50 @@ def seccion_operaciones():
                 y=[p_venta, c_prod, c_flete, c_caract, m_bruto],
                 text=[format_num(v) for v in [p_venta, c_prod, c_flete, c_caract, m_bruto]], textposition='outside',
                 decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
-                totals={'marker': {'color': COLOR_POSITIVE if m_bruto > 0 else BRAND_ACCENT}}
+                totals={'marker': {'color': COLOR_POSITIVE if m_bruto > 0 else COLOR_NEGATIVE}}
             ))
             fig_ue.update_layout(title=f'Margen Unitario — {tech_ue}, {pais_ue}')
             mostrar(fig_ue, ocultar_eje_valores='y')
             costo_total_unit = -(c_prod + c_flete + c_caract)
             markup_pct = (m_bruto / costo_total_unit * 100) if costo_total_unit else None
-            # Adenda 23 (a pedido del equipo): la tarjeta de Contribución Marginal Unitaria mostraba
-            # solo el valor absoluto (USD/u.) -- se le suma el margen en % (Contribución Marginal /
-            # Precio de Venta) como delta, calculado dinámicamente para el país/tecnología elegidos,
-            # sin tocar el Waterfall de arriba (sigue siendo el desglose en USD/u.).
             margen_pct = (m_bruto / p_venta * 100) if p_venta else None
+
+            # Adenda 24 (a pedido del equipo): la tarjeta de Contribución Marginal Unitaria dejó de
+            # mostrar el valor absoluto (USD/u.) -- ese desglose ya se ve arriba, en el Waterfall --
+            # y pasa a mostrar solo el % (Contribución Marginal / Precio de Venta). Ambas tarjetas
+            # (Margen % y Mark-up %) ahora traen como delta la variación en puntos porcentuales vs.
+            # la ronda anterior, para el mismo país/tecnología elegidos, usando ronda_anterior_de().
+            ronda_prev_ue = ronda_anterior_de(ronda_snapshot)
+            margen_pct_prev = markup_pct_prev = None
+            if ronda_prev_ue:
+                margen_prev = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_ue}') &
+                                  (df['Seccion'] == tech_ue) & (df['Empresa'] == empresa_analisis) &
+                                  (df['Ronda'] == ronda_prev_ue)]
+                mercado_prev = df[(df['Estado'] == f'Informe de mercado, {pais_ue}') & (df['Seccion'] == tech_ue) &
+                                   (df['Ronda'] == ronda_prev_ue)]
+                unidades_prev = valor_fuzzy(mercado_prev, '^Ventas', empresa=empresa_analisis)
+                if unidades_prev and unidades_prev > 0:
+                    def gm_prev(metrica): return valor_de(margen_prev, metrica) or 0.0
+                    p_venta_prev = gm_prev('Ingresos por ventas') / unidades_prev
+                    m_bruto_prev = gm_prev('Beneficio bruto') / unidades_prev
+                    costo_total_unit_prev = -(-gm_prev('Fabricación propia y por contrato') / unidades_prev
+                                               - gm_prev('Transporte y aranceles') / unidades_prev
+                                               - gm_prev('Costos de la característica') / unidades_prev)
+                    margen_pct_prev = (m_bruto_prev / p_venta_prev * 100) if p_venta_prev else None
+                    markup_pct_prev = (m_bruto_prev / costo_total_unit_prev * 100) if costo_total_unit_prev else None
+            delta_margen_pct = (margen_pct - margen_pct_prev) if (margen_pct is not None and margen_pct_prev is not None) else None
+            delta_markup_pct = (markup_pct - markup_pct_prev) if (markup_pct is not None and markup_pct_prev is not None) else None
+
             col_cm, col_mk = st.columns(2)
-            col_cm.metric('Contribución Marginal Unitaria', f'USD {m_bruto:,.0f}',
-                          delta=f'{margen_pct:,.1f}% del precio' if margen_pct is not None else None,
-                          delta_color='off')
-            col_mk.metric('Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—')
-            st.caption('Margen % = Contribución Marginal Unitaria / Precio de Venta. Mark-up = Contribución Marginal '
-                       'Unitaria / Costo unitario total (fabricación + logística + características) — mismo numerador, '
-                       'denominador distinto (precio vs. costo), no confundir uno con otro.')
+            col_cm.metric('Margen Unitario (%)', f'{margen_pct:,.1f}%' if margen_pct is not None else '—',
+                          delta=f'{delta_margen_pct:+,.1f} p.p. vs. ronda anterior' if delta_margen_pct is not None else None)
+            col_mk.metric('Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—',
+                          delta=f'{delta_markup_pct:+,.1f} p.p. vs. ronda anterior' if delta_markup_pct is not None else None)
+            st.caption('Margen % = Contribución Marginal Unitaria / Precio de Venta (el desglose en USD/u. está en el '
+                       'Waterfall de arriba). Mark-up = Contribución Marginal Unitaria / Costo unitario total '
+                       '(fabricación + logística + características) — mismo numerador, denominador distinto (precio '
+                       'vs. costo), no confundir uno con otro. Deltas vs. la ronda inmediatamente anterior, mismo '
+                       'país/tecnología.')
 
         st.divider()
         st.markdown(f'**Punto de equilibrio — {empresa_analisis}, {ronda_snapshot}**')
@@ -1665,7 +1785,7 @@ def seccion_operaciones():
         log_hist = log_hist.dropna(subset=['Valor']).sort_values('Ronda_Orden')
         if not log_hist.empty:
             fig_gap = go.Figure()
-            for metrica, color, nombre in [('Demanda insatisfecha', BRAND_ACCENT, 'Faltante (demanda insatisfecha)'),
+            for metrica, color, nombre in [('Demanda insatisfecha', COLOR_NEGATIVE, 'Faltante (demanda insatisfecha)'),
                                             ('Inventario final', MUTED_PALETTE[0], 'Sobrante (inventario final)')]:
                 d_m = log_hist[log_hist['Metrica'] == metrica]
                 fig_gap.add_trace(go.Bar(x=d_m['Ronda'], y=d_m['Valor'], name=nombre, marker_color=color))
@@ -1691,7 +1811,9 @@ def seccion_operaciones():
                     matriz.loc[planta, dst] += flows[dst] * (interna/tot)
                     matriz.loc['Subcontratado', dst] += flows[dst] * (contratada/tot)
         if matriz.sum().sum() > 0:
-            fig3 = px.imshow(matriz.values, x=destinos, y=matriz.index, text_auto='.0f', aspect='auto', color_continuous_scale=[[0, BRAND_LIGHT], [1, BRAND_ACCENT]])
+            # Heatmap de magnitud (flujo logístico), sin identidad ni sentimiento -- azul de
+            # COLOR_METRICA['dinero'] en vez del lila/rojo de marca (Adenda 25).
+            fig3 = px.imshow(matriz.values, x=destinos, y=matriz.index, text_auto='.0f', aspect='auto', color_continuous_scale=[[0, BRAND_LIGHT], [1, COLOR_METRICA['dinero']]])
             fig3.update_coloraxes(showscale=False)
             fig3.update_xaxes(title_text='Destino (Mercado)')
             fig3.update_yaxes(title_text='Origen (Planta)')
@@ -1868,8 +1990,14 @@ def seccion_finanzas():
                 tasas_rows.append({'Mercado': etiqueta, empresa_analisis: val_emp, 'Promedio industria': prom})
         if tasas_rows:
             tasas_df = pd.DataFrame(tasas_rows).melt(id_vars='Mercado', var_name='Serie', value_name='Tasa, %')
+            # Bug de identidad (Adenda 25): antes esta serie usaba BRAND_ACCENT sin importar qué
+            # equipo estuviera en foco -- si "Equipo en foco" era un competidor, igual se coloreaba
+            # como si fuera CADIZ. Ahora usa COLOR_MAP (lila solo si el foco ES CADIZ, tono muted del
+            # propio equipo si es otro) y "Promedio industria" pasa a un gris fijo para no chocar con
+            # el tono muted que le toque al equipo en foco.
             fig_tasas = px.bar(tasas_df, x='Mercado', y='Tasa, %', color='Serie', barmode='group',
-                                color_discrete_map={empresa_analisis: BRAND_ACCENT, 'Promedio industria': MUTED_PALETTE[0]},
+                                color_discrete_map={empresa_analisis: COLOR_MAP.get(empresa_analisis, MUTED_PALETTE[0]),
+                                                     'Promedio industria': 'rgba(140,151,166,0.55)'},
                                 title=f'Tasa de interés por mercado y plazo — {empresa_analisis} vs. industria, {ronda_snapshot}')
             fig_tasas.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             mostrar(fig_tasas)
@@ -1928,13 +2056,18 @@ def seccion_finanzas():
             
                 if vcadiz is not None:
                     val_str = f"{vcadiz:,.1f}{suf}"
+                    # Bug de identidad (Adenda 25, mismo caso que la tasa de interés más arriba):
+                    # "vcadiz" es en realidad el valor del EQUIPO EN FOCO (empresa_analisis), que puede
+                    # no ser CADIZ -- se resuelve con COLOR_MAP en vez de asumir siempre el color de
+                    # marca.
+                    color_foco = COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)
                     fig_rango.add_trace(go.Scatter(
-                        x=[pos(vcadiz)], y=[i], 
-                        mode='markers+text', 
-                        text=[val_str], 
-                        textposition="top center", 
-                        textfont=dict(color=BRAND_ACCENT, size=12, family="JetBrains Mono"),
-                        marker=dict(size=14, color=BRAND_ACCENT), 
+                        x=[pos(vcadiz)], y=[i],
+                        mode='markers+text',
+                        text=[val_str],
+                        textposition="top center",
+                        textfont=dict(color=color_foco, size=12, family="JetBrains Mono"),
+                        marker=dict(size=14, color=color_foco),
                         showlegend=False
                     ))
             
@@ -2078,8 +2211,10 @@ def seccion_rrhh_sostenibilidad():
             balance = imp_esg.groupby(['Empresa', 'Subgrupo'], as_index=False)['Valor'].sum()
             netos = balance.groupby('Empresa', as_index=False)['Valor'].sum().rename(columns={'Valor': 'Neto'})
             orden_emp = netos.sort_values('Neto', ascending=False)['Empresa'].tolist()
-            colores_subgrupo = {'Ambiental (E)': MUTED_PALETTE[2] if len(MUTED_PALETTE) > 2 else BRAND_ACCENT,
-                                 'Social (S)': BRAND_ACCENT,
+            # 3 categorías genéricas (E/S/G, para los 7 equipos) -- sin identidad ni sentimiento,
+            # tonos muted (Adenda 25).
+            colores_subgrupo = {'Ambiental (E)': MUTED_PALETTE[2],
+                                 'Social (S)': MUTED_PALETTE[1],
                                  'Gobernanza (G)': MUTED_PALETTE[0]}
             fig_bal = px.bar(balance, x='Empresa', y='Valor', color='Subgrupo', barmode='relative',
                               category_orders={'Empresa': orden_emp},
