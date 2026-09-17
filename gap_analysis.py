@@ -110,11 +110,18 @@ def _valor_real(df_real, ronda_nombre, spec, team="CADIZ"):
         sub = sub[sub["Seccion"] == spec["seccion"]]
     if sub.empty:
         return None
-    val = sub.iloc[0]["Valor"]
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return val   # texto (p.ej. calificación crediticia)
+    # Adenda 26 (mismo bug de "Comparativa Plan vs. Real" de Mercado): sin filtro de 'seccion', antes
+    # se tomaba .iloc[0] -- correcto para las métricas de un solo renglón (Global, sin desglose), pero
+    # 'Demanda, miles unidades' viene desglosada por Seccion=tecnología (Combustión/Híbrido/Eléctrico/
+    # Hidrógeno, ver 'Informe de mercado, {país}') SIN una fila de total ya sumado -- .iloc[0] se
+    # quedaba con una sola tecnología (ej. solo Combustión) en vez de la demanda total. Se cambia a
+    # sumar todas las filas que matchean -- no cambia nada para las métricas de un solo renglón
+    # (verificado: EBITDA/Margen bruto/Efectivo/EPS/Retorno del accionista, Global, siempre 1 fila),
+    # y corrige las que sí vienen desglosadas sin filtro de Seccion.
+    val = pd.to_numeric(sub["Valor"], errors="coerce")
+    if val.notna().any():
+        return float(val.sum())
+    return sub.iloc[0]["Valor"]   # texto (p.ej. calificación crediticia) -- no summable
 
 
 def _valor_real_utilizacion_capacidad(df_real, df_proy, ronda_nombre, ronda_num, region, team="CADIZ"):
@@ -373,6 +380,19 @@ def _to_absoluto(valor, spec_tipo, fuente):
         return valor
     if spec_tipo == "ratio":
         return valor / 100.0
+    if spec_tipo == "unidades":
+        # Adenda 26 (bug reportado: "Comparativa Plan vs. Real" de Mercado se rompió -- Real de
+        # Demanda estimada salía ~1000x menor que el Proyectado). A DIFERENCIA de 'usd' (Adenda 25:
+        # cesim_parser YA entrega USD absoluto pese al rótulo "miles USD"), la métrica real detrás de
+        # este tipo ('Demanda, miles unidades', Estado 'Informe de mercado, {país}') SÍ está en miles
+        # de unidades de verdad -- confirmado: CADIZ Ronda 1, EE.UU., Combustión = 667.398 sin este
+        # x1000, un mercado automotor de ~667 unidades totales no es plausible; con el x1000 (667,398)
+        # queda en el mismo orden de magnitud que el Proyectado de Ronda 2 (~1,041,456 unidades,
+        # confirmado ya en escala correcta -- ver _corregir_escala_plan_usd en load_proyeccion()).
+        # Mismo x1000 que ya se aplica a mano en otros lugares de este archivo para "miles unidades"
+        # (ver prod_total_miles/vol_real más arriba) -- acá se generaliza al tipo 'unidades' de
+        # calcular_gaps() en vez de dejarlo sin convertir.
+        return valor * 1000.0
     return valor
 
 
