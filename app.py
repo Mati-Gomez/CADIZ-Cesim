@@ -41,7 +41,13 @@ MUTED_PALETTE = ['#8C97A6', '#A68C6E', '#7E9E8C', '#9E8CA0', '#A69B6E', '#7E8C9E
 # por nombre -- ahí un MUTED_PALETTE[1] "se cuela" igual aunque no se lo nombre a mano (fue el caso
 # de "Mix tecnológico": Plotly le tocó el marrón a "Híbrido" solo por ser la 2ª tecnología de la
 # lista). No se reemplaza por lila: siguen siendo categorías sin identidad de CADIZ.
-MUTED_SIN_MARRON = [MUTED_PALETTE[0], MUTED_PALETTE[5], MUTED_PALETTE[2], MUTED_PALETTE[3], MUTED_PALETTE[4]]
+# Fix adicional (feedback "ya casi"): sacar el marrón no alcanzaba -- MUTED_PALETTE[5] y [0] son dos
+# grises azulados casi idénticos (distancia RGB ~19.5, muy por debajo del resto de la paleta) y
+# MUTED_PALETTE[4] (kaki) está a solo ~15 de distancia del marrón baneado, o sea que seguía leyéndose
+# como una variante de marrón. Se reemplazan ambos por dos tonos nuevos, verificados por distancia
+# RGB para separarse bien entre sí y de los colores reservados (lila CADIZ, verde/rojo de sentimiento):
+# '#58759D' (azul acero) y '#B67C8F' (rosa apagado).
+MUTED_SIN_MARRON = [MUTED_PALETTE[0], MUTED_PALETTE[2], '#B67C8F', MUTED_PALETTE[3], '#58759D']
 # Color por CONCEPTO, no por orden de aparición. El lila de marca queda reservado para
 # identificar a CÁDIZ entre los equipos; las métricas usan colores con significado propio
 # y estable en toda la app (antes el rojo era "Salario" en un gráfico y "Rotación" en el de al lado).
@@ -477,7 +483,7 @@ _DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
 # referencia" sea o no favorable (la flecha de color del delta, un renglón más arriba, ya dice si eso
 # es bueno o malo).
 _COLOR_EXCEDENTE_CG = {'real_mayor': COLOR_POSITIVE, 'real_menor': COLOR_METRICA['riesgo'], None: COLOR_METRICA['riesgo']}
-def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False):
+def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False, mostrar_metricas=True):
     """Botón 'Comparativa Plan vs. Real': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
     KPIs del crosswalk dado. Un KPI sin proyección para esta ronda (el modelo no lo cubre, o es una
     ronda de Práctica que el modelo no proyecta) o sin dato real todavía (CESIM no publicó esta
@@ -486,7 +492,14 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
     mostrar_directo=True se salta el toggle y renderiza directo -- para cuando esta es la ÚNICA
     razón de estar en la página (p.ej. CESIM todavía no publicó ningún RDOS de esta ronda: no hay
     nada más que mostrar en el resto de las secciones, así que no tiene sentido esconder esto detrás
-    de un clic extra)."""
+    de un clic extra).
+
+    mostrar_metricas=False (Adenda 26, a pedido del equipo solo para Finanzas: "dejar como elemento
+    protagonista exclusivo el panel de barras horizontales apiladas") -- oculta la Fila 1 de tarjetas
+    st.metric (Proyectado/Real por KPI) y deja directo el panel compacto de barras (chart_bullet_panel).
+    Solo se pasó False desde el llamado de Finanzas: Resultados/Mercado/Operaciones siguen mostrando
+    las tarjetas como antes -- no se tocó su comportamiento porque no fue lo que pidió el equipo (si
+    se quiere el mismo cambio ahí, avisar)."""
     crosswalk = crosswalk or CROSSWALK_FINANZAS
     if not mostrar_directo:
         activo = st.toggle('📊 Comparativa Plan vs. Real', key=f'cg_toggle_{key_suffix}')
@@ -510,16 +523,17 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
             st.caption('CADIZ no tiene una proyección cargada para esta ronda en el modelo de gestión — '
                        'ver la evolución de cada indicador más abajo.')
         else:
-            cols = st.columns(min(4, len(con_gap)))
-            for i, (clave, v) in enumerate(con_gap.items()):
-                with cols[i % len(cols)]:
-                    if v['estado'] == 'sin_real':
-                        st.metric(v['label'], _fmt_valor_cg(v['proyectado'], v['tipo']))
-                        st.caption('Proyectado (CADIZ) — real de CESIM pendiente')
-                    else:
-                        st.metric(v['label'], _fmt_valor_cg(v['real'], v['tipo']),
-                                   delta=_fmt_delta_cg(v), delta_color=_DELTA_COLOR_CG[v['gap_favorable']])
-                        st.caption(f"Real — proyectado {_fmt_valor_cg(v['proyectado'], v['tipo'])}")
+            if mostrar_metricas:
+                cols = st.columns(min(4, len(con_gap)))
+                for i, (clave, v) in enumerate(con_gap.items()):
+                    with cols[i % len(cols)]:
+                        if v['estado'] == 'sin_real':
+                            st.metric(v['label'], _fmt_valor_cg(v['proyectado'], v['tipo']))
+                            st.caption('Proyectado (CADIZ) — real de CESIM pendiente')
+                        else:
+                            st.metric(v['label'], _fmt_valor_cg(v['real'], v['tipo']),
+                                       delta=_fmt_delta_cg(v), delta_color=_DELTA_COLOR_CG[v['gap_favorable']])
+                            st.caption(f"Real — proyectado {_fmt_valor_cg(v['proyectado'], v['tipo'])}")
             # Fila 2: bullet charts (Proyectado vs. Real superpuestos) -- solo para los KPIs que
             # tienen AMBOS valores (estado='ok'); 'sin_real' ya se ve en la tarjeta de arriba, no hay
             # nada que superponer todavía.
@@ -1389,8 +1403,10 @@ def _seccion_resultado_resumen():
                                     hovertemplate='%{y} — Unidades: %{x:.1f}%<extra></extra>'))
         # Adenda 25: se saca el marrón (MUTED_PALETTE[1]) de acá -- no pasa a lila porque seguiría sin
         # ser identidad (ver comentario de arriba), y el lila se reserva para "esto es CADIZ".
+        # Fix "ya casi": MUTED_PALETTE[5] quedaba casi idéntico al MUTED_PALETTE[0] del marcador de
+        # arriba (mismo gráfico) -- se reemplaza por el azul acero nuevo, bien separado del otro.
         fig_d.add_trace(go.Scatter(x=dfd['Valor'], y=dfd['Empresa'], mode='markers', name='Cuota por valor ($), %',
-                                    marker=dict(size=11, color=MUTED_PALETTE[5], symbol='diamond'),
+                                    marker=dict(size=11, color='#58759D', symbol='diamond'),
                                     hovertemplate='%{y} — Valor: %{x:.1f}%<extra></extra>'))
         fig_d.update_layout(title=f'Cuota de mercado global — unidades vs. valor, {ronda_snapshot}', xaxis_title='%',
                              legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
@@ -1566,7 +1582,10 @@ def seccion_mercado():
             # 5 categorías genéricas (no hay identidad ni sentimiento acá) -- las 5 usan tonos muted.
             # Adenda 25: se saca el marrón (MUTED_PALETTE[1]) -- no pasa a lila para no sugerir que
             # una de las 5 estrategias "es CADIZ" (esto es la estrategia de LOS 7 equipos a la vez).
-            estrategia_colores = dict(zip(estrategias, [MUTED_PALETTE[0], MUTED_PALETTE[5], MUTED_PALETTE[2], MUTED_PALETTE[3], MUTED_PALETTE[4]]))
+            # Fix "ya casi": también se saca MUTED_PALETTE[5] (casi idéntico a [0]) y MUTED_PALETTE[4]
+            # (kaki, a solo ~15 de distancia RGB del marrón baneado) -- mismo set de 5 tonos separados
+            # que MUTED_SIN_MARRON.
+            estrategia_colores = dict(zip(estrategias, MUTED_SIN_MARRON))
             est = est.copy().sort_values('Empresa')
             # Antes era un gráfico de barras todas de la misma altura: el eje Y no codificaba nada
             # y el texto iba rotado adentro de la barra. Peor todavía, px.bar parte el dataframe en
@@ -1729,8 +1748,10 @@ def seccion_operaciones():
             if not prod.empty:
                 # Adenda 25: se saca el marrón. No pasa a lila -- este gráfico es del EQUIPO EN FOCO
                 # (empresa_analisis), que puede no ser CADIZ; "Interna" no es identidad de CADIZ.
+                # Fix "ya casi": MUTED_PALETTE[5] era casi idéntico a [0] -- se reemplaza por el sage
+                # ya usado en otros lados de la app (MUTED_PALETTE[2]), bien separado del azul-grisáceo.
                 fig_prod = px.bar(prod, x='Subgrupo', y='Valor', color='Tipo', barmode='group',
-                                   color_discrete_map={'Interna': MUTED_PALETTE[5], 'Contratada': MUTED_PALETTE[0]},
+                                   color_discrete_map={'Interna': MUTED_PALETTE[2], 'Contratada': MUTED_PALETTE[0]},
                                    text=prod['Valor'].apply(lambda v: f'{v:,.0f}'),
                                    title=f'Producción propia vs. contratada — {ronda_snapshot}')
                 fig_prod.update_traces(textposition='outside', cliponaxis=False)
@@ -1745,8 +1766,9 @@ def seccion_operaciones():
             if not fab_piv.empty:
                 # Adenda 25: se saca el marrón. No pasa a lila -- son los 7 equipos a la vez, "EE.UU."
                 # es un mercado, no identidad de CADIZ.
+                # Fix "ya casi": MUTED_PALETTE[5] era casi idéntico a [0] -- mismo reemplazo por sage.
                 fig_fab = px.bar(fab_piv, x='Empresa', y='Valor', color='Metrica', barmode='stack',
-                                  color_discrete_map={'EE.UU.': MUTED_PALETTE[5], 'China': MUTED_PALETTE[0]},
+                                  color_discrete_map={'EE.UU.': MUTED_PALETTE[2], 'China': MUTED_PALETTE[0]},
                                   text=fab_piv['Valor'].apply(lambda v: f'{v:,.0f}'),
                                   title=f'Fábricas por equipo — {ronda_snapshot}')
                 fig_fab.update_traces(textposition='inside')
@@ -2051,11 +2073,35 @@ def seccion_finanzas():
     #  9) En Comparativa Plan vs. Real se saca el llamado a fila3_finanzas_flujo_caja() (el puente
     #     CFO->CFI->CFF) -- queda solo el comparativo lateral Proyectado vs. Real. La función sigue
     #     definida más arriba, sin uso, por si se retoma.
+    #
+    # Adenda 26 -- AJUSTES SOBRE LA RESTRUCTURACIÓN DE ARRIBA (a pedido del equipo, feedback sobre
+    # la Adenda 25). Cambios:
+    #  A) Pestañas al TOPE de la sección (debajo del título "Finanzas", antes de las tarjetas de
+    #     cabecera) y recortadas a 2: "Finanzas" (todo lo que antes vivía suelto: cabecera, Gráfico
+    #     1/2, Balance, KPIs WACC/ROCE/Deuda LP, Rango de Industria, y "Deuda y liquidez" que antes
+    #     vivía en la pestaña "Corto Plazo") y "Comparativa Plan vs. Real".
+    #  B) Gráfico 1 (desglose de Ingresos y Márgenes): ahora SÍ muestra las etiquetas de categoría en
+    #     el eje Y (antes se ocultaban con ocultar_eje_valores='y', quedaba sin texto a la izquierda)
+    #     -- se saca ese parámetro del llamado a mostrar(). Etiquetas de categoría renombradas para
+    #     que se lean como conceptos de estado de resultados en vez de "Margen X" repetido:
+    #     "Margen bruto"->"Margen Bruto", "Margen EBITDA"->"EBITDA", "Margen EBIT"->"EBIT / Resultado
+    #     Operativo", "Margen Neto (ROS)"->"Beneficio Neto" (el valor y el % que muestran son los
+    #     MISMOS ratios de antes, solo cambia el texto de la etiqueta).
+    #  C) "Evolución — Deuda CP no planificada" (el gráfico de línea temporal) se elimina. La lógica
+    #     de alerta sigue viva: ya existía en evaluar_alertas()/panel_alertas() (regla "Sobregiro
+    #     automático", mostrada en la sección Resultados) y ahora se agrega ADEMÁS un st.toast() acá
+    #     mismo en Finanzas para no perder la señal visual que daba el gráfico que se sacó.
+    #  D) Se reincorpora un badge de "Spread de Creación de Valor" (ROCE − WACC) y se agrega un
+    #     gráfico nuevo de "Composición de Estructura de Capital" (ponderación Deuda/Patrimonio del
+    #     propio cálculo de WACC) -- los dos, debajo de los 3 KPIs de WACC/ROCE/Deuda LP.
+    #  E) panel_comparativa_plan_real(): se llama con mostrar_metricas=False solo desde acá -- saca
+    #     la Fila 1 de tarjetas st.metric y deja solo el panel de barras horizontales apiladas como
+    #     elemento protagonista (ver comentario en la definición de esa función).
     #  DECISIÓN DE LAYOUT PROPIA (no especificada por el equipo, a flagear): con Balance, Rango de
     #  Industria y los KPIs de Largo Plazo promovidos al bloque fijo de arriba, y con "Costo de la
     #  deuda"/"Matriz Riesgo-Retorno"/"Beneficio Neto vs Deuda" eliminados, la pestaña "Largo Plazo:
-    #  Estructura, Retorno y Competencia" se quedaba vacía -- se elimina esa pestaña y quedan solo
-    #  "Corto Plazo" y "Comparativa Plan vs. Real".
+    #  Estructura, Retorno y Competencia" se quedaba vacía -- se elimina esa pestaña y "Deuda y
+    #  liquidez" (lo único que quedaba en "Corto Plazo") pasa a vivir dentro de la pestaña "Finanzas".
     # =================================================================
     pl_ronda = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
@@ -2078,246 +2124,315 @@ def seccion_finanzas():
             return None
         return (val - prom) / abs(prom) * 100
 
-    # ---- KPIs principales: Precio Acción / Capitalización / EPS ----
-    precio_vals = {e: valor_de(ratios_ronda, 'Precio de la acción al final de la ronda, USD', e) for e in COMPANIES}
-    cap_vals = {e: valor_de(val_ronda, 'Capitalización de mercado, miles USD', e) for e in COMPANIES}
-    eps_vals = {e: valor_de(ratios_ronda, 'Ganancias por acción (EPS), USD', e) for e in COMPANIES}
-    d_precio_ronda, ronda_prev_fin = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Precio de la acción al final de la ronda, USD')
-    d_cap_ronda, _ = delta_vs_ronda_anterior('Valuación - Global', 'Capitalización de mercado, miles USD')
-    d_eps_ronda, _ = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Ganancias por acción (EPS), USD')
-    d_precio_ind, d_cap_ind, d_eps_ind = delta_raw(precio_vals), delta_raw(cap_vals), delta_raw(eps_vals)
-    sufijo_ronda_fin = f'vs {ronda_prev_fin}' if ronda_prev_fin else 'vs ronda anterior'
-    kpi_banda_oscura([
-        {'label': 'Precio Acción (USD)', 'valor': f"{precio_vals.get(empresa_analisis):,.2f}" if pd.notna(precio_vals.get(empresa_analisis)) else '—',
-         'delta': f'{d_precio_ronda:+.1f}% {sufijo_ronda_fin}' if d_precio_ronda is not None else None, 'favorable': (d_precio_ronda > 0) if d_precio_ronda is not None else None,
-         'delta2': f'{d_precio_ind:+.1f}% vs Industria' if d_precio_ind is not None else None, 'favorable2': (d_precio_ind > 0) if d_precio_ind is not None else None},
-        {'label': 'Capitalización de mercado (USD)', 'valor': format_num(cap_vals.get(empresa_analisis)) if pd.notna(cap_vals.get(empresa_analisis)) else '—',
-         'delta': f'{d_cap_ronda:+.1f}% {sufijo_ronda_fin}' if d_cap_ronda is not None else None, 'favorable': (d_cap_ronda > 0) if d_cap_ronda is not None else None,
-         'delta2': f'{d_cap_ind:+.1f}% vs Industria' if d_cap_ind is not None else None, 'favorable2': (d_cap_ind > 0) if d_cap_ind is not None else None},
-        {'label': 'EPS (USD)', 'valor': f"{eps_vals.get(empresa_analisis):,.2f}" if pd.notna(eps_vals.get(empresa_analisis)) else '—',
-         'delta': f'{d_eps_ronda:+.1f}% {sufijo_ronda_fin}' if d_eps_ronda is not None else None, 'favorable': (d_eps_ronda > 0) if d_eps_ronda is not None else None,
-         'delta2': f'{d_eps_ind:+.1f}% vs Industria' if d_eps_ind is not None else None, 'favorable2': (d_eps_ind > 0) if d_eps_ind is not None else None},
-    ])
+    # Adenda 26: pestañas al TOPE de la sección, antes de cualquier tarjeta -- ver punto (A) arriba.
+    tab_finanzas, tab_cg = st.tabs(['Finanzas', 'Comparativa Plan vs. Real'])
 
-    # ---- KPIs secundarios: Ingresos por ventas / EBITDA / Beneficio neto / Calificación ----
-    ingresos_vals = {e: valor_de(pl_ronda, 'Ingresos por ventas', e) for e in COMPANIES}
-    ebitda_vals = {e: valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', e) for e in COMPANIES}
-    beneficio_neto_vals = {e: valor_de(pl_ronda, 'Beneficio de la ronda', e) for e in COMPANIES}
-    # Margen bruto, ROS y Deuda CP/LP se siguen calculando -- Margen bruto/ROS alimentan el Gráfico 1
-    # de más abajo, Deuda CP sigue en la pestaña Corto Plazo, Deuda LP en los 3 KPIs junto al Balance.
-    margen_vals = {e: valor_de(ratios_ronda, 'Margen bruto', e) for e in COMPANIES}
-    ros_vals = {e: valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', e) for e in COMPANIES}
-    ebitda_pct_vals = {e: valor_de(ratios_ronda, 'Beneficio operativo antes de depreciación ( EBITDA )', e) for e in COMPANIES}
-    ebit_pct_vals = {e: valor_de(ratios_ronda, 'BENEFICIO OPERATIVO (EBIT)', e) for e in COMPANIES}
-    ebit_usd_vals = {e: valor_de(pl_ronda, 'Beneficio operativo (EBIT)', e) for e in COMPANIES}
-    deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
-    deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
-    calif_val = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
+    with tab_finanzas:
+        # ---- KPIs principales: Precio Acción / Capitalización / EPS ----
+        precio_vals = {e: valor_de(ratios_ronda, 'Precio de la acción al final de la ronda, USD', e) for e in COMPANIES}
+        cap_vals = {e: valor_de(val_ronda, 'Capitalización de mercado, miles USD', e) for e in COMPANIES}
+        eps_vals = {e: valor_de(ratios_ronda, 'Ganancias por acción (EPS), USD', e) for e in COMPANIES}
+        d_precio_ronda, ronda_prev_fin = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Precio de la acción al final de la ronda, USD')
+        d_cap_ronda, _ = delta_vs_ronda_anterior('Valuación - Global', 'Capitalización de mercado, miles USD')
+        d_eps_ronda, _ = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Ganancias por acción (EPS), USD')
+        d_precio_ind, d_cap_ind, d_eps_ind = delta_raw(precio_vals), delta_raw(cap_vals), delta_raw(eps_vals)
+        sufijo_ronda_fin = f'vs {ronda_prev_fin}' if ronda_prev_fin else 'vs ronda anterior'
+        kpi_banda_oscura([
+            {'label': 'Precio Acción (USD)', 'valor': f"{precio_vals.get(empresa_analisis):,.2f}" if pd.notna(precio_vals.get(empresa_analisis)) else '—',
+             'delta': f'{d_precio_ronda:+.1f}% {sufijo_ronda_fin}' if d_precio_ronda is not None else None, 'favorable': (d_precio_ronda > 0) if d_precio_ronda is not None else None,
+             'delta2': f'{d_precio_ind:+.1f}% vs Industria' if d_precio_ind is not None else None, 'favorable2': (d_precio_ind > 0) if d_precio_ind is not None else None},
+            {'label': 'Capitalización de mercado (USD)', 'valor': format_num(cap_vals.get(empresa_analisis)) if pd.notna(cap_vals.get(empresa_analisis)) else '—',
+             'delta': f'{d_cap_ronda:+.1f}% {sufijo_ronda_fin}' if d_cap_ronda is not None else None, 'favorable': (d_cap_ronda > 0) if d_cap_ronda is not None else None,
+             'delta2': f'{d_cap_ind:+.1f}% vs Industria' if d_cap_ind is not None else None, 'favorable2': (d_cap_ind > 0) if d_cap_ind is not None else None},
+            {'label': 'EPS (USD)', 'valor': f"{eps_vals.get(empresa_analisis):,.2f}" if pd.notna(eps_vals.get(empresa_analisis)) else '—',
+             'delta': f'{d_eps_ronda:+.1f}% {sufijo_ronda_fin}' if d_eps_ronda is not None else None, 'favorable': (d_eps_ronda > 0) if d_eps_ronda is not None else None,
+             'delta2': f'{d_eps_ind:+.1f}% vs Industria' if d_eps_ind is not None else None, 'favorable2': (d_eps_ind > 0) if d_eps_ind is not None else None},
+        ])
 
-    d_ingresos_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Ingresos por ventas')
-    d_ebitda_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Beneficio operativo antes de depreciación (EBITDA)')
-    d_bn_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Beneficio de la ronda')
-    f2, f3, f6, f7 = st.columns(4)
-    with f2:
-        kpi_doble_delta(None, 'Ingresos por ventas (USD)', format_num(ingresos_vals.get(empresa_analisis)),
-                         d_ronda=d_ingresos_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(ingresos_vals))
-    with f3:
-        kpi_doble_delta(None, 'EBITDA (USD)', format_num(ebitda_vals.get(empresa_analisis)),
-                         d_ronda=d_ebitda_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(ebitda_vals))
-    with f6:
-        kpi_doble_delta(None, 'Beneficio neto (USD)', format_num(beneficio_neto_vals.get(empresa_analisis)),
-                         d_ronda=d_bn_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(beneficio_neto_vals))
-    with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
-    st.write('')
+        # ---- KPIs secundarios: Ingresos por ventas / EBITDA / Beneficio neto / Calificación ----
+        ingresos_vals = {e: valor_de(pl_ronda, 'Ingresos por ventas', e) for e in COMPANIES}
+        ebitda_vals = {e: valor_de(pl_ronda, 'Beneficio operativo antes de depreciación (EBITDA)', e) for e in COMPANIES}
+        beneficio_neto_vals = {e: valor_de(pl_ronda, 'Beneficio de la ronda', e) for e in COMPANIES}
+        # Margen bruto, ROS y Deuda CP/LP se siguen calculando -- Margen bruto/ROS alimentan el
+        # Gráfico 1 de más abajo, Deuda CP sigue en "Deuda y liquidez", Deuda LP en los 3 KPIs junto
+        # al Balance.
+        margen_vals = {e: valor_de(ratios_ronda, 'Margen bruto', e) for e in COMPANIES}
+        ros_vals = {e: valor_de(ratios_ronda, 'Rentabilidad de las ventas (ROS)', e) for e in COMPANIES}
+        ebitda_pct_vals = {e: valor_de(ratios_ronda, 'Beneficio operativo antes de depreciación ( EBITDA )', e) for e in COMPANIES}
+        ebit_pct_vals = {e: valor_de(ratios_ronda, 'BENEFICIO OPERATIVO (EBIT)', e) for e in COMPANIES}
+        ebit_usd_vals = {e: valor_de(pl_ronda, 'Beneficio operativo (EBIT)', e) for e in COMPANIES}
+        deuda_cp_vals = {e: valor_de(bal_ronda, 'Deudas a corto plazo (no planificadas)', e) for e in COMPANIES}
+        deuda_lp_vals = {e: valor_de(bal_ronda, 'Deudas a largo plazo', e) for e in COMPANIES}
+        calif_val = valor_texto(ratios_ronda, 'Calificación crediticia', empresa_analisis)
 
-    # ---- Gráfico 1 (desglose común-tamaño) + Gráfico 2 (evolución del precio) ----
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        ing_emp = ingresos_vals.get(empresa_analisis)
-        if ing_emp:
-            filas_cs = [
-                ('Ingresos por ventas', 100.0, ing_emp),
-                ('Margen bruto', margen_vals.get(empresa_analisis), None),
-                ('Margen EBITDA', ebitda_pct_vals.get(empresa_analisis), ebitda_vals.get(empresa_analisis)),
-                ('Margen EBIT', ebit_pct_vals.get(empresa_analisis), ebit_usd_vals.get(empresa_analisis)),
-                ('Margen Neto (ROS)', ros_vals.get(empresa_analisis), beneficio_neto_vals.get(empresa_analisis)),
-            ]
-            filas_cs = [(n, p, u) for n, p, u in filas_cs if pd.notna(p)]
-            if filas_cs:
-                cs_df = pd.DataFrame(filas_cs, columns=['Concepto', 'Pct', 'USD'])
-                cs_df['Etiqueta'] = cs_df.apply(lambda r: f"{r['Pct']:.1f}% ({format_num(r['USD'])})" if pd.notna(r['USD']) else f"{r['Pct']:.1f}%", axis=1)
-                # Color = identidad del EQUIPO EN FOCO (COLOR_MAP ya resuelve lila solo si es CADIZ).
-                fig_cs = px.bar(cs_df.iloc[::-1], x='Pct', y='Concepto', orientation='h', text='Etiqueta',
-                                 color_discrete_sequence=[COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)],
-                                 title=f'Desglose de Ingresos y Márgenes (% de Ingresos) — {empresa_analisis}, {ronda_snapshot}')
-                fig_cs.update_traces(textposition='outside', cliponaxis=False)
-                fig_cs.update_layout(xaxis_title='% de Ingresos por ventas', showlegend=False)
-                mostrar(fig_cs, ocultar_eje_valores='y')
-                st.caption('Supuesto de diseño propio, no una vista nativa de CESIM: los 5 conceptos se expresan como '
-                           '% de Ingresos por ventas ("estado de resultados común-tamaño") para poder compararlos en '
-                           'un solo eje -- Margen bruto/EBITDA/EBIT/Neto (ROS) son los ratios nativos de CESIM, no '
-                           'recalculados por nosotros. El $ entre paréntesis es el monto absoluto cuando CESIM lo '
-                           'publica a nivel Global (Margen bruto en USD Global no está disponible, solo el %).')
+        d_ingresos_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Ingresos por ventas')
+        d_ebitda_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Beneficio operativo antes de depreciación (EBITDA)')
+        d_bn_ronda, _ = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Beneficio de la ronda')
+        f2, f3, f6, f7 = st.columns(4)
+        with f2:
+            kpi_doble_delta(None, 'Ingresos por ventas (USD)', format_num(ingresos_vals.get(empresa_analisis)),
+                             d_ronda=d_ingresos_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(ingresos_vals))
+        with f3:
+            kpi_doble_delta(None, 'EBITDA (USD)', format_num(ebitda_vals.get(empresa_analisis)),
+                             d_ronda=d_ebitda_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(ebitda_vals))
+        with f6:
+            kpi_doble_delta(None, 'Beneficio neto (USD)', format_num(beneficio_neto_vals.get(empresa_analisis)),
+                             d_ronda=d_bn_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(beneficio_neto_vals))
+        with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
+        st.write('')
+
+        # ---- Gráfico 1 (desglose común-tamaño) + Gráfico 2 (evolución del precio) ----
+        col_g1, col_g2 = st.columns(2)
+        with col_g1:
+            ing_emp = ingresos_vals.get(empresa_analisis)
+            if ing_emp:
+                # Adenda 26: etiquetas renombradas a pedido del equipo (mismo dato/ratio de antes,
+                # solo cambia el texto que se lee en el eje Y -- ver punto (B) arriba).
+                filas_cs = [
+                    ('Ingresos por ventas', 100.0, ing_emp),
+                    ('Margen Bruto', margen_vals.get(empresa_analisis), None),
+                    ('EBITDA', ebitda_pct_vals.get(empresa_analisis), ebitda_vals.get(empresa_analisis)),
+                    ('EBIT / Resultado Operativo', ebit_pct_vals.get(empresa_analisis), ebit_usd_vals.get(empresa_analisis)),
+                    ('Beneficio Neto', ros_vals.get(empresa_analisis), beneficio_neto_vals.get(empresa_analisis)),
+                ]
+                filas_cs = [(n, p, u) for n, p, u in filas_cs if pd.notna(p)]
+                if filas_cs:
+                    cs_df = pd.DataFrame(filas_cs, columns=['Concepto', 'Pct', 'USD'])
+                    cs_df['Etiqueta'] = cs_df.apply(lambda r: f"{r['Pct']:.1f}% ({format_num(r['USD'])})" if pd.notna(r['USD']) else f"{r['Pct']:.1f}%", axis=1)
+                    # Color = identidad del EQUIPO EN FOCO (COLOR_MAP ya resuelve lila solo si es CADIZ).
+                    fig_cs = px.bar(cs_df.iloc[::-1], x='Pct', y='Concepto', orientation='h', text='Etiqueta',
+                                     color_discrete_sequence=[COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)],
+                                     title=f'Desglose de Ingresos y Márgenes (% de Ingresos) — {empresa_analisis}, {ronda_snapshot}')
+                    fig_cs.update_traces(textposition='outside', cliponaxis=False)
+                    fig_cs.update_layout(xaxis_title='% de Ingresos por ventas', showlegend=False)
+                    # Adenda 26: se saca ocultar_eje_valores='y' -- a pedido del equipo, ahora se
+                    # fuerza a mostrar el nombre de cada concepto sobre el eje vertical (antes
+                    # quedaba en blanco a la izquierda, solo con la barra y el texto de afuera).
+                    mostrar(fig_cs)
+                    st.caption('Supuesto de diseño propio, no una vista nativa de CESIM: los 5 conceptos se expresan como '
+                               '% de Ingresos por ventas ("estado de resultados común-tamaño") para poder compararlos en '
+                               'un solo eje -- Margen Bruto/EBITDA/EBIT/Beneficio Neto son los ratios nativos de CESIM '
+                               '(Margen bruto, Margen EBITDA, EBIT y ROS), no recalculados por nosotros. El $ entre '
+                               'paréntesis es el monto absoluto cuando CESIM lo publica a nivel Global (Margen Bruto en '
+                               'USD Global no está disponible, solo el %).')
+                else:
+                    st.info('Sin datos de márgenes para esta combinación.')
             else:
-                st.info('Sin datos de márgenes para esta combinación.')
+                st.info('Sin datos de Ingresos por ventas para esta combinación.')
+        with col_g2:
+            precio_sub = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Precio de la acción al final de la ronda, USD')]
+            chart_evolucion(precio_sub, 'Precio de la Acción (USD)')
+        st.write('')
+
+        # ---- Estructura del Balance (reposicionada -- antes vivía en la pestaña "Largo Plazo") ----
+        st.markdown('**Estructura del Balance: Activo vs. Pasivo + Patrimonio Neto**')
+
+        def gb(metrica):
+            return valor_de(bal_ronda, metrica, empresa_analisis) or 0.0
+
+        activo_items = {'Efectivo y equivalentes': gb('Efectivo y equivalentes de efectivo'),
+                         'Cuentas por cobrar': gb('Cuentas por Cobrar'), 'Inventario': gb('Inventario'),
+                         'Activo fijo': gb('Activo fijo')}
+        pasivo_pn_items = {'Cuentas por pagar': gb('Cuentas por pagar'),
+                            'Deudas CP no planificadas': gb('Deudas a corto plazo (no planificadas)'),
+                            'Deudas LP': gb('Deudas a largo plazo'),
+                            'Capital social + adicional': gb('Capital social') + gb('Capital adicional desembolsado'),
+                            'Ganancias acumuladas + de la ronda': gb('Ganancias acumuladas') + gb('Beneficio de la ronda')}
+        if sum(activo_items.values()) > 0:
+            fig_bal = go.Figure()
+            # Paletas separadas por lado: antes el verde era "Activo fijo" a la izquierda y
+            # "Deudas LP" a la derecha, y el tan era "Inventario" y "Ganancias acumuladas".
+            # Con la misma paleta de los dos lados parecía que un color significaba lo mismo.
+            colores_activo = ['#3E7CB1', '#5C9BC9', '#8FBEDC', '#C3DCEC']          # azules  = qué tengo
+            colores_pasivo = ['#C9922E', '#B3261E', '#8C6D3F', '#6E8C6E', '#A8A29A']  # cálidos = quién lo financia
+            for (nombre, val), color in zip(activo_items.items(), colores_activo):
+                fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
+                                          text=format_num(val), textposition='inside', showlegend=False))
+            for (nombre, val), color in zip(pasivo_pn_items.items(), colores_pasivo):
+                fig_bal.add_trace(go.Bar(x=['Pasivo + PN'], y=[val], name=nombre, marker_color=color,
+                                          text=format_num(val), textposition='inside', showlegend=False))
+            fig_bal.update_layout(
+                barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
+                # Dos leyendas separadas, cada una pegada a la barra que le corresponde —
+                # antes una sola leyenda combinada hacía difícil saber qué color era de qué lado.
+                showlegend=False)
+            mostrar(fig_bal, ocultar_eje_valores='y')
+            # La leyenda de Plotly, aun puesta afuera, mezclaba los conceptos de los dos lados en
+            # una sola tira. Se dibuja a mano en dos columnas, cada una bajo su barra, para que
+            # se vea de una qué compone el Activo y qué compone el Pasivo + PN.
+            def bloque_leyenda(titulo, items, colores):
+                filas = ''.join(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:0.82rem">'
+                    f'<span style="width:11px;height:11px;border-radius:3px;background:{c};flex:none"></span>'
+                    f'<span style="flex:1">{n}</span>'
+                    f'<span style="opacity:0.65">{format_num(v)}</span></div>'
+                    for (n, v), c in zip(items.items(), colores))
+                return (f'<div style="font-weight:600;font-size:0.8rem;opacity:0.7;text-transform:uppercase;'
+                        f'letter-spacing:0.02em;margin-bottom:4px">{titulo}</div>{filas}')
+            col_leg_a, col_leg_p = st.columns(2)
+            with col_leg_a:
+                st.markdown(bloque_leyenda('Activo', activo_items, colores_activo), unsafe_allow_html=True)
+            with col_leg_p:
+                st.markdown(bloque_leyenda('Pasivo + PN', pasivo_pn_items, colores_pasivo), unsafe_allow_html=True)
+            st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
         else:
-            st.info('Sin datos de Ingresos por ventas para esta combinación.')
-    with col_g2:
-        precio_sub = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Metrica'] == 'Precio de la acción al final de la ronda, USD')]
-        chart_evolucion(precio_sub, 'Precio de la Acción (USD)')
-    st.write('')
+            st.info('Sin datos de balance para esta combinación.')
 
-    # ---- Estructura del Balance (reposicionada -- antes vivía en la pestaña "Largo Plazo") ----
-    st.markdown('**Estructura del Balance: Activo vs. Pasivo + Patrimonio Neto**')
+        # ---- 3 KPIs junto al Balance: WACC, ROCE, Deuda LP ----
+        # Adenda 23 (a pedido del equipo): ROA no lo publica CESIM como ratio propio (verificado -- no
+        # está en 'Ratios e indicadores financieros clave') así que se calcula acá con la fórmula
+        # estándar Beneficio Neto / Activos Totales (Global) -- es una métrica de análisis financiero de
+        # manual de cátedra, no una regla CESIM, así que se documenta como tal.
+        def _roa(emp):
+            ben = valor_de(pl_ronda, 'Beneficio de la ronda', emp)
+            act = valor_de(bal_ronda, 'Activos Totales', emp)
+            if ben is None or not act:
+                return None
+            return ben / act * 100
 
-    def gb(metrica):
-        return valor_de(bal_ronda, metrica, empresa_analisis) or 0.0
+        # Orden pedido por el equipo para el Rango de Industria: WACC, Apalancamiento, ROA, ROE, ROCE.
+        datos_lp = {
+            'WACC': {e: wacc(e) for e in COMPANIES},
+            'Apalancamiento': {e: valor_de(ratios_ronda, 'Endeudamiento neto/patrimonio (apalancamiento)', e) for e in COMPANIES},
+            'ROA': {e: _roa(e) for e in COMPANIES},
+            'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
+            'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
+        }
+        ronda_prev_lp = ronda_anterior_de(ronda_snapshot)
+        d_wacc_ronda = d_roce_ronda = None
+        if ronda_prev_lp:
+            val_ronda_prev = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_prev_lp)]
+            ratios_ronda_prev = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_prev_lp)]
+            wacc_prev, wacc_act = wacc(empresa_analisis, val_ronda_prev), wacc(empresa_analisis)
+            if wacc_prev not in (None, 0) and wacc_act is not None and pd.notna(wacc_prev) and pd.notna(wacc_act):
+                d_wacc_ronda = (wacc_act - wacc_prev) / abs(wacc_prev) * 100
+            roce_prev = valor_fuzzy(ratios_ronda_prev, 'Rentabilidad del capital empleado', empresa=empresa_analisis)
+            roce_act = valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=empresa_analisis)
+            if roce_prev not in (None, 0) and roce_act is not None and pd.notna(roce_prev) and pd.notna(roce_act):
+                d_roce_ronda = (roce_act - roce_prev) / abs(roce_prev) * 100
+        d_wacc_ind, d_roce_ind = delta_raw(datos_lp['WACC']), delta_raw(datos_lp['ROCE'])
+        d_deuda_lp_ronda, _ = delta_vs_ronda_anterior('Hoja de Balance, miles USD, Global', 'Deudas a largo plazo')
+        d_deuda_lp_ind = delta_raw(deuda_lp_vals)
+        st.write('')
+        col_w1, col_w2, col_w3 = st.columns(3)
+        with col_w1:
+            # WACC: costo de financiarse -- menos es mejor, favorable invertido.
+            kpi_doble_delta(None, 'WACC', f"{datos_lp['WACC'].get(empresa_analisis):,.1f}%" if pd.notna(datos_lp['WACC'].get(empresa_analisis)) else '—',
+                             d_ronda=d_wacc_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_wacc_ronda < 0) if d_wacc_ronda is not None else None,
+                             d_industria=d_wacc_ind, favorable_industria=(d_wacc_ind < 0) if d_wacc_ind is not None else None)
+        with col_w2:
+            kpi_doble_delta(None, 'ROCE', f"{datos_lp['ROCE'].get(empresa_analisis):,.1f}%" if pd.notna(datos_lp['ROCE'].get(empresa_analisis)) else '—',
+                             d_ronda=d_roce_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=d_roce_ind)
+        with col_w3:
+            # Deuda LP: menos es mejor, favorable invertido.
+            kpi_doble_delta(None, 'Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)),
+                             d_ronda=d_deuda_lp_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_deuda_lp_ronda < 0) if d_deuda_lp_ronda is not None else None,
+                             d_industria=d_deuda_lp_ind, favorable_industria=(d_deuda_lp_ind < 0) if d_deuda_lp_ind is not None else None)
 
-    activo_items = {'Efectivo y equivalentes': gb('Efectivo y equivalentes de efectivo'),
-                     'Cuentas por cobrar': gb('Cuentas por Cobrar'), 'Inventario': gb('Inventario'),
-                     'Activo fijo': gb('Activo fijo')}
-    pasivo_pn_items = {'Cuentas por pagar': gb('Cuentas por pagar'),
-                        'Deudas CP no planificadas': gb('Deudas a corto plazo (no planificadas)'),
-                        'Deudas LP': gb('Deudas a largo plazo'),
-                        'Capital social + adicional': gb('Capital social') + gb('Capital adicional desembolsado'),
-                        'Ganancias acumuladas + de la ronda': gb('Ganancias acumuladas') + gb('Beneficio de la ronda')}
-    if sum(activo_items.values()) > 0:
-        fig_bal = go.Figure()
-        # Paletas separadas por lado: antes el verde era "Activo fijo" a la izquierda y
-        # "Deudas LP" a la derecha, y el tan era "Inventario" y "Ganancias acumuladas".
-        # Con la misma paleta de los dos lados parecía que un color significaba lo mismo.
-        colores_activo = ['#3E7CB1', '#5C9BC9', '#8FBEDC', '#C3DCEC']          # azules  = qué tengo
-        colores_pasivo = ['#C9922E', '#B3261E', '#8C6D3F', '#6E8C6E', '#A8A29A']  # cálidos = quién lo financia
-        for (nombre, val), color in zip(activo_items.items(), colores_activo):
-            fig_bal.add_trace(go.Bar(x=['Activo'], y=[val], name=nombre, marker_color=color,
-                                      text=format_num(val), textposition='inside', showlegend=False))
-        for (nombre, val), color in zip(pasivo_pn_items.items(), colores_pasivo):
-            fig_bal.add_trace(go.Bar(x=['Pasivo + PN'], y=[val], name=nombre, marker_color=color,
-                                      text=format_num(val), textposition='inside', showlegend=False))
-        fig_bal.update_layout(
-            barmode='stack', title=f'Estructura del Balance — {empresa_analisis}, {ronda_snapshot}',
-            # Dos leyendas separadas, cada una pegada a la barra que le corresponde —
-            # antes una sola leyenda combinada hacía difícil saber qué color era de qué lado.
-            showlegend=False)
-        mostrar(fig_bal, ocultar_eje_valores='y')
-        # La leyenda de Plotly, aun puesta afuera, mezclaba los conceptos de los dos lados en
-        # una sola tira. Se dibuja a mano en dos columnas, cada una bajo su barra, para que
-        # se vea de una qué compone el Activo y qué compone el Pasivo + PN.
-        def bloque_leyenda(titulo, items, colores):
-            filas = ''.join(
-                f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:0.82rem">'
-                f'<span style="width:11px;height:11px;border-radius:3px;background:{c};flex:none"></span>'
-                f'<span style="flex:1">{n}</span>'
-                f'<span style="opacity:0.65">{format_num(v)}</span></div>'
-                for (n, v), c in zip(items.items(), colores))
-            return (f'<div style="font-weight:600;font-size:0.8rem;opacity:0.7;text-transform:uppercase;'
-                    f'letter-spacing:0.02em;margin-bottom:4px">{titulo}</div>{filas}')
-        col_leg_a, col_leg_p = st.columns(2)
-        with col_leg_a:
-            st.markdown(bloque_leyenda('Activo', activo_items, colores_activo), unsafe_allow_html=True)
-        with col_leg_p:
-            st.markdown(bloque_leyenda('Pasivo + PN', pasivo_pn_items, colores_pasivo), unsafe_allow_html=True)
-        st.caption('Los dos lados deben dar la misma altura (el Balance siempre cierra) — Activo total = Pasivo + Patrimonio Neto.')
-    else:
-        st.info('Sin datos de balance para esta combinación.')
+        # ---- Spread de Creación de Valor + Composición de Estructura de Capital (Adenda 26, a ----
+        # ---- pedido del equipo: "debajo o cerca de los kpis de wacc, roce y deuda lp") ---------
+        st.write('')
+        roce_focal, wacc_focal = datos_lp['ROCE'].get(empresa_analisis), datos_lp['WACC'].get(empresa_analisis)
+        spread = (roce_focal - wacc_focal) if (pd.notna(roce_focal) and pd.notna(wacc_focal)) else None
+        de_focal = valor_de(val_ronda, 'Deuda a patrimonio', empresa_analisis)
+        col_sp, col_wc = st.columns(2)
+        with col_sp:
+            # Spread = ROCE − WACC: fórmula de manual de cátedra (Categoría 3, no un ratio propio de
+            # CESIM) a partir de dos ratios que CESIM sí publica y que ya están arriba (WACC, ROCE).
+            kpi_doble_delta(None, 'Spread de Creación de Valor (ROCE − WACC)',
+                             f"{spread:+.1f} p.p." if spread is not None else '—', unidad=' p.p.')
+            st.caption('ROCE > WACC = la ronda creó valor para el accionista (el capital empleado rindió más de lo '
+                       'que costó financiarlo); ROCE < WACC = lo destruyó.')
+        with col_wc:
+            if de_focal is not None and pd.notna(de_focal) and de_focal >= 0:
+                # Mismos pesos que usa wacc() de arriba: de/(1+de) pondera el costo de la deuda,
+                # 1/(1+de) pondera el retorno esperado del patrimonio -- se visualiza esa relación
+                # como % Deuda / % Patrimonio Neto (Equity) de la estructura de capital.
+                peso_deuda = de_focal / (1 + de_focal) * 100
+                peso_equity = 100 - peso_deuda
+                fig_wacc_c = go.Figure()
+                fig_wacc_c.add_trace(go.Bar(x=[peso_deuda], y=['Estructura'], orientation='h', name='Deuda',
+                                             marker_color=COLOR_METRICA['riesgo'],
+                                             text=f'Deuda {peso_deuda:.0f}%', textposition='inside'))
+                fig_wacc_c.add_trace(go.Bar(x=[peso_equity], y=['Estructura'], orientation='h', name='Patrimonio Neto (Equity)',
+                                             marker_color=MUTED_PALETTE[2],
+                                             text=f'Equity {peso_equity:.0f}%', textposition='inside'))
+                fig_wacc_c.update_layout(barmode='stack', showlegend=False,
+                                          title=f'Composición de Estructura de Capital (ponderación del WACC) — {empresa_analisis}',
+                                          xaxis=dict(range=[0, 100], ticksuffix='%'))
+                mostrar(fig_wacc_c, ocultar_eje_valores='y')
+                st.caption('Ponderación usada en el cálculo de WACC de arriba: Deuda a patrimonio / (1 + Deuda a '
+                           'patrimonio) para la Deuda, y 1 / (1 + Deuda a patrimonio) para el Patrimonio Neto.')
+            else:
+                st.info('Sin datos de Deuda a patrimonio para esta combinación.')
 
-    # ---- 3 KPIs junto al Balance: WACC, ROCE, Deuda LP (reemplazan la tarjeta de Spread) ----
-    # Adenda 23 (a pedido del equipo): ROA no lo publica CESIM como ratio propio (verificado -- no
-    # está en 'Ratios e indicadores financieros clave') así que se calcula acá con la fórmula
-    # estándar Beneficio Neto / Activos Totales (Global) -- es una métrica de análisis financiero de
-    # manual de cátedra, no una regla CESIM, así que se documenta como tal.
-    def _roa(emp):
-        ben = valor_de(pl_ronda, 'Beneficio de la ronda', emp)
-        act = valor_de(bal_ronda, 'Activos Totales', emp)
-        if ben is None or not act:
-            return None
-        return ben / act * 100
+        # ---- Rango de Industria (recortado: WACC, Apalancamiento, ROA, ROE, ROCE -- sin Spread) ----
+        ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
+        if ejes_validos:
+            color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
+            fig_rango = go.Figure()
+            for i, (nombre, vals) in enumerate(ejes_validos.items()):
+                valores = sorted(v for v in vals.values() if pd.notna(v))
+                vmin, vmax, vmed = valores[0], valores[-1], np.median(valores)
+                vcadiz = vals.get(empresa_analisis)
+                rango = (vmax - vmin) or 1
+                pos = lambda x: (x - vmin) / rango * 100
+                suf = "%" if nombre in ['ROCE', 'ROE', 'WACC', 'ROA'] else "x"
 
-    # Orden pedido por el equipo para el Rango de Industria: WACC, Apalancamiento, ROA, ROE, ROCE.
-    datos_lp = {
-        'WACC': {e: wacc(e) for e in COMPANIES},
-        'Apalancamiento': {e: valor_de(ratios_ronda, 'Endeudamiento neto/patrimonio (apalancamiento)', e) for e in COMPANIES},
-        'ROA': {e: _roa(e) for e in COMPANIES},
-        'ROE': {e: valor_de(ratios_ronda, 'Rendimiento de los Fondos Propios (ROE)', e) for e in COMPANIES},
-        'ROCE': {e: valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=e) for e in COMPANIES},
-    }
-    ronda_prev_lp = ronda_anterior_de(ronda_snapshot)
-    d_wacc_ronda = d_roce_ronda = None
-    if ronda_prev_lp:
-        val_ronda_prev = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_prev_lp)]
-        ratios_ronda_prev = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_prev_lp)]
-        wacc_prev, wacc_act = wacc(empresa_analisis, val_ronda_prev), wacc(empresa_analisis)
-        if wacc_prev not in (None, 0) and wacc_act is not None and pd.notna(wacc_prev) and pd.notna(wacc_act):
-            d_wacc_ronda = (wacc_act - wacc_prev) / abs(wacc_prev) * 100
-        roce_prev = valor_fuzzy(ratios_ronda_prev, 'Rentabilidad del capital empleado', empresa=empresa_analisis)
-        roce_act = valor_fuzzy(ratios_ronda, 'Rentabilidad del capital empleado', empresa=empresa_analisis)
-        if roce_prev not in (None, 0) and roce_act is not None and pd.notna(roce_prev) and pd.notna(roce_act):
-            d_roce_ronda = (roce_act - roce_prev) / abs(roce_prev) * 100
-    d_wacc_ind, d_roce_ind = delta_raw(datos_lp['WACC']), delta_raw(datos_lp['ROCE'])
-    d_deuda_lp_ronda, _ = delta_vs_ronda_anterior('Hoja de Balance, miles USD, Global', 'Deudas a largo plazo')
-    d_deuda_lp_ind = delta_raw(deuda_lp_vals)
-    st.write('')
-    col_w1, col_w2, col_w3 = st.columns(3)
-    with col_w1:
-        # WACC: costo de financiarse -- menos es mejor, favorable invertido.
-        kpi_doble_delta(None, 'WACC', f"{datos_lp['WACC'].get(empresa_analisis):,.1f}%" if pd.notna(datos_lp['WACC'].get(empresa_analisis)) else '—',
-                         d_ronda=d_wacc_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_wacc_ronda < 0) if d_wacc_ronda is not None else None,
-                         d_industria=d_wacc_ind, favorable_industria=(d_wacc_ind < 0) if d_wacc_ind is not None else None)
-    with col_w2:
-        kpi_doble_delta(None, 'ROCE', f"{datos_lp['ROCE'].get(empresa_analisis):,.1f}%" if pd.notna(datos_lp['ROCE'].get(empresa_analisis)) else '—',
-                         d_ronda=d_roce_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=d_roce_ind)
-    with col_w3:
-        # Deuda LP: menos es mejor, favorable invertido.
-        kpi_doble_delta(None, 'Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)),
-                         d_ronda=d_deuda_lp_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_deuda_lp_ronda < 0) if d_deuda_lp_ronda is not None else None,
-                         d_industria=d_deuda_lp_ind, favorable_industria=(d_deuda_lp_ind < 0) if d_deuda_lp_ind is not None else None)
-    st.caption('Spread de Creación de Valor (ROCE − WACC) se sacó de acá -- si el equipo lo quiere de vuelta, con '
-               'WACC y ROCE ya visibles arriba se puede leer directo (ROCE > WACC = crea valor).')
+                fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
+                # Adenda 25: se saca el marrón de la marca de mediana. No pasa a lila -- esta marca
+                # convive con el marcador del equipo en foco (unas líneas más abajo), que puede ser
+                # lila si el foco es CADIZ; usar lila acá también las confundiría.
+                # Fix "ya casi": se reemplaza MUTED_PALETTE[5] por el azul acero nuevo, por consistencia
+                # con el resto de la paleta "sin marrón" (mismo tono ya usado en el dumbbell de mercado).
+                fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color='#58759D', line_width=2), showlegend=False))
 
-    # ---- Rango de Industria (recortado: WACC, Apalancamiento, ROA, ROE, ROCE -- sin Spread) ----
-    ejes_validos = {k: v for k, v in datos_lp.items() if len([x for x in v.values() if pd.notna(x)]) >= 2}
-    if ejes_validos:
-        color_ref = 'rgba(255,255,255,0.5)' if es_modo_oscuro() else 'rgba(26,23,20,0.5)'
-        fig_rango = go.Figure()
-        for i, (nombre, vals) in enumerate(ejes_validos.items()):
-            valores = sorted(v for v in vals.values() if pd.notna(v))
-            vmin, vmax, vmed = valores[0], valores[-1], np.median(valores)
-            vcadiz = vals.get(empresa_analisis)
-            rango = (vmax - vmin) or 1
-            pos = lambda x: (x - vmin) / rango * 100
-            suf = "%" if nombre in ['ROCE', 'ROE', 'WACC', 'ROA'] else "x"
+                if vcadiz is not None:
+                    val_str = f"{vcadiz:,.1f}{suf}"
+                    # Bug de identidad (Adenda 25, mismo caso que la tasa de interés más arriba):
+                    # "vcadiz" es en realidad el valor del EQUIPO EN FOCO (empresa_analisis), que puede
+                    # no ser CADIZ -- se resuelve con COLOR_MAP en vez de asumir siempre el color de
+                    # marca.
+                    color_foco = COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)
+                    fig_rango.add_trace(go.Scatter(
+                        x=[pos(vcadiz)], y=[i],
+                        mode='markers+text',
+                        text=[val_str],
+                        textposition="top center",
+                        textfont=dict(color=color_foco, size=12, family="JetBrains Mono"),
+                        marker=dict(size=14, color=color_foco),
+                        showlegend=False
+                    ))
 
-            fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
-            # Adenda 25: se saca el marrón de la marca de mediana. No pasa a lila -- esta marca
-            # convive con el marcador del equipo en foco (unas líneas más abajo), que puede ser
-            # lila si el foco es CADIZ; usar lila acá también las confundiría.
-            fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[5], line_width=2), showlegend=False))
+                fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=color_ref))
+                fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=color_ref))
 
-            if vcadiz is not None:
-                val_str = f"{vcadiz:,.1f}{suf}"
-                # Bug de identidad (Adenda 25, mismo caso que la tasa de interés más arriba):
-                # "vcadiz" es en realidad el valor del EQUIPO EN FOCO (empresa_analisis), que puede
-                # no ser CADIZ -- se resuelve con COLOR_MAP en vez de asumir siempre el color de
-                # marca.
-                color_foco = COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)
-                fig_rango.add_trace(go.Scatter(
-                    x=[pos(vcadiz)], y=[i],
-                    mode='markers+text',
-                    text=[val_str],
-                    textposition="top center",
-                    textfont=dict(color=color_foco, size=12, family="JetBrains Mono"),
-                    marker=dict(size=14, color=color_foco),
-                    showlegend=False
-                ))
+            fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
+            mostrar(fig_rango, ocultar_eje_valores='x')
 
-            fig_rango.add_annotation(x=0, y=i, text=f'{vmin:,.1f}{suf}', showarrow=False, xshift=-30, font=dict(size=11, color=color_ref))
-            fig_rango.add_annotation(x=100, y=i, text=f'{vmax:,.1f}{suf}', showarrow=False, xshift=30, font=dict(size=11, color=color_ref))
-
-        fig_rango.update_layout(yaxis=dict(tickmode='array', tickvals=list(range(len(ejes_validos))), ticktext=list(ejes_validos.keys())), xaxis=dict(range=[-15, 115]), title='Rango de Industria (Mín / Mediana / CÁDIZ / Máx)')
-        mostrar(fig_rango, ocultar_eje_valores='x')
-
-    st.write('')
-    tab_cp, tab_cg = st.tabs(['Corto Plazo: Liquidez y Operación', 'Comparativa Plan vs. Real'])
+        # ---- Deuda y liquidez (Adenda 26: antes vivía en la pestaña "Corto Plazo", ahora acá) ----
+        st.write('')
+        st.subheader('Deuda y liquidez')
+        # Adenda 26 (a pedido del equipo: "remover el gráfico de Evolución -- Deuda CP no
+        # planificada, mantener únicamente la lógica condicional en segundo plano para disparar un
+        # toast/banner de alerta solo si el valor llega a ser mayor a cero"): el gráfico de línea
+        # temporal se saca. La regla "Sobregiro automático" YA existía en evaluar_alertas() y se ve
+        # en el panel de alertas de Resultados -- acá se agrega el mismo disparo como st.toast() para
+        # no perder la señal en Finanzas ahora que se sacó el gráfico que cumplía ese rol visual.
+        deuda_cp_focal = deuda_cp_vals.get(empresa_analisis)
+        if deuda_cp_focal and deuda_cp_focal > 0:
+            st.toast(f'Sobregiro automático en {empresa_analisis}: {format_num(deuda_cp_focal)} USD de deuda CP '
+                     f'no planificada en {ronda_snapshot} (detalle en el panel de Alertas, sección Resultados).',
+                     icon='⚠️')
+        ranking_deuda = pd.DataFrame(list(deuda_cp_vals.items()), columns=['Empresa', 'Valor']).dropna().sort_values('Valor', ascending=False)
+        if not ranking_deuda.empty and ranking_deuda['Valor'].sum() > 0:
+            ranking_deuda['Etiqueta'] = ranking_deuda['Valor'].apply(format_num)
+            fig_dcp = px.bar(ranking_deuda, x='Empresa', y='Valor', color='Empresa', color_discrete_map=COLOR_MAP,
+                              title=f'Deuda CP no planificada — {ronda_snapshot}', text='Etiqueta')
+            fig_dcp.update_traces(textposition='outside', cliponaxis=False, showlegend=False)
+            mostrar(fig_dcp, ocultar_eje_valores='y')
+        else:
+            st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
 
     # Control de Gestión: es inherentemente sobre CADIZ (es nuestra propia proyección, no la de
     # "Equipo en foco") -- si se está mirando otro equipo, se avisa en vez de mostrar el gap de
@@ -2325,31 +2440,15 @@ def seccion_finanzas():
     # consistencia con Resultados/Mercado/Operaciones, que ahora tienen la misma pestaña.
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            panel_comparativa_plan_real(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True)
+            # Adenda 26 (a pedido del equipo: "dejar como elemento protagonista exclusivo el panel
+            # de barras horizontales apiladas"): mostrar_metricas=False saca la Fila 1 de tarjetas
+            # st.metric acá -- solo en Finanzas, ver comentario en panel_comparativa_plan_real().
+            panel_comparativa_plan_real(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True, mostrar_metricas=False)
             # Adenda 25 (a pedido del equipo: "en comparativa vs real: solo dejamos las barras
             # laterales de proyectado vs real por ahora"): se saca el llamado a
             # fila3_finanzas_flujo_caja() (el puente CFO->CFI->CFF) que iba acá.
         else:
             st.caption('Cambiá "Equipo en foco" a CADIZ en la barra lateral para ver la Comparativa Plan vs. Real.')
-
-    with tab_cp:
-        # El detalle del sobregiro ya lo levanta el panel de alertas en Resultados: acá va
-        # solamente cómo evoluciona y cómo se compara contra la industria.
-        st.subheader('Deuda y liquidez')
-        col_dl_a, col_dl_b = st.columns(2)
-        with col_dl_a:
-            deuda_cp_sub = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Metrica'] == 'Deudas a corto plazo (no planificadas)')]
-            chart_evolucion(deuda_cp_sub, 'Deuda CP no planificada (USD)')
-        with col_dl_b:
-            ranking_deuda = pd.DataFrame(list(deuda_cp_vals.items()), columns=['Empresa', 'Valor']).dropna().sort_values('Valor', ascending=False)
-            if not ranking_deuda.empty and ranking_deuda['Valor'].sum() > 0:
-                ranking_deuda['Etiqueta'] = ranking_deuda['Valor'].apply(format_num)
-                fig_dcp = px.bar(ranking_deuda, x='Empresa', y='Valor', color='Empresa', color_discrete_map=COLOR_MAP,
-                                  title=f'Deuda CP no planificada — {ronda_snapshot}', text='Etiqueta')
-                fig_dcp.update_traces(textposition='outside', cliponaxis=False, showlegend=False)
-                mostrar(fig_dcp, ocultar_eje_valores='y')
-            else:
-                st.info('Ningún equipo tomó deuda de corto plazo no planificada en esta ronda.')
     # =================================================================
     # SECCIÓN 5 — RRHH Y SOSTENIBILIDAD
     # =================================================================
@@ -2464,8 +2563,11 @@ def seccion_rrhh_sostenibilidad():
             # 3 categorías genéricas (E/S/G, para los 7 equipos) -- sin identidad ni sentimiento,
             # tonos muted (Adenda 25; el marrón que tenía "Social (S)" se saca en la misma Adenda,
             # sin pasar a lila porque tampoco es identidad de CADIZ).
+            # Fix "ya casi": "Social (S)" en MUTED_PALETTE[5] quedaba casi idéntico a "Gobernanza (G)"
+            # en MUTED_PALETTE[0] (mismo gráfico, barras apiladas) -- se reemplaza por el rosa apagado
+            # nuevo, bien separado de los otros dos tonos.
             colores_subgrupo = {'Ambiental (E)': MUTED_PALETTE[2],
-                                 'Social (S)': MUTED_PALETTE[5],
+                                 'Social (S)': '#B67C8F',
                                  'Gobernanza (G)': MUTED_PALETTE[0]}
             fig_bal = px.bar(balance, x='Empresa', y='Valor', color='Subgrupo', barmode='relative',
                               category_orders={'Empresa': orden_emp},
