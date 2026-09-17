@@ -483,7 +483,7 @@ _DELTA_COLOR_CG = {'real_mayor': 'normal', 'real_menor': 'inverse', None: 'off'}
 # referencia" sea o no favorable (la flecha de color del delta, un renglón más arriba, ya dice si eso
 # es bueno o malo).
 _COLOR_EXCEDENTE_CG = {'real_mayor': COLOR_POSITIVE, 'real_menor': COLOR_METRICA['riesgo'], None: COLOR_METRICA['riesgo']}
-def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False, mostrar_metricas=True):
+def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None, key_suffix='', mostrar_directo=False, mostrar_metricas=True, mostrar_extras=True):
     """Botón 'Comparativa Plan vs. Real': Proyectado (nuestro modelo) vs. Real (RDOS de CESIM) para los
     KPIs del crosswalk dado. Un KPI sin proyección para esta ronda (el modelo no lo cubre, o es una
     ronda de Práctica que el modelo no proyecta) o sin dato real todavía (CESIM no publicó esta
@@ -497,9 +497,17 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
     mostrar_metricas=False (Adenda 26, a pedido del equipo solo para Finanzas: "dejar como elemento
     protagonista exclusivo el panel de barras horizontales apiladas") -- oculta la Fila 1 de tarjetas
     st.metric (Proyectado/Real por KPI) y deja directo el panel compacto de barras (chart_bullet_panel).
-    Solo se pasó False desde el llamado de Finanzas: Resultados/Mercado/Operaciones siguen mostrando
-    las tarjetas como antes -- no se tocó su comportamiento porque no fue lo que pidió el equipo (si
-    se quiere el mismo cambio ahí, avisar)."""
+
+    mostrar_extras=False (Adenda 27, mismo pedido pero llevado más lejos: "eliminar todo esos
+    gráficos de comparativa vs real en finanzas, solo nos quedamos con la de comparativa vs real de
+    barras horizontales") -- además de lo anterior, oculta el chart_bullet() suelto que se grafica
+    aparte para los KPIs con Plan<=0 (ej. "Deuda CP no planificada") y todo el bloque de abajo (los
+    gráficos de evolución de KPIs sin gap posible, ej. "Evolución — Margen bruto", y su caption). Deja
+    ÚNICAMENTE el panel chart_bullet_panel ("Proyectado vs. Real") como elemento en pantalla.
+
+    Ambos parámetros solo se pasaron en False desde el llamado de Finanzas: Resultados/Mercado/
+    Operaciones siguen mostrando todo como antes -- no se tocó su comportamiento porque no fue lo que
+    pidió el equipo (si se quiere el mismo cambio ahí, avisar)."""
     crosswalk = crosswalk or CROSSWALK_FINANZAS
     if not mostrar_directo:
         activo = st.toggle('📊 Comparativa Plan vs. Real', key=f'cg_toggle_{key_suffix}')
@@ -555,15 +563,21 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
                 chart_bullet_panel(items_panel)
                 # Plan<=0 no es expresable como % de avance (ver chart_bullet) -- caso raro, se
                 # grafica aparte con el chart_bullet() de siempre en vez de forzarlo al panel.
-                for clave, v in con_ambos.items():
-                    if v['proyectado'] is not None and v['proyectado'] <= 0:
-                        chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'],
-                                     color_excedente=_COLOR_EXCEDENTE_CG.get(v['gap_favorable']))
-        if sin_gap or sin_publicar:
+                # Adenda 27: mostrar_extras=False (Finanzas) lo saca -- el equipo pidió dejar SOLO
+                # el panel de barras de arriba, sin excepciones sueltas.
+                if mostrar_extras:
+                    for clave, v in con_ambos.items():
+                        if v['proyectado'] is not None and v['proyectado'] <= 0:
+                            chart_bullet(v['label'], v['proyectado'], v['real'], v['tipo'],
+                                         color_excedente=_COLOR_EXCEDENTE_CG.get(v['gap_favorable']))
+        # Adenda 27: mostrar_extras=False (Finanzas) saca también todo este bloque de abajo (los
+        # gráficos de evolución de KPIs sin gap posible + su caption) -- mismo pedido de "dejar solo
+        # la de barras horizontales".
+        if mostrar_extras and (sin_gap or sin_publicar):
             st.caption('Sin comparación posible para estos indicadores (no forman parte de la '
                        'proyección de CADIZ, es una ronda de práctica, o CESIM no publica ese dato en '
                        'el RDOS) — se muestra su evolución:')
-    if sin_gap or sin_publicar:
+    if mostrar_extras and (sin_gap or sin_publicar):
         total = len(sin_gap) + len(sin_publicar)
         cols_ev = st.columns(min(2, total))
         i = 0
@@ -2204,17 +2218,15 @@ def seccion_finanzas():
                                      color_discrete_sequence=[COLOR_MAP.get(empresa_analisis, COLOR_CADIZ)],
                                      title=f'Desglose de Ingresos y Márgenes (% de Ingresos) — {empresa_analisis}, {ronda_snapshot}')
                     fig_cs.update_traces(textposition='outside', cliponaxis=False)
-                    fig_cs.update_layout(xaxis_title='% de Ingresos por ventas', showlegend=False)
+                    # Adenda 27: se sacan los títulos de los dos ejes (a pedido del equipo) -- las
+                    # etiquetas de categoría (eje Y) y los valores de % (eje X, con el texto de cada
+                    # barra) ya se entienden solos, sin necesidad de un título de eje aparte.
+                    fig_cs.update_layout(xaxis_title=None, yaxis_title=None, showlegend=False)
                     # Adenda 26: se saca ocultar_eje_valores='y' -- a pedido del equipo, ahora se
                     # fuerza a mostrar el nombre de cada concepto sobre el eje vertical (antes
                     # quedaba en blanco a la izquierda, solo con la barra y el texto de afuera).
                     mostrar(fig_cs)
-                    st.caption('Supuesto de diseño propio, no una vista nativa de CESIM: los 5 conceptos se expresan como '
-                               '% de Ingresos por ventas ("estado de resultados común-tamaño") para poder compararlos en '
-                               'un solo eje -- Margen Bruto/EBITDA/EBIT/Beneficio Neto son los ratios nativos de CESIM '
-                               '(Margen bruto, Margen EBITDA, EBIT y ROS), no recalculados por nosotros. El $ entre '
-                               'paréntesis es el monto absoluto cuando CESIM lo publica a nivel Global (Margen Bruto en '
-                               'USD Global no está disponible, solo el %).')
+                    # Adenda 27: se saca el caption de abajo (a pedido del equipo, "no es necesario").
                 else:
                     st.info('Sin datos de márgenes para esta combinación.')
             else:
@@ -2360,7 +2372,11 @@ def seccion_finanzas():
                 fig_wacc_c.update_layout(barmode='stack', showlegend=False,
                                           title=f'Composición de Estructura de Capital (ponderación del WACC) — {empresa_analisis}',
                                           xaxis=dict(range=[0, 100], ticksuffix='%'))
-                mostrar(fig_wacc_c, ocultar_eje_valores='y')
+                # Adenda 27 (a pedido del equipo: "que quede del mismo tamaño que el kpi de creación
+                # de valor"): altura chica en vez de la ALTURA_TARJETA fija (370px) que usa el resto
+                # de los gráficos -- acá se lo compara con una tarjeta kpi_doble_delta de al lado
+                # (col_sp), mucho más baja, y sin leyenda abajo no hace falta el margen extra.
+                mostrar(fig_wacc_c, ocultar_eje_valores='y', altura=150, margen_b=10)
                 st.caption('Ponderación usada en el cálculo de WACC de arriba: Deuda a patrimonio / (1 + Deuda a '
                            'patrimonio) para la Deuda, y 1 / (1 + Deuda a patrimonio) para el Patrimonio Neto.')
             else:
@@ -2440,10 +2456,12 @@ def seccion_finanzas():
     # consistencia con Resultados/Mercado/Operaciones, que ahora tienen la misma pestaña.
     with tab_cg:
         if empresa_analisis == MY_COMPANY:
-            # Adenda 26 (a pedido del equipo: "dejar como elemento protagonista exclusivo el panel
-            # de barras horizontales apiladas"): mostrar_metricas=False saca la Fila 1 de tarjetas
-            # st.metric acá -- solo en Finanzas, ver comentario en panel_comparativa_plan_real().
-            panel_comparativa_plan_real(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True, mostrar_metricas=False)
+            # Adenda 26/27 (a pedido del equipo: "eliminar todo esos gráficos de comparativa vs
+            # real en finanzas, solo nos quedamos con la de comparativa vs real de barras
+            # horizontales"): mostrar_metricas=False + mostrar_extras=False dejan ÚNICAMENTE el
+            # panel chart_bullet_panel -- ver comentario en panel_comparativa_plan_real().
+            panel_comparativa_plan_real(df, ronda_snapshot, key_suffix='finanzas', mostrar_directo=True,
+                                         mostrar_metricas=False, mostrar_extras=False)
             # Adenda 25 (a pedido del equipo: "en comparativa vs real: solo dejamos las barras
             # laterales de proyectado vs real por ahora"): se saca el llamado a
             # fila3_finanzas_flujo_caja() (el puente CFO->CFI->CFF) que iba acá.
