@@ -33,6 +33,33 @@ _RONDA_OFICIAL_RE = re.compile(r"^Ronda\s+(\d+)$")
 DEFAULT_PROYECCION_EXCEL = DEFAULT_EXCEL
 
 
+def _corregir_escala_plan_usd(df):
+    """CORRECCIÓN DE ESCALA -- Categoría 3 (corrección de nuestro pipeline de lectura, NO una regla
+    CESIM ni un ajuste al Excel de gestión en sí). Confirmado por el equipo (dueño del modelo): los
+    valores PLAN en USD absolutos que trae DATA_EXPORT para Ronda 2 en adelante están 1000x por
+    encima de lo esperado -- ej. 'Ingresos por ventas' Ronda 2 PLAN = 76,940,864,900.74 USD tal como
+    lo escribe el Excel, cuando el equipo confirmó que el valor real es ~76.9 millones de USD.
+
+    Se verificó (antes de aplicar esta corrección) que el problema es ESPECÍFICO a status=='PLAN' +
+    unit=='USD' (los totales agregados: Ingresos, EBITDA, Activos, Deudas, Patrimonio, FCF, etc.) --
+    las filas status=='REAL' (ya verificadas contra Ronda 1 real de CESIM: 'Ingresos por ventas' real
+    de CADIZ Ronda 1 = 46,479,518.40 USD, coincide exacto con el RDOS) y las filas PLAN con otras
+    unidades (USD/acción -- EPS; USD/u. -- costos unitarios; RMB/EUR -- precios de venta regionales;
+    units) tienen magnitudes plausibles y NO se tocan.
+
+    Este es un parche de LECTURA en el pipeline Python -- no corrige la fórmula de origen en el Excel
+    de gestión, que sigue calculando el valor 1000x mayor puertas adentro. Si en una versión futura
+    del Excel se corrige esa fórmula, este parche quedaría de más (dividiría un valor ya correcto) --
+    hay que revisarlo cuando se actualice el Excel de gestión."""
+    if df is None or df.empty or 'status' not in df.columns or 'unit' not in df.columns:
+        return df
+    mask = (df['status'] == 'PLAN') & (df['unit'] == 'USD')
+    if mask.any():
+        df = df.copy()
+        df.loc[mask, 'value'] = pd.to_numeric(df.loc[mask, 'value'], errors='coerce') / 1000.0
+    return df
+
+
 def load_proyeccion(path=DEFAULT_PROYECCION_EXCEL, team="CADIZ"):
     """Lee la proyección de CADIZ directamente de CADIZ_Gestion_v2.xlsx!DATA_EXPORT. Devuelve None
     si el archivo todavía no fue subido al repo, o si algo falla al leerlo (hoja faltante, encabezado
@@ -41,9 +68,10 @@ def load_proyeccion(path=DEFAULT_PROYECCION_EXCEL, team="CADIZ"):
     if not os.path.exists(path):
         return None
     try:
-        return read_dataframe(path, team=team)
+        df = read_dataframe(path, team=team)
     except Exception:
         return None
+    return _corregir_escala_plan_usd(df)
 
 
 def _valor_proyeccion(df_proy, ronda_num, spec, team="CADIZ"):
@@ -283,15 +311,12 @@ def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team=
     Real: CESIM NO publica un único "Estado de flujo de efectivo, Global" en el RDOS -- lo publica en
     3 Estados separados: 'Flujo de efectivo de casa matriz, miles USD' (HQ + operación en EE.UU.) +
     'Estado de flujo de efectivo, miles USD, China' + '...Europa'. Se reconstruye sumando el
-    CFO/CFI/CFF de los tres (cada valor × 1.000, misma convención "miles USD" → USD que usa
-    _to_absoluto() para el resto de los campos reales agregados). Los movimientos INTERCOMPAÑÍA
-    (préstamos internos entre casa matriz y filiales, dividendos que las filiales giran a casa
-    matriz) se CANCELAN naturalmente al sumar los tres lados -- no hace falta identificarlos ni
-    restarlos a mano. Verificado exacto contra Ronda 1 real: CFO+CFI+CFF sumados reconcilia (a
-    redondeo de punto flotante) con la suma de 'Cambios en efectivo y equivalentes de efectivo' de
-    los 3 Estados -- confirma que la reconstrucción es consistente. El CFF Global de Ronda 1 dio
-    exactamente el dividendo real pagado a los accionistas EXTERNOS de CADIZ (todo lo intercompañía
-    se canceló a 0) -- una verificación limpia de que el método es correcto."""
+    CFO/CFI/CFF de los tres, SIN ningún x1000 (ver _to_absoluto(), Adenda 25: cesim_parser ya entrega
+    USD en escala absoluta pese a que el RDOS rotule la sección "miles USD" -- confirmado por Julián
+    contra el RDOS real, "Ingresos por ventas" Global de CADIZ Ronda 1 ronda los USD 46 millones, no
+    los USD 46 mil millones que daría con el x1000). Los movimientos INTERCOMPAÑÍA (préstamos internos
+    entre casa matriz y filiales, dividendos que las filiales giran a casa matriz) se CANCELAN
+    naturalmente al sumar los tres lados -- no hace falta identificarlos ni restarlos a mano."""
     plan = {}
     for clave, metric in [("cfo", "Total actividades operativas (CFO)"),
                            ("cfi", "Total actividades de inversión (CFI)"),
@@ -311,24 +336,41 @@ def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team=
         v_cff = _valor_real_grano(df_real, ronda_nombre, estado, "Efectivo proveniente de actividades financieras", "Total", empresa=team)
         if v_cfo is not None or v_cfi is not None or v_cff is not None:
             encontrado = True
-        real["cfo"] += (v_cfo * 1000.0) if v_cfo is not None else 0.0
-        real["cfi"] += (v_cfi * 1000.0) if v_cfi is not None else 0.0
-        real["cff"] += (v_cff * 1000.0) if v_cff is not None else 0.0
+        real["cfo"] += v_cfo if v_cfo is not None else 0.0
+        real["cfi"] += v_cfi if v_cfi is not None else 0.0
+        real["cff"] += v_cff if v_cff is not None else 0.0
     if not encontrado:
         real = {"cfo": None, "cfi": None, "cff": None}
     return {"plan": plan, "real": real}
 
 
 def _to_absoluto(valor, spec_tipo, fuente):
-    """cesim_parser reporta USD y unidades físicas en 'miles' (RDOS nativo) y % en escala 0-100
-    (p.ej. 19.99, no 0.1999) -- misma convención canónica de unidades que build_gestion_v2.py (Cambio
-    3, ver Informe_V2.md): USD/unidades -> x1000, ratio -> /100. 'usd_accion' (p.ej. EPS) ya viene
-    absoluto de origen en el RDOS -- sin conversión. La proyección (DATA_EXPORT del Excel) ya viene en
-    esa convención canónica -- normalizar acá el lado 'real' para poder restar directamente."""
+    """cesim_parser reporta % en escala 0-100 (p.ej. 19.99, no 0.1999) -- se normaliza a fracción acá
+    para poder restar directo contra el lado 'real'. 'usd_accion' (p.ej. EPS) ya viene absoluto de
+    origen en el RDOS -- sin conversión.
+
+    Historial de la conversión x1000 en USD/unidades (para que no se repita el vaivén):
+    - Adenda 23: se concluyó que faltaba un x1000 y se lo agregó. La evidencia era una reconciliación
+      (precio x volumen vs. 'Ingresos de mercados' publicado) que resultó ser matemáticamente
+      INVARIANTE a la escala -- multiplicar todo por cualquier factor k sigue "reconciliando", así que
+      esa prueba nunca pudo haber distinguido nada.
+    - Adenda 24: se revirtió lo anterior con una prueba cruzada (salario mensual x headcount de I+D)
+      que parecía confirmar el x1000. Esa prueba asumía sin verificar que el headcount de I+D
+      coincidía con la dotación total relevante para "Salarios y costos laborales" -- un supuesto
+      propio no confirmado, no un dato.
+    - Adenda 25 (definitiva): Julián confirmó DIRECTAMENTE contra el RDOS real de CESIM (Ronda 1) que
+      "Ingresos por ventas" Global de CADIZ ronda los USD 46 millones, no los USD 46 mil millones --
+      dato histórico real, la fuente de mayor jerarquía disponible acá (por encima de cualquier
+      reconstrucción propia). Esto confirma que cesim_parser YA entrega USD/unidades en escala
+      absoluta (pese a que el RDOS rotula la sección "miles USD") -- el x1000 se saca.
+      OJO -- esto deja pendiente, sin resolver, la contradicción con la prueba de nómina de la Adenda
+      24 (salario mensual x headcount de I+D daba un orden de magnitud 1000x mayor a "Salarios y
+      costos laborales" sin el x1000): probablemente el headcount de I+D NO es la dotación total de la
+      empresa (es solo personal de I+D), pero esto no se verificó -- se deja explícitamente como
+      pregunta abierta, no como explicación confirmada.
+    """
     if fuente != "real" or not isinstance(valor, (int, float)):
         return valor
-    if spec_tipo in ("usd", "unidades"):
-        return valor * 1000.0
     if spec_tipo == "ratio":
         return valor / 100.0
     return valor
