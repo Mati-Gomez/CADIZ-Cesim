@@ -112,6 +112,20 @@ def format_num(val, dec=1):
         return f"{val:,.{dec}f}"
     except (ValueError, TypeError):
         return ""
+def _texto_cascada(valores, base=None):
+    """Texto para las barras de un gráfico en cascada (Waterfall): valor absoluto + % sobre la barra
+    de referencia -- por defecto la PRIMERA barra de la cascada (el ancla desde la que se arma el
+    resto, ej. 'Ingresos Proyectados', 'Costo Proyectado', 'Precio'). A pedido del equipo: además
+    del valor absoluto, mostrar también el %, en todos los gráficos en cascada de la app. Si la base
+    es 0/None (o el valor no es numérico), se muestra solo el absoluto -- dividir por 0 no aporta."""
+    base = valores[0] if base is None else base
+    out = []
+    for v in valores:
+        if base not in (None, 0) and pd.notna(v) and pd.notna(base):
+            out.append(f'{format_num(v)} ({v / base * 100:.1f}%)')
+        else:
+            out.append(format_num(v))
+    return out
 def valor_de(sub_df, metrica, empresa=None):
     d = sub_df[sub_df['Metrica'] == metrica]
     if empresa: d = d[d['Empresa'] == empresa]
@@ -575,18 +589,17 @@ def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
     fig = go.Figure(go.Waterfall(
         orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'total'],
         x=[e[0] for e in etapas], y=[e[1] for e in etapas],
-        text=[format_num(v) for _, v in etapas], textposition='outside',
-        # Color = favorable/desfavorable para CADIZ (verde/ámbar), no "sube/baja" -- antes el desvío
-        # desfavorable usaba MUTED_PALETTE[2], un verde grisáceo casi del mismo matiz que el favorable
-        # (COLOR_POSITIVE): a simple vista ambos leían "verde" y no se distinguía cuál desvío ayudó y
-        # cuál perjudicó. Ahora es el mismo par verde/ámbar que el resto de los gráficos de desvío.
-        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
+        text=_texto_cascada([v for _, v in etapas]), textposition='outside',
+        # Adenda 25 (a pedido del equipo): TODOS los gráficos en cascada de la app usan ahora la
+        # misma convención universal -- verde = lo que suma (increasing), rojo = lo que resta
+        # (decreasing) -- en vez de favorable/desfavorable por caso. Antes acá era verde/ámbar.
+        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_NEGATIVE}},
         totals={'marker': {'color': COLOR_CADIZ}}))  # total = "Ingresos Reales" -- identidad CADIZ, no sentimiento
     fig.update_layout(title=f'Ingresos — Proyectado vs. Real, {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]})')
     mostrar(fig, ocultar_eje_valores='y')
-    st.caption(f'Verde = desvío que sumó Ingresos; ámbar = desvío que restó. En moneda nativa de {mercado_sel} '
-               f'({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se convierte a USD para no asumir un tipo de cambio '
-               'que el simulador no publica.')
+    st.caption(f'Verde = desvío que sumó Ingresos; rojo = desvío que restó. % entre paréntesis = sobre los Ingresos '
+               f'Proyectados. En moneda nativa de {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se '
+               'convierte a USD para no asumir un tipo de cambio que el simulador no publica.')
 
 def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
     st.markdown('###### Cuota de mercado — Proyectado vs. Real, por tecnología')
@@ -678,20 +691,25 @@ def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy
     fig = go.Figure(go.Waterfall(
         orientation='v', measure=['absolute'] + ['relative'] * (len(etapas) - 2) + ['total'],
         x=[e[0] for e in etapas], y=[e[1] for e in etapas],
-        text=[format_num(v) for _, v in etapas], textposition='outside',
-        # Verde = desvío que ayudó a bajar el costo (favorable); ámbar = lo empujó hacia arriba
-        # (desfavorable) -- mismo par de colores y mismo criterio (favorable/desfavorable, no
-        # sube/baja) que el waterfall de Ingresos de más arriba. Antes usaba MUTED_PALETTE[2] (un
-        # verde grisáceo) para el costo que SUBE y COLOR_POSITIVE (verde pleno) para el que BAJA --
-        # dos verdes casi del mismo matiz para significados opuestos, imposible de leer de un vistazo.
-        increasing={'marker': {'color': COLOR_METRICA['riesgo']}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
+        text=_texto_cascada([v for _, v in etapas]), textposition='outside',
+        # Adenda 25 (a pedido del equipo): convención universal para TODOS los waterfalls de la
+        # app -- verde = lo que suma (increasing), rojo = lo que resta (decreasing), siempre, sin
+        # excepción por favorable/desfavorable. Antes acá era al revés (ámbar para el costo que
+        # SUBE, verde para el que BAJA) porque se leía como favorable/desfavorable para el costo
+        # -- pero eso rompía la consistencia con el resto de los waterfalls de la app, que es lo
+        # que el equipo pidió priorizar. OJO: como consecuencia, acá una "Desvío X" que aumenta el
+        # costo unitario (malo para CADIZ) se ve en VERDE (porque suma a la barra), y una que lo
+        # reduce (bueno) se ve en ROJO (porque resta) -- es la convención universal pedida, ya no
+        # favorable/desfavorable para esta métrica en particular.
+        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_NEGATIVE}},
         totals={'marker': {'color': COLOR_CADIZ}}))  # total = "Costo Real" -- identidad CADIZ, no sentimiento
     fig.update_layout(title=f'Costo unitario de fabricación — {area_sel}, {ronda_snapshot}')
     mostrar(fig, ocultar_eje_valores='y')
     st.caption('Cada barra "Desvío {tecnología}" es cuánto empujó esa tecnología el costo unitario ponderado '
                'total, de Proyectado a Real (ponderado por su propia producción real) — no el costo de esa '
-               'tecnología en sí. Verde = empujó el costo hacia abajo (favorable); ámbar = lo empujó hacia '
-               'arriba. Costo Proyectado + todos los desvíos = Costo Real, exacto.')
+               'tecnología en sí. Verde = suma al costo (lo aumenta); rojo = resta (lo reduce) — convención '
+               'universal de color de la app, no indica si es favorable o no para CADIZ. % entre paréntesis = '
+               'sobre el Costo Proyectado. Costo Proyectado + todos los desvíos = Costo Real, exacto.')
 
 def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
     # Adenda 23 (a pedido del equipo): reemplaza las barras agrupadas (Proyectado vs. Real, un grupo
@@ -711,11 +729,11 @@ def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
         fig = go.Figure(go.Waterfall(
             orientation='v', measure=['absolute', 'relative', 'relative', 'total'],
             x=[e[0] for e in etapas], y=[v for _, v in etapas],
-            text=[format_num(v) for _, v in etapas], textposition='outside',
-            # Verde = suma caja (flujo positivo), ámbar = consume caja (flujo negativo) -- mismo
-            # criterio y mismo par de colores que los demás Waterfall de la app (costo unitario,
-            # margen unitario): no es "sube/baja" sino "favorable/desfavorable" para la caja.
-            increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_METRICA['riesgo']}},
+            text=_texto_cascada([v for _, v in etapas], base=cfo if cfo not in (0, None) else None), textposition='outside',
+            # Adenda 25: convención universal de color de la app -- verde = suma (increasing),
+            # rojo = resta (decreasing), en todos los waterfalls, sin excepción por favorable/
+            # desfavorable. Antes decreasing usaba COLOR_METRICA['riesgo'] (ámbar).
+            increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_NEGATIVE}},
             totals={'marker': {'color': COLOR_POSITIVE if total >= 0 else COLOR_NEGATIVE}}))
         fig.update_layout(title=titulo)
         mostrar(fig, ocultar_eje_valores='y')
@@ -762,6 +780,30 @@ def ronda_anterior_de(ronda):
     sub_prev = df[df['Ronda_Orden'] == ordenes[idx - 1]]['Ronda']
     return sub_prev.iloc[0] if not sub_prev.empty else None
 
+def delta_vs_ronda_anterior(estado, metrica, empresa=None, ronda_actual=None, seccion=None):
+    """Adenda 25 -- delta % de una métrica para `empresa` entre `ronda_actual` (default:
+    ronda_snapshot) y la ronda INMEDIATAMENTE ANTERIOR (vía ronda_anterior_de) -- generaliza el
+    patrón 'vs. ronda anterior' para poder pedirlo de cualquier Estado/Métrica, igual que delta_raw
+    (definido dentro de cada sección) generaliza 'vs. promedio de industria'. None si no hay ronda
+    anterior en los datos cargados, o si falta el dato en cualquiera de las dos rondas.
+    Devuelve (delta_pct, ronda_prev) -- se necesita el nombre de la ronda anterior para el texto
+    ('vs Ronda 1'), así que se devuelve junto con el número en vez de forzar un segundo llamado a
+    ronda_anterior_de()."""
+    ronda_actual = ronda_actual or ronda_snapshot
+    empresa = empresa or empresa_analisis
+    ronda_prev = ronda_anterior_de(ronda_actual)
+    if not ronda_prev:
+        return None, None
+    d_act = df[(df['Estado'] == estado) & (df['Ronda'] == ronda_actual)]
+    d_prev = df[(df['Estado'] == estado) & (df['Ronda'] == ronda_prev)]
+    if seccion:
+        d_act = d_act[d_act['Seccion'] == seccion]
+        d_prev = d_prev[d_prev['Seccion'] == seccion]
+    val_act, val_prev = valor_de(d_act, metrica, empresa), valor_de(d_prev, metrica, empresa)
+    if val_act is None or val_prev is None or pd.isna(val_act) or pd.isna(val_prev) or val_prev == 0:
+        return None, ronda_prev
+    return (val_act - val_prev) / abs(val_prev) * 100, ronda_prev
+
 def kpi_con_tendencia(col, label, valor_txt, serie, delta=None, color=None, invertir=False):
     """Tarjeta de KPI + sparkline debajo, para ver nivel y tendencia sin cambiar de sección."""
     with col:
@@ -769,6 +811,17 @@ def kpi_con_tendencia(col, label, valor_txt, serie, delta=None, color=None, inve
         fig = sparkline(serie, color=color, invertir=invertir)
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def _icono_delta(texto):
+    """Adenda 25: ícono 🔺/🔻 según el signo LITERAL del texto de delta (ya formateado con signo,
+    ej. '+4.3% vs Prom' / '-2.0% vs Ronda 1') -- el color (verde/rojo) sigue viniendo de
+    'favorable', que puede estar invertido para métricas donde bajar es bueno (Deuda, costos).
+    Así un delta de Deuda que BAJA se ve con 🔻 (bajó, literal) pero en VERDE (es favorable)."""
+    t = texto.strip()
+    if t.startswith('+'): return '🔺 '
+    if t.startswith('-') or t.startswith('−'): return '🔻 '
+    return ''
+
 def kpi_banda_oscura(items):
     """Banda oscura para los 2-3 KPIs de valor MÁS importantes de la ronda (los que le interesan
     a un accionista) -- los separa visualmente del resto de tarjetas claras en vez de competir al
@@ -776,23 +829,64 @@ def kpi_banda_oscura(items):
     HTML de una sola pieza (no columnas + st.metric) porque no hay forma segura de "abrir" un div
     oscuro con un st.markdown y "cerrarlo" varios st.* después -- cada items[i] es un dict con
     'label', 'valor' (ya formateado) y opcionalmente 'delta' (texto) + 'favorable' (True/False/None
-    para pintar el delta verde/rojo; None lo deja neutro)."""
+    para pintar el delta verde/rojo; None lo deja neutro).
+    Adenda 25 (a pedido del equipo: "no quiero ver solamente la variación vs el promedio, que quede
+    la variación con ronda anterior también, en todos los casos"): cada item admite además 'delta2'
+    + 'favorable2' para una SEGUNDA línea de delta -- por convención delta = vs. Ronda Anterior,
+    delta2 = vs. Promedio Industria (o al revés, según arme el caller; esta función no asume cuál es
+    cuál, solo las apila en el orden en que llegan)."""
     piezas = []
     for it in items:
         delta_html = ''
-        if it.get('delta'):
+        for clave_delta, clave_fav in (('delta', 'favorable'), ('delta2', 'favorable2')):
+            if not it.get(clave_delta):
+                continue
             # OJO: "favorable" suele venir de comparar floats de pandas/numpy (ej. delta > 0), que da
             # numpy.bool_ -- "is False" falla por identidad contra ese tipo aunque el valor sea
             # correcto (numpy.bool_(False) is False → False). Sin comparación de identidad.
-            fav = it.get('favorable')
+            fav = it.get(clave_fav)
             clase = '' if fav is None else ('up' if fav else 'down')
-            delta_html = f'<div class="kpi-band-delta {clase}">{it["delta"]}</div>'
+            delta_html += f'<div class="kpi-band-delta {clase}">{_icono_delta(it[clave_delta])}{it[clave_delta]}</div>'
         piezas.append(f'<div class="kpi-band-item"><div class="kpi-band-label">{it["label"]}</div>'
                        f'<div class="kpi-band-value">{it["valor"]}</div>{delta_html}</div>')
     # En modo oscuro nativo de Streamlit la banda necesita distinguirse por color, no por
     # oscuridad -- ver el comentario junto a ".kpi-band-oscura.tema-oscuro" en style.css.
     clase_tema = ' tema-oscuro' if es_modo_oscuro() else ''
     st.markdown(f'<div class="kpi-band-oscura{clase_tema}">{"".join(piezas)}</div>', unsafe_allow_html=True)
+
+def kpi_doble_delta(col, label, valor_txt, d_ronda=None, ronda_prev_nombre=None, favorable_ronda=None,
+                     d_industria=None, favorable_industria=None, unidad='%'):
+    """Adenda 25 (a pedido del equipo -- reemplaza st.metric(..., delta=...) en las tarjetas de KPI
+    'claras' que antes mostraban un solo delta, 'X% vs Prom'): tarjeta con DOS deltas apilados, vs.
+    Ronda Anterior y vs. Promedio Industria, siempre los dos que haya dato. st.metric no soporta dos
+    deltas nativos, así que se arma en HTML -- el bloque '.kpi-card-doble' en style.css calca el
+    estilo de las cards st.metric nativas (mismo borde lila, fondo y sombra) para que conviva sin
+    desentonar al lado de tarjetas que todavía usan st.metric con un solo valor (ej. las que no
+    tienen delta, como 'Calificación crediticia').
+    - d_ronda / d_industria: delta YA calculado en %, como float (ej. de delta_vs_ronda_anterior() y
+      delta_raw() respectivamente) -- None si no hay dato.
+    - favorable_ronda / favorable_industria: True/False para pintar ESE delta verde/rojo; si se deja
+      en None se asume signo positivo = favorable (sirve para la mayoría de las métricas; para
+      'menos es mejor' -- Deuda, costos -- hay que pasarlo explícito, igual que ya hace el resto
+      de la app con delta_color='inverse' / 'favorable' invertido).
+    - ronda_prev_nombre: nombre de la ronda anterior (ronda_anterior_de(...)) para el texto de esa
+      línea ('vs Ronda 1'); si no se pasa, queda 'vs ronda anterior' genérico.
+    El ícono (🔺/🔻) sigue el signo LITERAL del delta (subió/bajó); el color sigue 'favorable' --
+    mismo criterio que ya usa el resto del tablero (ver _icono_delta / kpi_banda_oscura)."""
+    def _linea(valor, etiqueta, favorable):
+        if valor is None or pd.isna(valor):
+            return ''
+        icono = '🔺' if valor > 0 else ('🔻' if valor < 0 else '➖')
+        fav = favorable if favorable is not None else (valor > 0)
+        clase = 'up' if fav else 'down'
+        return f'<div class="kpi-card-delta {clase}">{icono} {valor:+.1f}{unidad} {etiqueta}</div>'
+    etiqueta_ronda = f'vs {ronda_prev_nombre}' if ronda_prev_nombre else 'vs ronda anterior'
+    html = (f'<div class="kpi-card-doble"><div class="kpi-card-label">{label}</div>'
+            f'<div class="kpi-card-value">{valor_txt}</div>'
+            f'{_linea(d_industria, "vs Industria", favorable_industria)}'
+            f'{_linea(d_ronda, etiqueta_ronda, favorable_ronda)}'
+            f'</div>')
+    (col if col is not None else st).markdown(html, unsafe_allow_html=True)
 
 # ---------------- Panel de alertas ----------------
 def evaluar_alertas():
@@ -1142,17 +1236,40 @@ def _seccion_resultado_resumen():
     val_cap = cap_vals.get(empresa_analisis)
     delta_cap = ((val_cap - prom_cap)/prom_cap*100) if prom_cap and val_cap else None
 
+    # Adenda 25 (a pedido del equipo: "no quiero ver solamente la variación vs el promedio, que
+    # quede la variación con ronda anterior también, en todos los casos"): cada KPI de la banda
+    # ahora trae TAMBIÉN su delta vs. la ronda anterior, además del vs. Promedio Industria que ya
+    # tenía. "Beneficio del accionista" no tiene un Estado/Metrica directo en `df` (sale de
+    # Modulo == 'Creación de valor', no de un Estado) -- por eso se arma a mano en vez de con
+    # delta_vs_ronda_anterior(), que solo sabe filtrar por Estado.
+    d_ret_acum_ronda, ronda_prev_kpi = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Retorno total acumulado del accionista (p.a.), %')
+    d_cap_ronda, _ = delta_vs_ronda_anterior('Valuación - Global', 'Capitalización de mercado, miles USD')
+    d_cv_ronda = None
+    if ronda_prev_kpi:
+        acc_prev = df[(df['Modulo'] == 'Creación de valor') & (df['Seccion'] == 'Accionistas') &
+                      (df['Metrica'] == 'Total') & (df['Ronda'] == ronda_prev_kpi)]
+        val_cv_prev = valor_de(acc_prev, 'Total', empresa_analisis)
+        if val_cv_prev not in (None, 0) and val_cv is not None and pd.notna(val_cv_prev) and pd.notna(val_cv):
+            d_cv_ronda = (val_cv - val_cv_prev) / abs(val_cv_prev) * 100
+
+    def _fmt_delta(d, sufijo):
+        return f'{d:+.1f}% {sufijo}' if d is not None else None
+
+    sufijo_ronda = f'vs {ronda_prev_kpi}' if ronda_prev_kpi else 'vs ronda anterior'
     # Los 3 números que más le importan a un accionista van en la banda oscura, separados del
     # resto (ver kpi_banda_oscura) -- "Retorno acum. del accionista", mismo término base que usa
     # el crosswalk de Resultados; "Capitalización de mercado" (antes "Market Cap", en inglés) usa
     # el mismo nombre que el propio campo de CESIM.
     kpi_banda_oscura([
         {'label': 'Retorno acum. del accionista', 'valor': f'{val_ret_acum:,.1f}%' if val_ret_acum is not None else '—',
-         'delta': f'{delta_ret_acum:+.1f}% vs Prom' if delta_ret_acum is not None else None, 'favorable': (delta_ret_acum > 0) if delta_ret_acum is not None else None},
+         'delta': _fmt_delta(d_ret_acum_ronda, sufijo_ronda), 'favorable': (d_ret_acum_ronda > 0) if d_ret_acum_ronda is not None else None,
+         'delta2': _fmt_delta(delta_ret_acum, 'vs Industria'), 'favorable2': (delta_ret_acum > 0) if delta_ret_acum is not None else None},
         {'label': 'Beneficio del accionista', 'valor': format_num(val_cv),
-         'delta': f'{delta_cv:+.1f}% vs Prom' if delta_cv is not None else None, 'favorable': (delta_cv > 0) if delta_cv is not None else None},
+         'delta': _fmt_delta(d_cv_ronda, sufijo_ronda), 'favorable': (d_cv_ronda > 0) if d_cv_ronda is not None else None,
+         'delta2': _fmt_delta(delta_cv, 'vs Industria'), 'favorable2': (delta_cv > 0) if delta_cv is not None else None},
         {'label': 'Capitalización de mercado (USD)', 'valor': format_num(val_cap),
-         'delta': f'{delta_cap:+.1f}% vs Prom' if delta_cap else None, 'favorable': (delta_cap > 0) if delta_cap else None},
+         'delta': _fmt_delta(d_cap_ronda, sufijo_ronda), 'favorable': (d_cap_ronda > 0) if d_cap_ronda is not None else None,
+         'delta2': _fmt_delta(delta_cap, 'vs Industria'), 'favorable2': (delta_cap > 0) if delta_cap else None},
     ])
 
     # Posición en el ranking y Retorno de la ronda son más de contexto que de "número que decide
@@ -1163,22 +1280,29 @@ def _seccion_resultado_resumen():
     # equipo en foco (COLOR_MAP ya resuelve lila para CADIZ y el tono muted que le toque a cualquier
     # otro equipo), así que se pasa explícito.
     # invertir: en el ranking, "para arriba" en el gráfico tiene que ser mejorar de puesto
+    # OJO -- excepción deliberada al "doble delta en todos los casos": "Posición en el ranking" es
+    # un ORDINAL (1°, 2°...), no un monto ni un %, así que un "+X% vs Industria/Ronda Anterior" no
+    # tiene una lectura clara acá (¿+50% de qué, de puesto?) -- se deja con su sparkline (que ya
+    # muestra la tendencia del puesto) y sin delta numérico, en vez de forzar un % engañoso.
     kpi_con_tendencia(c2, 'Posición en el ranking', f'{pos}° de {len(COMPANIES)}', serie_puesto,
                        color=COLOR_MAP.get(empresa_analisis), invertir=True)
 
     prom_ret_ronda = np.nanmean([v for v in retorno_ronda_vals.values() if v is not None]) if any(v is not None for v in retorno_ronda_vals.values()) else None
     val_ret_ronda = retorno_ronda_vals.get(empresa_analisis)
     delta_ret_ronda = ((val_ret_ronda - prom_ret_ronda) / abs(prom_ret_ronda) * 100) if prom_ret_ronda and val_ret_ronda is not None else None
-    # '—' y no 'Sin ronda previa': ese texto largo se cortaba con "..." en la tarjeta (el valor de
-    # st.metric no wrappea como el label) -- el caption de abajo ya aclara por qué no hay dato acá.
+    # OJO -- segunda excepción deliberada: "Retorno de la acción" YA ES, por definición, la variación
+    # de precio de ESTA ronda vs. la ronda anterior (ver comentario más arriba) -- agregarle un
+    # segundo delta "vs. Ronda Anterior" sería comparar un cambio contra sí mismo, confuso. Se deja
+    # con un solo delta (vs. Industria), que sí es una comparación genuinamente distinta.
     kpi_con_tendencia(c5, 'Retorno de la acción',
                        f'{val_ret_ronda:+,.1f}%' if val_ret_ronda is not None else '—',
                        serie_metrica('Ratios e indicadores financieros clave', 'Precio de la acción al final de la ronda, USD', empresa_analisis),
-                       delta=f'{delta_ret_ronda:+.1f}% vs Prom' if delta_ret_ronda is not None else None,
+                       delta=f'{delta_ret_ronda:+.1f}% vs Industria' if delta_ret_ronda is not None else None,
                        color=COLOR_MAP.get(empresa_analisis))
     st.caption('El retorno acumulado es per-annum y no es aditivo entre rondas — para ver cómo fue *esta* ronda usá '
                '"Retorno de la acción", que es variación simple de precio. En la primera ronda del ecosistema no hay '
-               'ronda previa con la cual compararla.')
+               'ronda previa con la cual compararla. "Retorno de la acción" ya es en sí una comparación vs. ronda '
+               'anterior, por eso trae un solo delta (vs. Industria) y no dos.')
     st.divider()
     vista_ranking = st.radio('Vista del ranking (columna derecha)', ['Acumulado (Retorno del Accionista, %)', f'Solo {ronda_snapshot} (USD)'], horizontal=True, key='vista_ranking_cv')
     col_a, col_b = st.columns(2)
@@ -1190,12 +1314,17 @@ def _seccion_resultado_resumen():
             costos_prod = g('Costos de fabricación interna') + g('Costos de la característica') + g('Costos de fabricación contratada')
             costos_op = g('Costos de transporte y aranceles') + g('I+D') + g('Promoción') + g('Administración')
             depr, ints, imp, ben = g('Depreciación de Activos Fijos'), g('Gastos financieros netos'), g('Impuesto sobre el beneficio'), g('Beneficio de la ronda')
+            _valores_puente = [ingresos, -costos_prod, -costos_op, -depr, -ints, -imp, ben]
             fig = go.Figure(go.Waterfall(
                 orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'relative', 'relative', 'total'],
                 x=['Ingresos', '- Prod', '- Op/Admin', '- Depr', '- Int', '- Imp', '= Neto'],
-                y=[ingresos, -costos_prod, -costos_op, -depr, -ints, -imp, ben],
-                text=[format_num(v) for v in [ingresos, -costos_prod, -costos_op, -depr, -ints, -imp, ben]], textposition='outside',
-                decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
+                y=_valores_puente,
+                # Adenda 25: % entre paréntesis sobre Ingresos (primera barra, el ancla del puente).
+                text=_texto_cascada(_valores_puente), textposition='outside',
+                # Adenda 25 (a pedido del equipo): convención universal -- verde = suma (increasing),
+                # rojo = resta (decreasing), en todos los waterfalls de la app. Antes decreasing usaba
+                # MUTED_PALETTE[2] (un verde grisáceo apagado, no rojo).
+                decreasing={'marker': {'color': COLOR_NEGATIVE}}, increasing={'marker': {'color': COLOR_POSITIVE}},
                 totals={'marker': {'color': COLOR_POSITIVE if ben > 0 else COLOR_NEGATIVE}}
             ))
             fig.update_layout(title=f'Puente de Beneficio Neto — {empresa_analisis}')
@@ -1251,8 +1380,10 @@ def _seccion_resultado_resumen():
         fig_d.add_trace(go.Scatter(x=dfd['Unidades'], y=dfd['Empresa'], mode='markers', name='Cuota por unidades, %',
                                     marker=dict(size=11, color=MUTED_PALETTE[0]),
                                     hovertemplate='%{y} — Unidades: %{x:.1f}%<extra></extra>'))
+        # Adenda 25: se saca el marrón (MUTED_PALETTE[1]) de acá -- no pasa a lila porque seguiría sin
+        # ser identidad (ver comentario de arriba), y el lila se reserva para "esto es CADIZ".
         fig_d.add_trace(go.Scatter(x=dfd['Valor'], y=dfd['Empresa'], mode='markers', name='Cuota por valor ($), %',
-                                    marker=dict(size=11, color=MUTED_PALETTE[1], symbol='diamond'),
+                                    marker=dict(size=11, color=MUTED_PALETTE[5], symbol='diamond'),
                                     hovertemplate='%{y} — Valor: %{x:.1f}%<extra></extra>'))
         fig_d.update_layout(title=f'Cuota de mercado global — unidades vs. valor, {ronda_snapshot}', xaxis_title='%',
                              legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
@@ -1400,8 +1531,9 @@ def seccion_mercado():
             som_df = som_sov[['Empresa', 'Valor']].rename(columns={'Valor': 'SOM'})
             comp_sov = sov_df.merge(som_df, on='Empresa', how='outer')
             comp_sov_long = comp_sov.melt(id_vars='Empresa', value_vars=['SOV', 'SOM'], var_name='Indicador', value_name='Pct').dropna(subset=['Pct'])
+            # Adenda 25 (pedido explícito del equipo, citado como ejemplo): se saca el marrón de acá.
             fig_sov = px.bar(comp_sov_long, x='Empresa', y='Pct', color='Indicador', barmode='group',
-                              color_discrete_map={'SOV': MUTED_PALETTE[0], 'SOM': MUTED_PALETTE[1]},
+                              color_discrete_map={'SOV': MUTED_PALETTE[0], 'SOM': COLOR_CADIZ},
                               text=comp_sov_long['Pct'].apply(lambda v: f'{v:,.1f}%'),
                               title=f'SOV vs. SOM — {tech_sel}, {pais_sel}, {ronda_snapshot}')
             fig_sov.update_traces(textposition='outside', cliponaxis=False)
@@ -1425,7 +1557,9 @@ def seccion_mercado():
             # reasigna colores según el orden de aparición en cada gráfico — por eso "Marca"
             # salía de un color acá y de otro allá).
             # 5 categorías genéricas (no hay identidad ni sentimiento acá) -- las 5 usan tonos muted.
-            estrategia_colores = dict(zip(estrategias, [MUTED_PALETTE[0], MUTED_PALETTE[1], MUTED_PALETTE[2], MUTED_PALETTE[3], MUTED_PALETTE[4]]))
+            # Adenda 25: se saca el marrón (MUTED_PALETTE[1]) -- no pasa a lila para no sugerir que
+            # una de las 5 estrategias "es CADIZ" (esto es la estrategia de LOS 7 equipos a la vez).
+            estrategia_colores = dict(zip(estrategias, [MUTED_PALETTE[0], MUTED_PALETTE[5], MUTED_PALETTE[2], MUTED_PALETTE[3], MUTED_PALETTE[4]]))
             est = est.copy().sort_values('Empresa')
             # Antes era un gráfico de barras todas de la misma altura: el eje Y no codificaba nada
             # y el texto iba rotado adentro de la barra. Peor todavía, px.bar parte el dataframe en
@@ -1504,7 +1638,10 @@ def seccion_mercado():
             cols_dv = st.columns(2)
             for i, (tech, piv) in enumerate(paneles_tech):
                 fig_dv = go.Figure()
-                for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', MUTED_PALETTE[1])]:
+                # Adenda 25: se saca el marrón. No pasa a lila -- "Ventas" acá es de LOS 7 EQUIPOS
+                # SUMADOS (toda la torta del mercado), no de CADIZ; ponerlo lila implicaría identidad
+                # donde no la hay.
+                for tipo, color in [('Demanda', MUTED_PALETTE[0]), ('Ventas', MUTED_PALETTE[5])]:
                     d_t = piv[piv['Tipo'] == tipo]
                     fig_dv.add_trace(go.Bar(x=d_t['Ronda'], y=d_t['Valor'], name=tipo, marker_color=color))
                 fig_dv.update_layout(barmode='group', title=f'{tech} — {pais_evo}')
@@ -1580,8 +1717,10 @@ def seccion_operaciones():
         col_pp, col_ff = st.columns(2)
         with col_pp:
             if not prod.empty:
+                # Adenda 25: se saca el marrón. No pasa a lila -- este gráfico es del EQUIPO EN FOCO
+                # (empresa_analisis), que puede no ser CADIZ; "Interna" no es identidad de CADIZ.
                 fig_prod = px.bar(prod, x='Subgrupo', y='Valor', color='Tipo', barmode='group',
-                                   color_discrete_map={'Interna': MUTED_PALETTE[1], 'Contratada': MUTED_PALETTE[0]},
+                                   color_discrete_map={'Interna': MUTED_PALETTE[5], 'Contratada': MUTED_PALETTE[0]},
                                    text=prod['Valor'].apply(lambda v: f'{v:,.0f}'),
                                    title=f'Producción propia vs. contratada — {ronda_snapshot}')
                 fig_prod.update_traces(textposition='outside', cliponaxis=False)
@@ -1594,8 +1733,10 @@ def seccion_operaciones():
             fab_all['Valor'] = num(fab_all['Valor'])
             fab_piv = fab_all.groupby(['Empresa', 'Metrica'], as_index=False)['Valor'].sum()
             if not fab_piv.empty:
+                # Adenda 25: se saca el marrón. No pasa a lila -- son los 7 equipos a la vez, "EE.UU."
+                # es un mercado, no identidad de CADIZ.
                 fig_fab = px.bar(fab_piv, x='Empresa', y='Valor', color='Metrica', barmode='stack',
-                                  color_discrete_map={'EE.UU.': MUTED_PALETTE[1], 'China': MUTED_PALETTE[0]},
+                                  color_discrete_map={'EE.UU.': MUTED_PALETTE[5], 'China': MUTED_PALETTE[0]},
                                   text=fab_piv['Valor'].apply(lambda v: f'{v:,.0f}'),
                                   title=f'Fábricas por equipo — {ronda_snapshot}')
                 fig_fab.update_traces(textposition='inside')
@@ -1669,12 +1810,16 @@ def seccion_operaciones():
             c_flete = -gm('Transporte y aranceles') / unidades
             c_caract = -gm('Costos de la característica') / unidades
             m_bruto = gm('Beneficio bruto') / unidades
+            _valores_margen_ue = [p_venta, c_prod, c_flete, c_caract, m_bruto]
             fig_ue = go.Figure(go.Waterfall(
                 orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'total'],
                 x=['Precio', '- Prod.', '- Logística', '- Caract.', '= Margen Unitario'],
-                y=[p_venta, c_prod, c_flete, c_caract, m_bruto],
-                text=[format_num(v) for v in [p_venta, c_prod, c_flete, c_caract, m_bruto]], textposition='outside',
-                decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
+                y=_valores_margen_ue,
+                # Adenda 25: % entre paréntesis sobre el Precio (primera barra).
+                text=_texto_cascada(_valores_margen_ue), textposition='outside',
+                # Adenda 25: convención universal de color -- verde = suma, rojo = resta. Antes
+                # decreasing usaba MUTED_PALETTE[2] (verde grisáceo apagado, no rojo).
+                decreasing={'marker': {'color': COLOR_NEGATIVE}}, increasing={'marker': {'color': COLOR_POSITIVE}},
                 totals={'marker': {'color': COLOR_POSITIVE if m_bruto > 0 else COLOR_NEGATIVE}}
             ))
             fig_ue.update_layout(title=f'Margen Unitario — {tech_ue}, {pais_ue}')
@@ -1709,16 +1854,54 @@ def seccion_operaciones():
             delta_margen_pct = (margen_pct - margen_pct_prev) if (margen_pct is not None and margen_pct_prev is not None) else None
             delta_markup_pct = (markup_pct - markup_pct_prev) if (markup_pct is not None and markup_pct_prev is not None) else None
 
+            # Adenda 25 (a pedido del equipo: doble delta en todos los KPIs): además de vs. ronda
+            # anterior, se suma vs. Promedio Industria -- para eso hay que recalcular Margen %/
+            # Mark-up % de LOS 7 EQUIPOS en este mismo país/tecnología (antes solo se calculaba para
+            # el equipo en foco). `mercado` ya no está filtrado por empresa, se reusa tal cual.
+            margen_pct_todos, markup_pct_todos = {}, {}
+            for _emp in COMPANIES:
+                _margen_emp = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_ue}') &
+                                  (df['Seccion'] == tech_ue) & (df['Empresa'] == _emp) & (df['Ronda'] == ronda_snapshot)]
+                _unid_emp = valor_fuzzy(mercado, '^Ventas', empresa=_emp)
+                if _unid_emp and _unid_emp > 0:
+                    def _gme(metrica): return valor_de(_margen_emp, metrica) or 0.0
+                    _p_venta_e = _gme('Ingresos por ventas') / _unid_emp
+                    _m_bruto_e = _gme('Beneficio bruto') / _unid_emp
+                    _costo_e = -(-_gme('Fabricación propia y por contrato') / _unid_emp
+                                 - _gme('Transporte y aranceles') / _unid_emp
+                                 - _gme('Costos de la característica') / _unid_emp)
+                    margen_pct_todos[_emp] = (_m_bruto_e / _p_venta_e * 100) if _p_venta_e else None
+                    markup_pct_todos[_emp] = (_m_bruto_e / _costo_e * 100) if _costo_e else None
+                else:
+                    margen_pct_todos[_emp] = markup_pct_todos[_emp] = None
+
+            def _delta_ind_pp(vals_dict, val_propio):
+                # Delta en PUNTOS PORCENTUALES vs. promedio de industria (no % relativo) -- mismo
+                # criterio que ya se usa acá para "vs. ronda anterior" (también en p.p., porque
+                # margen_pct/markup_pct ya son porcentajes).
+                _vals = [v for v in vals_dict.values() if v is not None]
+                if not _vals or val_propio is None:
+                    return None
+                _prom = np.nanmean(_vals)
+                return (val_propio - _prom) if pd.notna(_prom) else None
+
+            d_margen_ind_pp = _delta_ind_pp(margen_pct_todos, margen_pct)
+            d_markup_ind_pp = _delta_ind_pp(markup_pct_todos, markup_pct)
+
             col_cm, col_mk = st.columns(2)
-            col_cm.metric('Margen Unitario (%)', f'{margen_pct:,.1f}%' if margen_pct is not None else '—',
-                          delta=f'{delta_margen_pct:+,.1f} p.p. vs. ronda anterior' if delta_margen_pct is not None else None)
-            col_mk.metric('Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—',
-                          delta=f'{delta_markup_pct:+,.1f} p.p. vs. ronda anterior' if delta_markup_pct is not None else None)
+            with col_cm:
+                kpi_doble_delta(None, 'Margen Unitario (%)', f'{margen_pct:,.1f}%' if margen_pct is not None else '—',
+                                 d_ronda=delta_margen_pct, ronda_prev_nombre=ronda_prev_ue,
+                                 d_industria=d_margen_ind_pp, unidad=' p.p.')
+            with col_mk:
+                kpi_doble_delta(None, 'Mark-up aplicado', f'{markup_pct:,.1f}%' if markup_pct is not None else '—',
+                                 d_ronda=delta_markup_pct, ronda_prev_nombre=ronda_prev_ue,
+                                 d_industria=d_markup_ind_pp, unidad=' p.p.')
             st.caption('Margen % = Contribución Marginal Unitaria / Precio de Venta (el desglose en USD/u. está en el '
                        'Waterfall de arriba). Mark-up = Contribución Marginal Unitaria / Costo unitario total '
                        '(fabricación + logística + características) — mismo numerador, denominador distinto (precio '
-                       'vs. costo), no confundir uno con otro. Deltas vs. la ronda inmediatamente anterior, mismo '
-                       'país/tecnología.')
+                       'vs. costo), no confundir uno con otro. Deltas en puntos porcentuales (p.p.), no % relativo: '
+                       'vs. la ronda inmediatamente anterior y vs. el promedio de los 7 equipos, mismo país/tecnología.')
 
         st.divider()
         st.markdown(f'**Punto de equilibrio — {empresa_analisis}, {ronda_snapshot}**')
@@ -1764,12 +1947,18 @@ def seccion_operaciones():
             ventas = abs(d.get(f'Ventas en {pais_sel}', 0) or 0)
             exp = sum(abs(v) for k, v in d.items() if k.startswith('Exportado a') and pd.notna(v))
             inv_fin = d.get('Inventario final', 0) or 0
+            _valores_inv = [inv_ini, prod, imp, -ventas, -exp, inv_fin]
             fig_inv = go.Figure(go.Waterfall(
                 orientation='v', measure=['absolute', 'relative', 'relative', 'relative', 'relative', 'total'],
                 x=['Inv Inicial', '+ Prod', '+ Import', '- Ventas', '- Export', '= Inv Final'],
-                y=[inv_ini, prod, imp, -ventas, -exp, inv_fin],
-                text=[format_num(v) for v in [inv_ini, prod, imp, -ventas, -exp, inv_fin]], textposition='outside',
-                decreasing={'marker': {'color': MUTED_PALETTE[2]}}, increasing={'marker': {'color': COLOR_POSITIVE}},
+                y=_valores_inv,
+                # Adenda 25: % entre paréntesis sobre el Inventario Inicial (primera barra).
+                text=_texto_cascada(_valores_inv), textposition='outside',
+                # Adenda 25: convención universal de color -- verde = suma, rojo = resta. Antes
+                # decreasing usaba MUTED_PALETTE[2] (verde grisáceo apagado, no rojo). Totals se
+                # mantiene neutro (MUTED_PALETTE[0]): "Inv Final" acá no es identidad CADIZ ni
+                # sentimiento (más/menos inventario final no es en sí bueno o malo), es un dato físico.
+                decreasing={'marker': {'color': COLOR_NEGATIVE}}, increasing={'marker': {'color': COLOR_POSITIVE}},
                 totals={'marker': {'color': MUTED_PALETTE[0]}}
             ))
             fig_inv.update_layout(title='Puente de Inventario Físico')
@@ -1855,10 +2044,8 @@ def seccion_finanzas():
             return None
         return (val - prom) / abs(prom) * 100
 
-    def delta_str(vals, empresa=empresa_analisis):
-        d = delta_raw(vals, empresa)
-        return f'{d:+.1f}% vs Prom' if d is not None else None
-
+    # delta_str() (vs Prom, un solo delta) se eliminó -- Adenda 25 reemplaza sus 3 usos por
+    # kpi_doble_delta()/kpi_banda_oscura() con doble delta (ver más abajo).
     # Los 3 números que más resumen la foto financiera de la ronda (rentabilidad, liquidez y
     # riesgo de corto plazo) van en la banda oscura, mismo patrón que Resultados/Resumen. El resto
     # (márgenes y calificación) da contexto pero no es lo primero que se mira -- queda abajo en
@@ -1866,20 +2053,45 @@ def seccion_finanzas():
     d_ebitda = delta_raw(ebitda_vals)
     d_caja = delta_raw(caja_vals)
     d_deuda = delta_raw(deuda_cp_vals)
+    # Adenda 25 (a pedido del equipo: doble delta -- vs. Ronda Anterior Y vs. Promedio Industria --
+    # en TODOS los KPIs): se agrega acá el delta vs. ronda anterior de cada uno, reusando
+    # delta_vs_ronda_anterior() (ver definición junto a ronda_anterior_de). NOTA: este bloque de 7
+    # KPIs de Finanzas está en la lista de "a rediseñar" del pedido más amplio del equipo (KPIs
+    # principales -> Precio Acción / Capitalización / EPS, etc.) -- se le suma el doble delta
+    # ahora, sobre el set ACTUAL de KPIs, y se traslada el mismo patrón cuando se rehaga el set.
+    d_ebitda_ronda, ronda_prev_fin = delta_vs_ronda_anterior('Cuenta de resultados, miles USD, Global', 'Beneficio operativo antes de depreciación (EBITDA)')
+    d_caja_ronda, _ = delta_vs_ronda_anterior('Hoja de Balance, miles USD, Global', 'Efectivo y equivalentes de efectivo')
+    d_deuda_ronda, _ = delta_vs_ronda_anterior('Hoja de Balance, miles USD, Global', 'Deudas a corto plazo (no planificadas)')
+    sufijo_ronda_fin = f'vs {ronda_prev_fin}' if ronda_prev_fin else 'vs ronda anterior'
     kpi_banda_oscura([
         {'label': 'EBITDA (USD)', 'valor': format_num(ebitda_vals.get(empresa_analisis)) if pd.notna(ebitda_vals.get(empresa_analisis)) else '—',
-         'delta': f'{d_ebitda:+.1f}% vs Prom' if d_ebitda is not None else None, 'favorable': (d_ebitda > 0) if d_ebitda is not None else None},
+         'delta': f'{d_ebitda_ronda:+.1f}% {sufijo_ronda_fin}' if d_ebitda_ronda is not None else None, 'favorable': (d_ebitda_ronda > 0) if d_ebitda_ronda is not None else None,
+         'delta2': f'{d_ebitda:+.1f}% vs Industria' if d_ebitda is not None else None, 'favorable2': (d_ebitda > 0) if d_ebitda is not None else None},
         {'label': 'Caja final (USD)', 'valor': format_num(caja_vals.get(empresa_analisis)) if pd.notna(caja_vals.get(empresa_analisis)) else '—',
-         'delta': f'{d_caja:+.1f}% vs Prom' if d_caja is not None else None, 'favorable': (d_caja > 0) if d_caja is not None else None},
+         'delta': f'{d_caja_ronda:+.1f}% {sufijo_ronda_fin}' if d_caja_ronda is not None else None, 'favorable': (d_caja_ronda > 0) if d_caja_ronda is not None else None,
+         'delta2': f'{d_caja:+.1f}% vs Industria' if d_caja is not None else None, 'favorable2': (d_caja > 0) if d_caja is not None else None},
         {'label': 'Deuda CP no planificada (USD)', 'valor': format_num(val_deuda_cp) if val_deuda_cp is not None else '—',
          # Acá menos es mejor -- favorable se invierte respecto de EBITDA/Caja.
-         'delta': f'{d_deuda:+.1f}% vs Prom' if d_deuda is not None else None, 'favorable': (d_deuda < 0) if d_deuda is not None else None},
+         'delta': f'{d_deuda_ronda:+.1f}% {sufijo_ronda_fin}' if d_deuda_ronda is not None else None, 'favorable': (d_deuda_ronda < 0) if d_deuda_ronda is not None else None,
+         'delta2': f'{d_deuda:+.1f}% vs Industria' if d_deuda is not None else None, 'favorable2': (d_deuda < 0) if d_deuda is not None else None},
     ])
 
+    d_margen_ronda, _ = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Margen bruto')
+    d_ros_ronda, _ = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Rentabilidad de las ventas (ROS)')
+    d_deuda_lp_ronda, _ = delta_vs_ronda_anterior('Hoja de Balance, miles USD, Global', 'Deudas a largo plazo')
     f2, f3, f6, f7 = st.columns(4)
-    with f2: st.metric('Margen bruto', f"{margen_vals.get(empresa_analisis):,.1f}%" if pd.notna(margen_vals.get(empresa_analisis)) else '—', delta=delta_str(margen_vals))
-    with f3: st.metric('ROS', f"{ros_vals.get(empresa_analisis):,.1f}%" if pd.notna(ros_vals.get(empresa_analisis)) else '—', delta=delta_str(ros_vals))
-    with f6: st.metric('Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)), delta=delta_str(deuda_lp_vals), delta_color='inverse')
+    with f2:
+        kpi_doble_delta(None, 'Margen bruto', f"{margen_vals.get(empresa_analisis):,.1f}%" if pd.notna(margen_vals.get(empresa_analisis)) else '—',
+                         d_ronda=d_margen_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(margen_vals))
+    with f3:
+        kpi_doble_delta(None, 'ROS', f"{ros_vals.get(empresa_analisis):,.1f}%" if pd.notna(ros_vals.get(empresa_analisis)) else '—',
+                         d_ronda=d_ros_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=delta_raw(ros_vals))
+    with f6:
+        # Deuda: menos es mejor -- favorable invertido en los dos deltas.
+        d_deuda_lp_ind = delta_raw(deuda_lp_vals)
+        kpi_doble_delta(None, 'Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)),
+                         d_ronda=d_deuda_lp_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_deuda_lp_ronda < 0) if d_deuda_lp_ronda is not None else None,
+                         d_industria=d_deuda_lp_ind, favorable_industria=(d_deuda_lp_ind < 0) if d_deuda_lp_ind is not None else None)
     with f7: st.metric('Calificación crediticia', calif_val if calif_val else '—')
     st.write('')
 
@@ -2052,7 +2264,10 @@ def seccion_finanzas():
                 suf = "%" if nombre in ['ROCE', 'ROE', 'WACC', 'ROA'] else ("p.p." if nombre == 'Spread ROCE-WACC' else "x")
             
                 fig_rango.add_trace(go.Scatter(x=[0, 100], y=[i, i], mode='lines', line=dict(color=MUTED_PALETTE[3], width=6), showlegend=False))
-                fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[1], line_width=2), showlegend=False))
+                # Adenda 25: se saca el marrón de la marca de mediana. No pasa a lila -- esta marca
+                # convive con el marcador del equipo en foco (unas líneas más abajo), que puede ser
+                # lila si el foco es CADIZ; usar lila acá también las confundiría.
+                fig_rango.add_trace(go.Scatter(x=[pos(vmed)], y=[i], mode='markers', marker=dict(symbol='line-ns', size=16, color=MUTED_PALETTE[5], line_width=2), showlegend=False))
             
                 if vcadiz is not None:
                     val_str = f"{vcadiz:,.1f}{suf}"
@@ -2212,9 +2427,10 @@ def seccion_rrhh_sostenibilidad():
             netos = balance.groupby('Empresa', as_index=False)['Valor'].sum().rename(columns={'Valor': 'Neto'})
             orden_emp = netos.sort_values('Neto', ascending=False)['Empresa'].tolist()
             # 3 categorías genéricas (E/S/G, para los 7 equipos) -- sin identidad ni sentimiento,
-            # tonos muted (Adenda 25).
+            # tonos muted (Adenda 25; el marrón que tenía "Social (S)" se saca en la misma Adenda,
+            # sin pasar a lila porque tampoco es identidad de CADIZ).
             colores_subgrupo = {'Ambiental (E)': MUTED_PALETTE[2],
-                                 'Social (S)': MUTED_PALETTE[1],
+                                 'Social (S)': MUTED_PALETTE[5],
                                  'Gobernanza (G)': MUTED_PALETTE[0]}
             fig_bal = px.bar(balance, x='Empresa', y='Valor', color='Subgrupo', barmode='relative',
                               category_orders={'Empresa': orden_emp},
