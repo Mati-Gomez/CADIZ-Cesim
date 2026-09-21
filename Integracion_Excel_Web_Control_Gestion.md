@@ -314,13 +314,17 @@ siguen funcionando igual que antes.
   Global. El Plan ya estaba en `DATA_EXPORT` (3 líneas Global: CFO/CFI/CFF). El Real NO existe como
   una sola línea Global en el RDOS — CESIM lo publica en 3 Estados separados ("Flujo de efectivo de
   casa matriz" + China + Europa). Se reconstruye sumando los tres (cada valor × 1.000, misma
-  convención "miles USD" → USD que el resto del lado real agregado). Los movimientos INTERCOMPAÑÍA
-  (préstamos internos entre casa matriz y filiales, dividendos que las filiales giran a casa matriz)
-  se CANCELAN naturalmente al sumar — no hace falta identificarlos a mano. **Verificado exacto contra
-  Ronda 1 real**: CFO+CFI+CFF sumados (−5.738.730.257) reconcilia con la suma de "Cambios en efectivo y
-  equivalentes de efectivo" de los 3 Estados (−5.738.730.257, a redondeo de punto flotante); el CFF
-  Global dio exactamente −2.000.000.000 USD, que es el dividendo real pagado a los accionistas
-  EXTERNOS de CADIZ (todo lo intercompañía canceló a 0) — confirma que el método es correcto.
+  convención "miles USD" → USD que el resto del lado real agregado — **ver Adenda 23 sobre por qué
+  esta conversión ×1000 quedó bajo sospecha y qué se hizo al respecto**). Los movimientos
+  INTERCOMPAÑÍA (préstamos internos entre casa matriz y filiales, dividendos que las filiales giran a
+  casa matriz) se CANCELAN naturalmente al sumar — no hace falta identificarlos a mano. **Verificado
+  exacto contra Ronda 1 real**: CFO+CFI+CFF sumados (−5.738.730.257) reconcilia con la suma de
+  "Cambios en efectivo y equivalentes de efectivo" de los 3 Estados (−5.738.730.257, a redondeo de
+  punto flotante); el CFF Global dio exactamente −2.000.000.000 USD, que es el dividendo real pagado
+  a los accionistas EXTERNOS de CADIZ (todo lo intercompañía canceló a 0) — confirma que el método de
+  RECONSTRUCCIÓN (sumar los 3 Estados) es correcto. **Importante**: esta reconciliación interna prueba
+  que la SUMA de los 3 Estados está bien armada — no prueba por sí sola que la escala final (si hace
+  falta o no el ×1000 adicional) sea la correcta; eso se auditó recién en la Adenda 23.
 
 ### Los 4 gráficos de Fila 3 (uno por sección)
 
@@ -330,7 +334,7 @@ siguen funcionando igual que antes.
 - **Operaciones**: `go.Waterfall` de GAP en costo unitario de fabricación por tecnología (alcance
   fabricación-only, ver nota arriba), con selector de área.
 - **Finanzas**: barras agrupadas de Composición del Flujo de Caja (CFO/CFI/CFF) Proyectado vs. Real,
-  Global.
+  Global. **Reemplazado por un gráfico de Cascada en la Adenda 23** — ver esa sección.
 
 **Guard contra falso desvío cuando no hay Plan cargado** (encontrado probando en Ronda 1, que no
 tiene Plan — el modelo proyecta recién desde Ronda 2): sin este guard, el waterfall tomaba Plan=0
@@ -973,11 +977,11 @@ el equipo — no se pudo reconciliar al centavo por no tener acceso a los archiv
 entorno de verificación, así que se presenta como razonamiento verificado, no como cifra exacta
 recalculada desde cero.
 
-### Pendiente de esta Adenda — pedido abierto, no resuelto todavía
+### Pregunta de navegación — resuelta, sin cambios
 
-El equipo preguntó si convendría otra forma de navegar entre Ronda y Equipo en el sidebar, ahora que
-quedó más simple (sin el toggle de Ecosistema). Se le devolvieron opciones concretas para elegir en
-vez de decidir unilateralmente — ver la respuesta en el chat. Ronda 2 en adelante.
+Se le devolvieron al equipo dos opciones concretas para el sidebar simplificado (slider de Ronda /
+selectbox de Equipo, ambos ya con el contraste corregido). El equipo eligió dejar los dos
+componentes tal como están — no se hicieron más cambios de navegación.
 
 ### Verificación de esta Adenda
 
@@ -986,15 +990,497 @@ vez de decidir unilateralmente — ver la respuesta en el chat. Ronda 2 en adela
 - Captura del sidebar completo confirmando: sin toggle de Ecosistema, selector de Ronda 1-12,
   "Equipo en foco" con contraste correcto (fondo translúcido oscuro, texto legible).
 
+## Adenda 20 — Fix de fondo: "Cuota de mercado CADIZ" ponderada por volumen (no más promedio simple)
+
+Con el estilo y la navegación ya cerrados, se retomó el pendiente de fondo señalado desde la Adenda
+12: la fila "Cuota de mercado CADIZ (promedio)" de `03_RATIOS` (fila 30) del Excel.
+
+**Diagnóstico (confirmado con `openpyxl`, formula y valor cacheado, no supuesto)**: la fórmula
+promediaba los 12 casilleros de `01_INPUTS!G89:G100` (3 mercados × 4 tecnologías) con el mismo
+peso — Combustión, Híbrido, Eléctrico e Hidrógeno en EE.UU., China y Europa. El problema: CADIZ NO
+compite en Eléctrico ni en Hidrógeno, así que esos 6 casilleros llevan un `0` a propósito. Como
+`ISNUMBER(0)` es VERDADERO, la fórmula los contaba en el denominador (12 casilleros) y sumaba 0 al
+numerador — diluyendo el resultado. Con los inputs de Ronda 2 cargados, la fórmula vieja daba
+**4,63%**, un número sin sentido frente al histórico: CESIM reportó **18,03%** de cuota ponderada
+por ventas para CADIZ en Ronda 1 (dato real). No es una diferencia de metodología razonable — es el
+mismo tipo de error de denominador que ya se había visto en otras partes del modelo heredado.
+
+**Regla CESIM verificada**: la cuota de mercado "global" que CESIM reporta para un jugador no es un
+promedio simple de sus cuotas por segmento — es su volumen total vendido dividido por el volumen
+total del mercado (ponderado por volumen, no por cantidad de casilleros). Esto se confirma con el
+propio dato real de Ronda 1 y es la convención estándar de "cuota de mercado" en cualquier negocio
+multi-segmento.
+
+**Fix aplicado** (en `build_gestion_v2.py`, el script Python que genera el Excel — el `.xlsx` no se
+edita a mano): la fórmula ahora calcula, para cada uno de los 3 mercados, la suma de las 4 celdas de
+tecnología de CADIZ en ese mercado (ya expresadas como % del mercado total de ESE país) multiplicada
+por el tamaño de mercado total estimado de ese país (`_ENGINE_MERCADO`, sección "Tamaño de mercado
+total estimado"); se suman esas 3 partes y se dividen por la suma de los 3 tamaños de mercado. El
+resultado matemático es exactamente "volumen que CADIZ proyecta vender en los 3 mercados / volumen
+total de los 3 mercados" — la misma convención que usa CESIM en el dato real. Se mantiene la guarda
+para que Ronda 0 y Ronda 1 (sin inputs D1 todavía) sigan en blanco en vez de mostrar 0%. Se
+renombró la fila a "Cuota de mercado CADIZ (ponderada por volumen, 3 mercados)" para que el nombre
+ya no describa un cálculo que dejó de existir; se hizo el mismo cambio de nombre en la métrica
+espejo de `DATA_EXPORT` (antes "... (promedio)"), incluyendo el set interno `_RATIO_METRICS_PLAN`
+que depende del nombre exacto para aplicar la canonicalización de unidades (%→ratio) — si no se
+actualizaba ahí también, la métrica hubiera dejado de canonicalizarse en silencio.
+
+**Verificación**:
+- Reconstruido el Excel completo desde `build_gestion_v2.py` (mismo conteo de filas que el build
+  anterior: 7104 históricas, 128 PLAN/SIM, 7230 DATA_EXPORT — sin regresión estructural).
+- Recalculado con LibreOffice (`recalc.py`): **0 errores en 18.912 fórmulas**.
+- Valor recalculado de Ronda 2 (`03_RATIOS!I30`): **17,95%** — en línea con el 18,03% real de
+  Ronda 1 (no idéntico porque son rondas distintas con inputs propios, pero del orden correcto, muy
+  lejos del 4,63% viejo).
+- `03_RATIOS!G30` y `H30` (Ronda 0 y 1) siguen en blanco, como corresponde (sin inputs D1 en esas
+  rondas).
+- `DATA_EXPORT` propaga el valor y el nombre corregidos, con la canonicalización de unidades
+  intacta (`value`=0,1795 en `ratio`, `source_value`=17,95 en `%`).
+- `metric_crosswalk.py` (Control de Gestión) actualizado: el comentario que documentaba el bug como
+  pendiente ahora dice que está corregido. Esta métrica sigue sin estar en `CROSSWALK_FINANZAS` —
+  eso es una decisión de UI aparte (¿mostrarla en el panel de Finanzas ahora que es confiable?), a
+  confirmar con el equipo, no se agregó unilateralmente.
+
+**Clasificación**: dato/regla — el mecanismo de ponderación por volumen es una regla CESIM
+verificada contra el real de Ronda 1; el fix en sí es una corrección de cálculo del modelo (no una
+hipótesis nueva). No se tocó ningún otro renglón de `03_RATIOS`.
+
+**Nota de repo**: `build_gestion_v2.py` (el generador) vive fuera del repo de la web, en el entorno
+de trabajo de modelización — no se agregó al zip entregado. Si el equipo quiere tenerlo versionado
+junto al resto (para trazabilidad total del Excel), es una decisión de estructura de repo a
+confirmar, no algo que se haya decidido acá.
+
+## Adenda 21 — Cuatro reportes de UI en simultáneo: barras "cortadas", Punto de Equilibrio, tema pegado, y baja del último gráfico de doble eje
+
+El equipo mandó cuatro observaciones juntas sobre la web ya desplegada. Cada una se verificó por
+separado (Playwright, corriendo la app localmente con los datos reales de Ronda 1 que sí están en
+el repo) antes de tocar nada — no se asumió ningún diagnóstico de memoria.
+
+### 1. Gráficos apilados de RRHH — barras "rotas" (CONFIRMADO con captura propia — solución revisada dos veces en la misma Adenda)
+
+Se reprodujo el problema con el propio Ronda 1 de CADIZ: las barras de `chart_dos_metricas_apiladas`
+(los paneles de "Inversión en I+D", "Rotación y Contrataciones", etc.) quedaban pegadas al borde
+superior del panel, sin nada de aire — un bloque sólido "cortado" en vez de una barra normal con
+espacio arriba. Causa: el eje Y de esos paneles se armaba con `rangemode='tozero'` a secas, y en
+esta versión de Plotly eso hace que el techo del eje coincida EXACTO con el valor máximo de la
+barra, sin margen.
+
+**Primer intento** (insuficiente, mantenido solo un rato): forzar `range=[0, máximo*1.15]` a mano
+en vez de `rangemode`, dejando intacto el diseño de dos paneles apilados (uno arriba, uno abajo,
+cada uno con su propio eje). Matemáticamente el margen quedaba bien puesto (verificado imprimiendo
+`fig.layout.yaxis.range` — daba `(0, 46230)` para un máximo de 40200, exactamente 15% de aire), pero
+visualmente casi no se notaba cuando las dos rondas tenían valores parecidos (ej. Costo I+D ~40k en
+ambas) — el 15% de aire es real pero muy poco para el ojo cuando ya casi no hay diferencia de altura
+entre barras. El equipo confirmó con captura propia que seguía viéndose "roto".
+
+**Segundo pedido, explícito** ("hace dos gráficos cuando debería ser uno solo con dos ejes, uno a
+la derecha y otro a la izq"): no era un tema de margen, era un pedido de CAMBIAR el diseño — dejar
+de usar dos paneles apilados y volver a un solo gráfico con doble eje Y superpuesto (izquierda para
+la primera métrica, derecha para la segunda), que es el formato clásico de "dos métricas, una
+escala cada una, mismo plano". **Ojo**: esto reintroduce a propósito el patrón de doble eje que
+esta misma función había evitado originalmente (y que se sacó del todo en Mercado → Evolución,
+punto 4 de esta Adenda, por el riesgo de sugerir una correlación entre series que no está probada).
+No es una contradicción del equipo ni un error de criterio nuestro — es una preferencia de UI
+explícita y puntual para ESTOS gráficos (RRHH y Beneficio vs. Deuda en Finanzas), pedida después de
+ver cómo quedaba la alternativa apilada. Se implementó así: `chart_dos_metricas_apiladas` (mismo
+nombre y firma, para no tocar los 6 lugares que la llaman) ahora arma un solo `go.Figure()` con
+`yaxis` (izquierda, primera métrica) y `yaxis2` (derecha, `overlaying='y'`, segunda métrica), cada
+eje con su rango calculado igual que antes (máximo real ×1.15) y con el texto del eje pintado del
+mismo color que su serie, para que quede claro qué escala corresponde a cada una sin tener que
+adivinar. Verificado con Playwright contra los datos reales de Ronda 1 de CADIZ: un solo recuadro
+por gráfico, eje izquierdo y derecho con sus propios colores y escalas, leyenda abajo. Afecta a los
+6 gráficos que usan esta función (RRHH: 4, Finanzas: 2 — Beneficio Neto vs. Nivel de Deuda, Salario
+vs. Rotación).
+
+**Clasificación**: decisión de UI de CADIZ (no una regla CESIM ni un dato) — queda anotado en el
+propio código por si en algún momento conviene revisar el criterio de nuevo.
+
+### 2. "Punto de Equilibrio" en Operaciones — la referencia no se veía (CONFIRMADO con captura propia)
+
+Se reprodujo con el caso real de CADIZ Ronda 1 en EE.UU. (Volumen Real = 302,8% del Volumen de
+Equilibrio). Causa: `chart_bullet()` dibuja la "pista" de referencia (Volumen de Equilibrio, gris
+muy claro) y la barra de "Real" superpuestas en la misma fila (`barmode='overlay'`) — en cuanto el
+Real llega o supera el 100% del plan, la barra de Real (y la de Excedente) tapan la pista de
+referencia POR COMPLETO. Quedaba solo en la leyenda, invisible en el gráfico — que es exactamente
+lo que reportó el equipo. La línea punteada que marca el 100% ya estaba, pero sin ningún texto
+encima. **Fix**: se le agregó el nombre de la referencia (`nombre_fondo` — "Volumen de Equilibrio"
+en este caso) como etiqueta directamente sobre esa línea punteada (`annotation_text` de
+`add_vline`), así el dato clave queda visible sin importar cuánto se pase el Real del plan.
+Verificado con captura: ahora dice "Volumen de Equilibrio" justo arriba de la marca del 100%. Este
+fix beneficia a TODOS los usos de `chart_bullet()` (también la Fila 2 de "Comparativa Plan vs.
+Real" de cada sección), no solo a Punto de Equilibrio.
+
+### 3. Modo claro/oscuro no se actualiza solo al volver a tocar el toggle (LIMITACIÓN DE PLATAFORMA, confirmada en una Adenda anterior — no de este código)
+
+Ya se había investigado este punto en una sesión previa: `st.context.theme.type` (la fuente de
+verdad que usa `es_modo_oscuro()`) se lee una sola vez por corrida del script de Streamlit, y
+alternar el tema desde el menú de Settings del navegador no siempre dispara una corrida nueva por
+sí solo — de ahí que haga falta tocar otro control (cambiar de Ronda, de Equipo, de Sección) para
+que los estilos se pongan al día, tal como describió el equipo. **No es un bug de `app.py` ni de
+`style.css`** — es un comportamiento de la plataforma Streamlit en esta versión, no algo que se
+pueda arreglar solo con CSS. Se agregó un atajo pragmático: un botón "🔄 Actualizar tema" en el
+sidebar (debajo de "Equipo en foco") que fuerza un `st.rerun()` con un solo clic, en vez de tener
+que cambiar de sección para lograr lo mismo. Si el equipo prefiere una solución que detecte el
+cambio de tema automáticamente (sin ese clic), es un desarrollo más grande —requiere JavaScript
+embebido para escuchar el evento de cambio de tema del navegador y disparar el rerun solo— que no
+se hizo acá porque no estaba pedido y agrega superficie de fragilidad; se puede evaluar aparte si el
+botón no alcanza.
+
+### 4. "Trayectoria de CADIZ: precio y características en el tiempo" — eliminado (pedido explícito)
+
+Era el único gráfico de doble eje Y verdadero (dos escalas, Precio en USD y Características,
+superpuestas en el mismo plano con `yaxis`/`yaxis2`) que quedaba en la app — señalado como pendiente
+de revisión desde la Adenda 18. El equipo pidió sacarlo directamente en vez de arreglarlo. Se quitó
+el bloque completo (gráfico + selector de Tecnología que solo servía para él) de Mercado →
+Evolución, y se corrigió la leyenda de arriba ("Evolución de la cuota de mercado") que hacía
+referencia a "el gráfico de abajo" — ya no existe, así que la aclaración quedó sin sentido y se
+sacó.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores.
+- Playwright contra la app corriendo con datos reales de Ronda 1 (CADIZ): capturas de antes/después
+  de los 3 puntos reproducibles (barras de RRHH, Punto de Equilibrio, Mercado → Evolución sin el
+  gráfico eliminado).
+- Smoke test de las 5 secciones (Resultados, Mercado, Operaciones, Finanzas, RRHH y Sostenibilidad):
+  sin traceback ni error de Streamlit en ninguna, sin errores de JS en consola del navegador.
+
+### Pendiente de esta Adenda — pedido abierto, no resuelto todavía
+
+El equipo también marcó que en la tarjeta "Comparativa Plan vs. Real" (Demanda estimada por país),
+la flecha de variación aparece en GRIS en vez de rojo/verde como el resto de los KPIs. Se auditó
+`metric_crosswalk.py`: es a propósito — "Demanda estimada" tiene `gap_favorable: None` (igual que
+"Deuda LP" o "Calificación crediticia") porque que el mercado real haya sido más grande o más chico
+que lo proyectado no es, por sí solo, algo bueno o malo para CADIZ — es un dato exógeno, no un
+resultado de una decisión propia. No se cambió unilateralmente porque es una decisión de criterio,
+no un bug de cálculo — se le devolvió la pregunta al equipo en el chat para definir si prefieren
+dejarlo neutro (como está) o forzar algún criterio de color para esta tarjeta puntual.
+
+### Cierre del pendiente — color de la tarjeta "Demanda estimada"
+
+El equipo respondió: **dejarlo neutro/gris**, tal como estaba. No se tocó código —
+`metric_crosswalk.py` sigue con `gap_favorable: None` para "Demanda estimada", confirmado como
+decisión de criterio (no un bug) en la Adenda 21.
+
+## Adenda 22 — Excel: Mix de Industria (TAM), parámetros ESG/inventario (`CADIZ_Gestion_v3.xlsx`) + refactor de storytelling en Mercado/RRHH
+
+El equipo pidió un cambio estructural al motor de demanda de `01_INPUTS`/`_ENGINE_MERCADO` (Top-Down
+Demand con Mix de Industria) más un lote de parámetros ESG/inventario (TAREA 1, Excel), y un
+refactor de storytelling en dos secciones de la web (TAREA 2, `app.py`). El equipo explícitamente
+invitó a preguntar dudas antes de tocar el Excel ("si tenés dudas de algo decime antes de
+empezar"). Se seteó la Regla fundamental del proyecto en dos puntos concretos antes de escribir una
+sola fórmula.
+
+### TAREA 1 — Mix de Industria (TAM) — verificación previa (Manual CESIM > inferencia > supuesto heredado)
+
+El pedido original era `Demanda = Tamaño de mercado × Mix de Industria × Cuota Objetivo × Factores de
+estrés`. Antes de implementarlo se verificó contra el manual (cap. 4.2, texto literal): *"al estimar
+los porcentajes de demanda de sus productos, el porcentaje estimado se refiere a TODA el área del
+mercado, NO a la demanda de esa tecnología específica"* — es decir, el input D1 histórico ("Cuota de
+mercado objetivo CADIZ") YA es % del mercado TOTAL. Multiplicarlo por un Mix de Industria adicional
+sin más lo hubiera hecho doble-contar/doble-descontar la demanda. Se encontró además que esto NO es
+hipotético: `claude/Prueba_Operacional_R2_Escenario_A_v2.md` documenta que una etapa anterior del
+proyecto probó exactamente `Tamaño × Mix × Cuota` en un modelo distinto (`CADIZ_Modelo_R2_v1.xlsx`)
+y lo revirtió por esa razón ("la cuota ya viene expresada como % del mercado regional total"). Se
+llevó este hallazgo al equipo antes de escribir código.
+
+**Arquitectura implementada (definida por el equipo, no por default propio)** — redefine el
+significado del input en vez de multiplicarlo directamente, evitando el doble conteo:
+
+1. **D1a — "Mix de Industria (TAM)"** (bloque nuevo, 01_INPUTS, insertado antes de la fila del
+   bloque D1 original): % que cada tecnología representa del tamaño TOTAL del mercado de esa área.
+2. **D1b — "Cuota de mercado objetivo SOBRE LA TECNOLOGÍA"** (antes "Cuota de mercado objetivo
+   CADIZ" — mismas 12 filas, **nueva semántica**): % que CADIZ apunta a capturar DENTRO del segmento
+   de esa tecnología, ya no sobre el mercado total.
+3. **D1c — "Cuota Resultante SOBRE EL TOTAL (Copiar a CESIM)"** (bloque nuevo, CALCULADO = D1a × D1b
+   fila a fila): reproduce la semántica "% del mercado TOTAL" que exige el manual, y es la que
+   efectivamente alimenta `_ENGINE_MERCADO` (Sección A2, filas 13-24, "Demanda estimada CADIZ") y
+   todos los demás consumidores de ese dato (KPI "Cuota de mercado CADIZ ponderada por volumen" de
+   03_RATIOS, chequeos de RONDA_ACTIVA/inputs cargados en 04_CONTROL_MODELO, export a DATA_EXPORT).
+
+**Ronda 2 (Estado = "PLAN", decisión ya cerrada, RDOS aún no publicados) — cómo se evitó alterar la
+proyección ya decidida:** no había Mix de Industria real de R2 (CESIM no publicó todavía un informe
+de mercado de esa ronda). Se usó el **Mix de Industria R1, que sí es Dato histórico real**: se
+recalculó desde `Informes de mercado` del RDOS oficial (`results-r01.xls`), sumando la demanda de
+las 7 empresas por tecnología y dividiendo por el tamaño total de cada área — la suma reproduce
+exactamente los tres valores de `BASE_R1_AJUSTADA` que el modelo ya usaba para proyectar R2 (EE.UU.
+5.192.959, China 3.808.260, Europa 6.646.784), lo que confirma la fuente. Con ese Mix R2 (SUPUESTO,
+porque se usa el de R1 a falta de dato propio de R2) se retro-calculó la Cuota sobre la Tecnología de
+R2 (`= valor de R2 ya decidido ÷ Mix R2`) para que la Cuota Resultante de R2 reproduzca el número que
+el equipo ya había decidido cargar en CESIM (0,137 / 0,054 / 0,162 / 0,056 / 0,100 / 0,047),
+**sin alterar la proyección de una ronda cerrada**. Verificado numéricamente tras `recalc.py`: la
+Cuota Resultante R2 calculada da 0,136999–0,162000 (diferencia de redondeo por debajo de 0,0004
+puntos porcentuales) y la Demanda estimada CADIZ de R2 en `_ENGINE_MERCADO` queda prácticamente
+idéntica a la del Excel anterior (ej. EE.UU./Combustión: 747.013 → 747.011 unidades, diferencia
+0,0003%). Rondas 0/1: sin cambios — la demanda sigue siendo el histórico real hardcodeado, no lee
+este bloque. Rondas 3-12: los dos inputs (Mix y Cuota sobre tecnología) quedan en blanco para que el
+equipo los cargue ronda a ronda con la mejor estimación disponible en cada momento.
+
+**"Factores de estrés" — NO incorporado (decisión explícita del equipo):** el pedido original incluía
+este término como cuarto factor multiplicativo. Se preguntó al equipo su origen: confirmó que
+**viene de material de cátedra/del profesor, no del manual CESIM** (se verificó además que el término
+no aparece en ningún lugar del manual — 0 coincidencias de "estrés"/"stress" en el texto completo).
+Sin una definición o fórmula concreta disponible, y consultado el equipo sobre cómo proceder, se
+optó por **no incorporarlo por ahora** en vez de inventar un supuesto sin base. Queda pendiente:
+si el equipo consigue la definición del material de cátedra, se puede sumar como un cuarto factor
+sobre la Cuota Resultante (D1c) sin tocar el resto de la arquitectura.
+
+### TAREA 1 — Parámetros ESG y de inventario — agregados como estructura, sin inventar valores
+
+Se pidieron 6 filas nuevas en `01_INPUTS` (bloque "B. Condiciones"), con nombre exacto: Costos
+fijos/variables de gestión de inventario (EE.UU. y China) y Costo del Carbono / energía fósil /
+energía renovable / agua. Antes de cargar cualquier número se verificó contra el manual: el cap. 5.1
+confirma cualitativamente que el mix de energía (fósil/renovable) y el consumo de agua afectan el
+costo de producción, y el cap. 5.2 confirma que existe un costo de gestión de inventario basado en
+el inventario promedio — pero **ninguno de los dos publica una tarifa, monto o fórmula exacta**, ni
+si CESIM separa el costo de inventario en fijo/variable. Esto ya se había señalado en el Excel
+anterior para el campo genérico "Costo de gestión de inventario", declarado en blanco a propósito
+("NO SE INVENTA UN VALOR"). Se aplicó el mismo criterio a las 6 filas nuevas: se agregan con el
+nombre y la granularidad exacta pedida (para que la interfaz de carga esté lista), **quedan vacías**,
+marcadas "NO DETERMINADO", y **no alimentan ninguna fórmula** del workbook. Es un cambio de
+estructura, no de cálculo — no debe leerse como que estos costos ya están modelados.
+
+### TAREA 2 — Refactor de storytelling en `app.py` (Mercado y RRHH y Sostenibilidad) — COMPLETADO
+
+A diferencia de TAREA 1 (Excel), este es un cambio de presentación en la web, sin ningún dato ni
+fórmula nuevos — reorganiza gráficos ya calculados en formatos que cuentan mejor la historia:
+
+- **`seccion_mercado()` → Posicionamiento**: se agregaron la **Matriz de Valor** (Precio vs.
+  Características, burbuja=volumen, por tecnología/país, los 7 equipos — de un vistazo, quién
+  compite en premium vs. low-cost) y la **"Trampa del Volumen"** (Margen Unitario % vs. Cuota de
+  Mercado — para detectar si CADIZ o algún rival está ganando participación a costa de margen). Se
+  mantiene el SOV vs. SOM ya existente de la Adenda 12, sin cambios de cálculo — solo reordenado
+  junto a los dos gráficos nuevos para que la pestaña cuente una historia de punta a punta
+  (posición de precio/producto → eficiencia comercial → riesgo de volumen sin margen).
+- **`seccion_rrhh_sostenibilidad()` → Sostenibilidad**: se agregó el **ESG Impact Heatmap**
+  (empresa × dimensión ESG con los datos ya publicados por CESIM — sin inventar un score propio) y
+  el **Balance Neto ESG** (una síntesis direccional de esas mismas dimensiones, dejando explícito en
+  el caption que es una lectura agregada nuestra sobre datos reales, no una calificación que CESIM
+  publique como tal).
+
+Ambos refactors reutilizan datos y campos ya verificados en adendas anteriores (SOV/SOM de la
+Adenda 12, campos ESG ya presentes en el RDOS) — no se agregó ninguna fuente de dato nueva, solo
+nuevas formas de visualizarlos.
+
+### Clasificación (Regla / Dato / Supuesto / Decisión)
+
+- **Regla CESIM verificada:** el input de cuota de mercado se expresa como % del mercado TOTAL, no
+  de la tecnología (manual cap. 4.2, citado arriba).
+- **Dato histórico real:** Mix de Industria R1 por mercado/tecnología (derivado de RDOS oficial
+  Ronda 1, `Informes de mercado`); Demanda estimada CADIZ R0/R1 (sin cambios).
+- **Supuesto/hipótesis propia:** usar el Mix de Industria R1 como estimación de partida para R2 (no
+  hay RDOS de R2 todavía); toda la arquitectura de 3 bloques en sí misma es un mecanismo de
+  modelización propio, no una pantalla real de CESIM. Los 6 parámetros ESG/inventario son
+  estructura declarada, no supuestos numéricos (están vacíos). El "Balance Neto ESG" de TAREA 2 es
+  una síntesis propia sobre datos reales, no una calificación de CESIM.
+- **Decisión CADIZ:** no incorporar "Factores de estrés" por ahora; mantener la Cuota sobre la
+  Tecnología como input editable ronda a ronda (no una fórmula automática).
+- **No verificable con la información disponible:** la definición concreta de "Factores de estrés"
+  (source confirmado: material de cátedra, no CESIM); si CESIM publica una tarifa explícita de
+  carbono/energía/agua o separa el costo de inventario en fijo/variable.
+
+### Verificación de esta Adenda
+
+- `build_gestion_v2.py` regenerado sin excepciones → `CADIZ_Gestion_v3.xlsx` (nuevo nombre de salida,
+  ver nota de versionado abajo).
+- `recalc.py` (LibreOffice headless): **0 errores en 19.044 fórmulas**.
+- Reconciliación R2 contra el Excel anterior: Cuota Resultante y Demanda estimada CADIZ
+  prácticamente idénticas (diferencia por redondeo, <0,001%) en las 12 combinaciones
+  mercado×tecnología — sin regresión en la ronda ya decidida.
+- R3 (sin carga): Mix y Cuota sobre tecnología en blanco → Cuota Resultante y Demanda estimada dan 0
+  (mismo comportamiento que el input único anterior cuando estaba vacío, no un error).
+- `04_CONTROL_MODELO`: el chequeo "Sin inputs de decisión (D1-D8) vacíos en la ronda activa" da "OK"
+  en R2 (ambos inputs nuevos cargados) y "NO ACTIVA" en R3-R12 (sin regresión — antes también estaba
+  gateado por RONDA_ACTIVA).
+- `py_compile` sobre `app.py` — 0 errores. Streamlit + Playwright en vivo: Matriz de Valor, Trampa
+  del Volumen (Mercado/Posicionamiento) y ESG Impact Heatmap, Balance Neto ESG (RRHH/Sostenibilidad)
+  renderizan sin errores de consola/JS con datos reales de Ronda 1.
+
+### ⚠️ Pendiente de decisión — nombre de archivo y la integración con la web
+
+El repo web (`gap_analysis.py`, `metric_crosswalk.py`, `export_proyeccion.py`, `app.py`) tiene
+**hardcodeado** el nombre `CADIZ_Gestion_v2.xlsx` como el archivo que lee `DATA_EXPORT` para el panel
+de Control de Gestión (Adenda 10). Este corte entrega el Excel como `CADIZ_Gestion_v3.xlsx` (mismo
+criterio de versionado que v1/v1.1/v1.2/v2 — cada cambio estructural grande suma versión). **Si se
+sube `CADIZ_Gestion_v3.xlsx` a la raíz del repo tal cual, el panel de Control de Gestión de la web
+dejará de encontrar el archivo** (sigue buscando el nombre viejo). Dos caminos, a definir con el
+equipo antes de subir el archivo al repo:
+1. Subir el nuevo contenido pero conservando el nombre `CADIZ_Gestion_v2.xlsx` (más simple, cero
+   cambios de código web).
+2. Actualizar las referencias hardcodeadas al nuevo nombre en el repo web (más prolijo para
+   trazabilidad de versión, pero requiere tocar el código ya desplegado).
+No se decidió unilateralmente porque afecta el repo ya desplegado — no es una decisión que
+corresponda tomar sin el equipo.
+
+## Adenda 23 — Storytelling de Finanzas (bullet panel compacto, Cascada de Flujo de Caja, ROA + Spread) y Margen % en Operaciones
+
+Fecha: 2026-09-15. A pedido del equipo ("Mejora la legibilidad y el storytelling de la pestaña de
+Finanzas"), cuatro cambios puntuales de presentación en `app.py` — ninguno modifica `gap_analysis.py`
+ni ningún cálculo ya verificado; son cambios de tipo de gráfico/formato y dos KPIs nuevos calculados
+con fórmulas financieras estándar (no CESIM). Se completa además, como hallazgo NO solicitado
+surgido durante la propia verificación visual, una investigación de un desvío de escala ×1000 en el
+lado "Real" de la Comparativa Plan vs. Real (ver sección final de esta Adenda).
+
+### 1. "Comparativa Plan vs. Real" — de grilla de bullet charts a panel compacto (`chart_bullet_panel()`)
+
+La Fila 2 de `panel_comparativa_plan_real()` (Adenda 12/13) mostraba un `chart_bullet()` completo
+(370px de alto cada uno) por KPI, en grilla — con 6-8 KPIs esto ocupaba 2-3 pantallas de scroll antes
+de llegar a cualquier otra cosa. Se creó `chart_bullet_panel(items)`: UNA sola figura con todos los
+KPIs como filas horizontales de una barra de progreso (mismo lenguaje visual que `chart_bullet()` —
+pista de referencia = Proyectado normalizado a 100%, relleno = Real, excedente apilado si Real >
+Proyectado, mismo color de excedente por favorabilidad), leyenda única compartida, alto dinámico
+`min(520, 70 + 36×n_KPIs)` en vez de 370px fijo por KPI. `mostrar()` (helper central de renderizado)
+ganó un parámetro opcional `altura` (`altura = altura or ALTURA_TARJETA`) para que este panel pueda
+pedir un alto distinto sin afectar ninguno de los ~40 llamados existentes que no lo pasan (siguen con
+el alto fijo de siempre). Los KPIs con Proyectado ≤ 0 (caso borde ya conocido desde la Adenda 13,
+donde expresar como % no tiene sentido) se excluyen del panel compacto y se siguen mostrando con el
+`chart_bullet()` individual de siempre, sin cambios.
+
+### 2. "Composición del Flujo de Caja" — de barras agrupadas a Cascada (Waterfall)
+
+`fila3_finanzas_flujo_caja()` mostraba barras agrupadas de CFO/CFI/CFF Plan vs. Real (Adenda 12).
+Se reemplaza por un puente de Cascada (`go.Waterfall`, `measure=['absolute','relative','relative',
+'total']`) que va de CFO → CFI → CFF → "= Variación Neta de Caja", uno para Proyectado y uno para
+Real (dos cascadas lado a lado, ya que una sola cascada no puede representar dos escenarios
+completos superpuestos con claridad). Mismo criterio de color que el resto de los waterfalls de
+desvío del tablero (Adenda 13, punto 6): verde = el bloque aporta caja, ámbar = el bloque consume
+caja, el color de la barra Total sigue el signo del resultado neto. La función que arma los datos
+(`gap_analysis.flujo_caja_plan_real_global()`, Adenda 12, sin cambios) sigue siendo la fuente — este
+corte es puramente de tipo de gráfico.
+
+### 3. "Métricas de Retorno (Largo Plazo)" — ROA + Spread de Creación de Valor (ROCE − WACC)
+
+**ROA (Return on Assets)** — CESIM NO publica esta métrica directamente en "Ratios e indicadores
+financieros clave" (confirmado revisando la lista completa de métricas que expone
+`cesim_parser.build_historico()` — no aparece). Se calcula con la fórmula estándar de finanzas
+corporativas: `Beneficio de la ronda (Cuenta de resultados, miles USD, Global) / Activos Totales
+(Hoja de Balance, miles USD, Global) × 100`, reutilizando los DataFrames `pl_ronda`/`bal_ronda` ya
+armados al principio de `seccion_finanzas()` (sin ninguna carga de datos nueva). Se agrega como una
+fila más en el panel "Rango de Industria (Mín/Mediana/CADIZ/Máx)" que ya existía junto a ROE/ROCE
+(mismo patrón `datos_lp`, sin tocar su estructura).
+
+**Spread de Creación de Valor (ROCE − WACC)** — concepto estándar de finanzas/EVA (no una regla
+CESIM), calculado como resta directa (ambos ya están en la misma escala de puntos porcentuales):
+se agrega (a) como tarjeta `st.metric()` independiente para CADIZ ("{ROCE}% ROCE" con
+`delta="{spread:+.1f} p.p. vs. WACC ({WACC}%)"`, aprovechando el color verde/rojo por defecto de
+`st.metric` — positivo = crea valor, negativo = destruye valor aunque el ROCE en sí sea positivo) y
+(b) como fila adicional en el mismo panel "Rango de Industria" que ROA, para comparar el spread de
+CADIZ contra los 6 rivales de un vistazo.
+
+### 4. Operaciones → "Contribución Marginal Unitaria" — Margen % agregado
+
+La tarjeta ya mostraba el valor absoluto (USD) y, al lado, "Mark-up aplicado" (Contribución Marginal
+/ Costo unitario total — ya existente desde la Adenda 12). Se agrega el Margen % pedido
+(`Contribución Marginal Unitaria / Precio de Venta × 100`) como el `delta` de la propia tarjeta de
+Contribución Marginal (`delta_color='off'`, gris neutro — es descriptivo, no favorable/desfavorable
+por sí mismo). Se agregó un `st.caption()` aclarando explícitamente la diferencia entre Margen %
+(÷ precio) y Mark-up % (÷ costo) — mismo numerador, denominador distinto — para que no se confundan
+al verlos lado a lado.
+
+### Clasificación (Regla / Dato / Supuesto / Decisión)
+
+- **Regla CESIM verificada:** ninguna nueva en esta Adenda (los 4 cambios son de presentación o
+  fórmulas financieras estándar de cátedra, no reglas del simulador).
+- **Dato histórico real:** Beneficio de la ronda y Activos Totales (Ronda 1, usados para ROA);
+  ROCE, WACC (ya calculados en adendas anteriores, reutilizados sin cambios para el Spread).
+- **Supuesto/hipótesis propia:** ninguno nuevo — ROA y Spread son fórmulas estándar de análisis
+  financiero (material académico de cátedra), no hipótesis de modelización de CADIZ.
+- **Decisión CADIZ:** ninguna decisión estratégica en este corte — es una mejora de legibilidad del
+  tablero, a pedido del equipo.
+
+### Verificación de esta Adenda
+
+- `py_compile` sobre `app.py` — 0 errores de sintaxis.
+- Streamlit + Playwright en vivo, Ronda 1 (CADIZ): las 5 secciones cargan sin traceback ni error de
+  consola/JS (2 pasadas de verificación, capturas `a23_01` a `a23_07`).
+- Panel compacto de "Comparativa Plan vs. Real" (Finanzas): confirmado visualmente un solo gráfico
+  con todos los KPIs como filas, altura escalando con la cantidad de KPIs, leyenda única.
+- Cascada de Flujo de Caja: confirmado visualmente el puente CFO→CFI→CFF→Variación Neta de Caja con
+  datos reales de Ronda 1 (Real: CFO −3.720,7M, CFI −18,0M, CFF −2.000,0M, Variación Neta −5.738,7M
+  — **nota de escala**: estas magnitudes están afectadas por el hallazgo de la sección siguiente,
+  sobreestimadas ×1000 frente a lo que sería la cifra correcta en USD absolutos).
+- ROA + Spread: confirmado visualmente en el panel "Rango de Industria" y la tarjeta nueva, con
+  datos reales de Ronda 1.
+- Margen % en Operaciones: confirmado visualmente en la tarjeta de Contribución Marginal Unitaria.
+
+### ⚠️ Hallazgo NO solicitado, encontrado durante la verificación — desvío de escala ×1000 en el lado "Real" de la Comparativa Plan vs. Real
+
+Al revisar las capturas del nuevo panel compacto, los montos en USD del lado "Real" llamaron la
+atención por su magnitud (ej. "Ingresos por ventas: 46.479,5M" — 46,5 MIL MILLONES de USD para una
+sola empresa en una sola ronda). Esto llevó a una verificación NO pedida por el equipo en este turno,
+pero que corresponde reportar por la regla del proyecto de no dejar pasar algo no verificado como si
+estuviera confirmado.
+
+**Lo verificado, paso a paso:**
+
+1. Las tarjetas KPI de cabecera de Finanzas (`kpi_banda_oscura()`) y el Funnel de "Estructura Macro
+   de Costos" (Operaciones) usan el valor de `pl_ronda`/`bal_ronda` (salida de
+   `cesim_parser.build_historico()`) **sin ninguna conversión** — muestran, para CADIZ Ronda 1,
+   Ingresos ≈ 46,5M y EBITDA ≈ 6,2M (13% de margen EBITDA — proporción sensata para una automotriz).
+2. El panel "Comparativa Plan vs. Real" pasa esos mismos campos por
+   `gap_analysis._to_absoluto()`, que **multiplica por 1.000** los valores tipo `usd`/`unidades` del
+   lado Real — bajo el supuesto documentado en el propio código ("cesim_parser reporta USD y
+   unidades físicas en 'miles' — RDOS nativo"). Esto es lo que produce "46.479,5M" en el panel nuevo
+   (1.000× más grande que el mismo dato en la tarjeta de al lado).
+3. **Se abrió el archivo fuente crudo** `data/raw/practicas/oficial/results-r01.xls` (la planilla que
+   CESIM entrega, antes de que `cesim_parser` la toque) para dirimir cuál de las dos lecturas es la
+   correcta. La celda literal de "Ingresos por ventas" de CADIZ, bajo el encabezado de sección
+   "Cuenta de resultados, **miles USD**, Global", contiene el valor **46.479.518,40** — es decir, el
+   propio archivo de CESIM, pese a titular la sección "miles USD", ya trae el número en su magnitud
+   final (no hay que multiplicarlo por 1.000 para obtener el ingreso real).
+4. **Prueba de reconciliación independiente** (la más concluyente): el mismo archivo publica el
+   desglose de Ingresos de EE.UU. como "de mercados" = 19.650.080,57. Se reconstruyó ese número desde
+   el detalle por tecnología, también en el archivo crudo: Precio de venta Combustión = USD 20.000,
+   Ventas Combustión = 667,398 (fila rotulada "miles unidades"); Precio Híbrido = USD 25.900, Ventas
+   Híbrido = 243,325. `20.000 × 667,398 + 25.900 × 243,325 = 19.650.077,50` — coincide (a redondeo)
+   con el 19.650.080,57 publicado, **usando los precios y las "ventas en miles" tal cual figuran, SIN
+   multiplicar nada por 1.000 de más**. Si se aplicara el ×1.000 adicional que usa `_to_absoluto()`,
+   este número daría ~1.000 veces más grande y dejaría de reconciliar con el propio dato que CESIM
+   publica al lado.
+
+**Conclusión (con evidencia cruzada, no solo un supuesto)**: el título de sección "miles USD" del
+RDOS de CESIM es una etiqueta heredada del formato del reporte, pero los valores que efectivamente
+contiene la celda ya son la cifra final — no hace falta escalarlos. La conversión ×1.000 que aplica
+`_to_absoluto()` (documentada en Adenda 12 como "misma convención canónica que build_gestion_v2.py")
+parece ser, con esta evidencia, una escala de más — mil veces demasiado grande — para todos los
+campos tipo `usd`/`unidades` del lado Real de la Comparativa Plan vs. Real, en las 5 secciones que la
+usan (Resultados, Mercado, Operaciones, Finanzas). Esto NO afecta las tarjetas KPI de cabecera de
+Finanzas ni el Funnel de Operaciones (esos no pasan por `_to_absoluto()`) — son consistentes entre sí
+y, por esta evidencia, correctos.
+
+**Por qué se reporta como hallazgo y no se corrige en este mismo corte**: (a) no fue parte del pedido
+de esta Adenda — el pedido era de storytelling/formato, no una auditoría de `gap_analysis.py`; (b) el
+radio de impacto es amplio (toca el lado Real de TODOS los KPIs monetarios/de unidades de la
+Comparativa Plan vs. Real, en las 5 secciones, no solo Finanzas); (c) la convención ×1.000 fue una
+decisión tomada y documentada explícitamente en la Adenda 12 ("misma convención canónica de unidades
+que build_gestion_v2.py, Cambio 3, ver Informe_V2.md") — antes de revertirla conviene que el equipo
+confirme que no hay una razón de ese informe que este análisis no esté viendo. Se marca como
+**verificado con evidencia cruzada fuerte (RDOS crudo + reconciliación independiente de dos fuentes
+del mismo archivo), pero pendiente de decisión y aplicación del fix** — no se tocó `gap_analysis.py`
+en este corte.
+
+**Siguiente paso propuesto (a confirmar con el equipo)**: si se confirma el diagnóstico, el fix es
+acotado — quitar el `× 1000` de la rama `usd`/`unidades` de `_to_absoluto()` (o, más prolijo,
+verificar si el mismo problema aplica a `build_gestion_v2.py!DATA_EXPORT` del lado Plan, para no
+corregir un solo lado y desalinear la comparación). Recalcular y re-verificar contra Ronda 1 (gap≈0
+esperado, igual que en la verificación original de la Adenda 10) antes de dar el fix por cerrado.
+
 ## Pendiente para el próximo corte (actualizado)
 
-- Definir con el equipo la forma de navegación Ronda/Equipo en el sidebar (pregunta abierta de esta
-  Adenda).
-- Corregir la fórmula de "Cuota de mercado CADIZ (promedio)" en el Excel (divide por 12 casilleros
-  en vez de ponderar por volumen) — sigue siendo el próximo paso de fondo, pospuesto varias veces
-  por la iteración de estilo.
+- **Decidir y aplicar el fix del hallazgo de escala ×1000 de esta Adenda** (ver arriba) — es el
+  pendiente de mayor impacto abierto hoy: afecta el lado Real de toda la Comparativa Plan vs. Real.
+- Definir el camino de versionado del archivo Excel frente a la web (ver pendiente de la Adenda 22).
+- Si el equipo consigue la definición de "Factores de estrés" del material de cátedra, incorporarlo
+  como cuarto factor sobre la Cuota Resultante (D1c) de la Adenda 22.
+- Cargar los 6 parámetros ESG/inventario de la Adenda 22 en cuanto se verifiquen contra la pantalla
+  real de CESIM o el material del profesor (hoy están vacíos a propósito).
+- Evaluar si conviene una detección automática de cambio de tema (JS) en vez del botón manual
+  agregado en la Adenda 21, si el botón no resulta suficiente en el uso diario.
 - Ítems estéticos 5 y 6 de la Adenda 15 (etiquetas superpuestas en "Precio Promedio vs Volumen" y
   "Matriz Riesgo/Retorno", "Mix tecnológico" redundante) — pendientes de aprobación del equipo.
-- Revisar el gráfico de doble eje "Trayectoria de precio y características" en Mercado → Evolución
-  (hallazgo de la Adenda 18, no estaba en el relevamiento original de la Adenda 15).
+- Definir si "Cuota de mercado CADIZ (ponderada por volumen)" se agrega al panel de Finanzas
+  (Adenda 20) ahora que el cálculo es confiable.
+- Definir si `build_gestion_v2.py` se incorpora al repo de la web para trazabilidad completa
+  (Adenda 20).
 - Resto de los pendientes de Adendas 12 y 13 sin cambios (ver arriba).
+</content>

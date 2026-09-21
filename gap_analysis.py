@@ -33,31 +33,21 @@ _RONDA_OFICIAL_RE = re.compile(r"^Ronda\s+(\d+)$")
 DEFAULT_PROYECCION_EXCEL = DEFAULT_EXCEL
 
 
-def _corregir_escala_plan_usd(df):
-    """CORRECCIÓN DE ESCALA -- Categoría 3 (corrección de nuestro pipeline de lectura, NO una regla
-    CESIM ni un ajuste al Excel de gestión en sí). Confirmado por el equipo (dueño del modelo): los
-    valores PLAN en USD absolutos que trae DATA_EXPORT para Ronda 2 en adelante están 1000x por
-    encima de lo esperado -- ej. 'Ingresos por ventas' Ronda 2 PLAN = 76,940,864,900.74 USD tal como
-    lo escribe el Excel, cuando el equipo confirmó que el valor real es ~76.9 millones de USD.
-
-    Se verificó (antes de aplicar esta corrección) que el problema es ESPECÍFICO a status=='PLAN' +
-    unit=='USD' (los totales agregados: Ingresos, EBITDA, Activos, Deudas, Patrimonio, FCF, etc.) --
-    las filas status=='REAL' (ya verificadas contra Ronda 1 real de CESIM: 'Ingresos por ventas' real
-    de CADIZ Ronda 1 = 46,479,518.40 USD, coincide exacto con el RDOS) y las filas PLAN con otras
-    unidades (USD/acción -- EPS; USD/u. -- costos unitarios; RMB/EUR -- precios de venta regionales;
-    units) tienen magnitudes plausibles y NO se tocan.
-
-    Este es un parche de LECTURA en el pipeline Python -- no corrige la fórmula de origen en el Excel
-    de gestión, que sigue calculando el valor 1000x mayor puertas adentro. Si en una versión futura
-    del Excel se corrige esa fórmula, este parche quedaría de más (dividiría un valor ya correcto) --
-    hay que revisarlo cuando se actualice el Excel de gestión."""
-    if df is None or df.empty or 'status' not in df.columns or 'unit' not in df.columns:
-        return df
-    mask = (df['status'] == 'PLAN') & (df['unit'] == 'USD')
-    if mask.any():
-        df = df.copy()
-        df.loc[mask, 'value'] = pd.to_numeric(df.loc[mask, 'value'], errors='coerce') / 1000.0
-    return df
+# ------------------------------------------------------------------------------------------------
+# NOTA (retirado parche de escala): hasta esta versión existía acá un parche `_corregir_escala_
+# plan_usd()` que dividía /1000 todo valor status=='PLAN' + unit=='USD'. Se apoyaba en un benchmark
+# "REAL" equivocado -- 'Ingresos por ventas' real de CADIZ Ronda 1 = 46,479,518.40 USD -- que en
+# realidad es el valor CRUDO del RDOS ("miles USD" sin multiplicar), no el valor real en USD
+# absolutos (que es 46,479,518,404.93 USD, ~46.48 MIL MILLONES, verificado bottom-up: precio de
+# venta x volumen vendido x tipo de cambio sumado en las 3 áreas y 2 tecnologías activas, contra el
+# total de "Ingresos por ventas" de la Cuenta de Resultados, 0,003% de diferencia). Es decir: el
+# lado REAL estaba subvaluado 1000x (bug de lectura, ya corregido en el Excel de gestión --
+# rdos_parser.py / build_historico_equipos() / _canonicalize_real() aplican el x1000 de "miles USD"
+# correctamente), y el lado PLAN estaba en realidad BIEN escalado desde siempre. El parche
+# "corregía" comparando contra el lado equivocado. Con el Excel ya corregido, ambos lados (PLAN y
+# REAL) llegan en USD absolutos consistentes -- este parche queda retirado, no actualizado, porque
+# aplicarlo ahora volvería a introducir el mismo desfasaje de 1000x pero en sentido inverso.
+# ------------------------------------------------------------------------------------------------
 
 
 def load_proyeccion(path=DEFAULT_PROYECCION_EXCEL, team="CADIZ"):
@@ -71,7 +61,7 @@ def load_proyeccion(path=DEFAULT_PROYECCION_EXCEL, team="CADIZ"):
         df = read_dataframe(path, team=team)
     except Exception:
         return None
-    return _corregir_escala_plan_usd(df)
+    return df
 
 
 def _valor_proyeccion(df_proy, ronda_num, spec, team="CADIZ"):
@@ -318,12 +308,12 @@ def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team=
     Real: CESIM NO publica un único "Estado de flujo de efectivo, Global" en el RDOS -- lo publica en
     3 Estados separados: 'Flujo de efectivo de casa matriz, miles USD' (HQ + operación en EE.UU.) +
     'Estado de flujo de efectivo, miles USD, China' + '...Europa'. Se reconstruye sumando el
-    CFO/CFI/CFF de los tres, SIN ningún x1000 (ver _to_absoluto(), Adenda 25: cesim_parser ya entrega
-    USD en escala absoluta pese a que el RDOS rotule la sección "miles USD" -- confirmado por Julián
-    contra el RDOS real, "Ingresos por ventas" Global de CADIZ Ronda 1 ronda los USD 46 millones, no
-    los USD 46 mil millones que daría con el x1000). Los movimientos INTERCOMPAÑÍA (préstamos internos
-    entre casa matriz y filiales, dividendos que las filiales giran a casa matriz) se CANCELAN
-    naturalmente al sumar los tres lados -- no hace falta identificarlos ni restarlos a mano."""
+    CFO/CFI/CFF de los tres, CON el x1000 de "miles USD" (ver Adenda 27 en _to_absoluto() -- revierte
+    la Adenda 25: cesim_parser entrega el valor CRUDO tal cual la celda, sin ningún x1000, así que la
+    sección rotulada "miles USD" hay que escalarla acá, igual que en el resto de los campos 'usd').
+    Los movimientos INTERCOMPAÑÍA (préstamos internos entre casa matriz y filiales, dividendos que las
+    filiales giran a casa matriz) se CANCELAN naturalmente al sumar los tres lados -- no hace falta
+    identificarlos ni restarlos a mano."""
     plan = {}
     for clave, metric in [("cfo", "Total actividades operativas (CFO)"),
                            ("cfi", "Total actividades de inversión (CFI)"),
@@ -343,9 +333,9 @@ def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team=
         v_cff = _valor_real_grano(df_real, ronda_nombre, estado, "Efectivo proveniente de actividades financieras", "Total", empresa=team)
         if v_cfo is not None or v_cfi is not None or v_cff is not None:
             encontrado = True
-        real["cfo"] += v_cfo if v_cfo is not None else 0.0
-        real["cfi"] += v_cfi if v_cfi is not None else 0.0
-        real["cff"] += v_cff if v_cff is not None else 0.0
+        real["cfo"] += (v_cfo * 1000.0) if v_cfo is not None else 0.0
+        real["cfi"] += (v_cfi * 1000.0) if v_cfi is not None else 0.0
+        real["cff"] += (v_cff * 1000.0) if v_cff is not None else 0.0
     if not encontrado:
         real = {"cfo": None, "cfi": None, "cff": None}
     return {"plan": plan, "real": real}
@@ -365,16 +355,28 @@ def _to_absoluto(valor, spec_tipo, fuente):
       que parecía confirmar el x1000. Esa prueba asumía sin verificar que el headcount de I+D
       coincidía con la dotación total relevante para "Salarios y costos laborales" -- un supuesto
       propio no confirmado, no un dato.
-    - Adenda 25 (definitiva): Julián confirmó DIRECTAMENTE contra el RDOS real de CESIM (Ronda 1) que
-      "Ingresos por ventas" Global de CADIZ ronda los USD 46 millones, no los USD 46 mil millones --
-      dato histórico real, la fuente de mayor jerarquía disponible acá (por encima de cualquier
-      reconstrucción propia). Esto confirma que cesim_parser YA entrega USD/unidades en escala
-      absoluta (pese a que el RDOS rotula la sección "miles USD") -- el x1000 se saca.
-      OJO -- esto deja pendiente, sin resolver, la contradicción con la prueba de nómina de la Adenda
-      24 (salario mensual x headcount de I+D daba un orden de magnitud 1000x mayor a "Salarios y
-      costos laborales" sin el x1000): probablemente el headcount de I+D NO es la dotación total de la
-      empresa (es solo personal de I+D), pero esto no se verificó -- se deja explícitamente como
-      pregunta abierta, no como explicación confirmada.
+    - Adenda 25: se revirtió el x1000 de USD porque "Julián confirmó directamente contra el RDOS" que
+      Ingresos Global de CADIZ Ronda 1 ronda los USD 46 millones, no los USD 46 mil millones.
+    - Adenda 27 (definitiva -- revierte la Adenda 25): esa "confirmación" leía el número crudo que
+      exporta la plataforma ("miles USD" en el rótulo de sección) SIN aplicar el propio rótulo, es
+      decir, tomaba el valor ya en miles como si fuera absoluto. Verificado bottom-up de forma
+      independiente (precio de venta x volumen vendido x tipo de cambio, sumado en las 3 áreas y las
+      2 tecnologías activas de CADIZ, Ronda 2): USD 73.716.619.198 contra el "Ingresos por ventas"
+      Global publicado (73.714.297,44 "miles USD") x1000 = USD 73.714.297.440,62 -- 0,003% de
+      diferencia, dentro del redondeo de "miles unidades" a 3 decimales. Es decir, "Ingresos por
+      ventas" Global de CADIZ SÍ ronda los USD 46 MIL MILLONES en Ronda 1 (no los USD 46 millones) --
+      el rótulo "miles USD" de CESIM es literal y aplica también acá, igual que ya se corrigió en el
+      lado PLAN (ver rdos_parser.py / build_historico_equipos() del Excel de gestión). cesim_parser NO
+      aplica ningún x1000 (ver cesim_parser.py -- 'Valor' es siempre el crudo de la celda), así que el
+      x1000 que "se sacó" en la Adenda 25 nunca debió sacarse: se vuelve a aplicar acá, esta vez con
+      evidencia verificada de forma independiente (no una lectura de pantalla). La contradicción
+      pendiente de la Adenda 24 (prueba de nómina) queda resuelta en el mismo sentido: CON el x1000,
+      "Salarios y costos laborales" es plausible frente a un headcount total (no solo I+D), que es la
+      lectura correcta del dato -- confirma que el x1000 sí correspondía.
+      NOTA (ver Categoría de dato): esta es la MISMA corrección de escala que _corregir_escala_plan_usd
+      aplicaba (mal) al lado PLAN antes de retirarse de load_proyeccion() -- aquella dividía por 1000
+      un valor PLAN que ya estaba bien, comparándolo contra este mismo REAL mal escalado. Con esta
+      corrección, PLAN (ya correcto) y REAL (corregido acá) quedan en la MISMA escala absoluta.
     """
     if fuente != "real" or not isinstance(valor, (int, float)):
         return valor
@@ -382,16 +384,22 @@ def _to_absoluto(valor, spec_tipo, fuente):
         return valor / 100.0
     if spec_tipo == "unidades":
         # Adenda 26 (bug reportado: "Comparativa Plan vs. Real" de Mercado se rompió -- Real de
-        # Demanda estimada salía ~1000x menor que el Proyectado). A DIFERENCIA de 'usd' (Adenda 25:
-        # cesim_parser YA entrega USD absoluto pese al rótulo "miles USD"), la métrica real detrás de
-        # este tipo ('Demanda, miles unidades', Estado 'Informe de mercado, {país}') SÍ está en miles
-        # de unidades de verdad -- confirmado: CADIZ Ronda 1, EE.UU., Combustión = 667.398 sin este
-        # x1000, un mercado automotor de ~667 unidades totales no es plausible; con el x1000 (667,398)
-        # queda en el mismo orden de magnitud que el Proyectado de Ronda 2 (~1,041,456 unidades,
-        # confirmado ya en escala correcta -- ver _corregir_escala_plan_usd en load_proyeccion()).
-        # Mismo x1000 que ya se aplica a mano en otros lugares de este archivo para "miles unidades"
-        # (ver prod_total_miles/vol_real más arriba) -- acá se generaliza al tipo 'unidades' de
+        # Demanda estimada salía ~1000x menor que el Proyectado). La métrica real detrás de este tipo
+        # ('Demanda, miles unidades', Estado 'Informe de mercado, {país}') SÍ está en miles de unidades
+        # de verdad -- confirmado: CADIZ Ronda 1, EE.UU., Combustión = 667.398 sin este x1000, un
+        # mercado automotor de ~667 unidades totales no es plausible; con el x1000 (667,398) queda en
+        # el mismo orden de magnitud que el Proyectado de Ronda 2 (~1,041,456 unidades). Mismo x1000
+        # que ya se aplica a mano en otros lugares de este archivo para "miles unidades" (ver
+        # prod_total_miles/vol_real más arriba) -- acá se generaliza al tipo 'unidades' de
         # calcular_gaps() en vez de dejarlo sin convertir.
+        return valor * 1000.0
+    if spec_tipo == "usd":
+        # Adenda 27: ver docstring de esta función -- mismo rótulo "miles USD" que 'unidades' tiene
+        # "miles unidades", misma corrección (x1000). Cubre Ingresos, Costos, EBITDA, EBIT, Beneficio,
+        # Activos/Pasivos/Patrimonio y componentes de Balance -- los "totales" agregados que trae
+        # metric_crosswalk.py con tipo="usd" (ver ahí). NO cubre precios unitarios ("Precio de venta"),
+        # costos unitarios ("Costo de producción... por unidad") ni EPS (tipo="usd_accion") -- esos NO
+        # están rotulados "miles" en el RDOS y no se tocan (ver precio_volumen_mercado, sin cambios).
         return valor * 1000.0
     return valor
 

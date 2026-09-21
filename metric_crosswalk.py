@@ -105,11 +105,14 @@ CROSSWALK_FINANZAS = {
 # (calcular_gaps ya devuelve 'sin_proyeccion' para esas rondas, correctamente). El primer gap real
 # aparece en Ronda 2 en cuanto CESIM publique su RDOS.
 #
-# "Cuota de mercado CADIZ (promedio)" (Finanzas, ya en CROSSWALK_FINANZAS -- no se movió) se dejó
-# deliberadamente afuera de aquí también: se verificó que la fórmula del Excel divide por 12 (incluye
-# los 6 casilleros de Eléctrico/Hidrógeno donde CADIZ no compite) en vez de ponderar por volumen como
-# hace CESIM -- confirmado contra Ronda 1 real (CESIM: 18,03% ponderado por ventas; Excel: fórmula que
-# da 4,63% en Ronda 2). Reportado al equipo; omitida del Control de Gestión hasta corregir el Excel.
+# "Cuota de mercado CADIZ (ponderada por volumen)" (fila de 03_RATIOS, antes "promedio simple, 3
+# mercados, Combustión+Híbrido"): la fórmula del Excel dividía por 12 (incluía los 6 casilleros de
+# Eléctrico/Hidrógeno donde CADIZ no compite, sumando ceros de más en vez de ponderar por volumen
+# como hace CESIM) -- confirmado contra Ronda 1 real (CESIM: 18,03% ponderado por ventas; Excel
+# viejo: 4,63% en Ronda 2 con esos mismos supuestos). CORREGIDO en build_gestion_v2.py (ver Adenda
+# de Integracion_Excel_Web_Control_Gestion.md): ahora pondera la cuota de cada país por su tamaño
+# de mercado (Sección A1 del motor), igual convención que el dato REAL. Sigue sin agregarse a este
+# crosswalk (Control de Gestión) -- eso es una decisión aparte, a confirmar con el equipo.
 CROSSWALK_MERCADO = {
     "demanda_estimada_eeuu": {
         "label": "Demanda estimada — EE.UU.",

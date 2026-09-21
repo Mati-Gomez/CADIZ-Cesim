@@ -13,6 +13,10 @@ from gap_analysis import (calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_P
                           TECNOLOGIAS as _TECNOLOGIAS_GAP, MERCADOS as _MERCADOS_GAP, AREAS as _AREAS_GAP,
                           MONEDA_MERCADO as _MONEDA_MERCADO_GAP)
 from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
+# Motor de proyección (build_gestion_v2.py, ver README del motor): genera el Excel de gestión
+# ("CADIZ_Gestion_v2.xlsx") al vuelo a partir de los RDOS de cada ronda jugada, sin tocar el disco
+# del servidor (io.BytesIO) -- ver bloque "Generar Excel de gestión" en la sidebar, más abajo.
+from build_gestion_v2 import generar_excel
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
@@ -1163,6 +1167,58 @@ ronda_snapshot = st.sidebar.select_slider('Ronda de análisis', options=rondas_t
 st.sidebar.markdown(f'<div class="sidebar-status"><span class="dot"></span>{ronda_snapshot}</div>',
                      unsafe_allow_html=True)
 empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0, key='select_equipo')
+st.sidebar.divider()
+
+# ---------------- Generar Excel de gestión (motor de proyección, build_gestion_v2.py) ----------------
+# Flujo: se suben acá los RDOS (.xls) de TODAS las rondas ya jugadas (los mismos archivos que CESIM
+# publica y que normalmente se commitean a data/raw) -- el motor los parsea al vuelo (rdos_parser.py,
+# un solo parser/una sola lógica de escala para todas las rondas) y arma el Excel de gestión completo
+# en memoria (io.BytesIO, NUNCA se escribe nada en el disco del servidor). El botón de descarga entrega
+# ese archivo lista para reemplazar a `CADIZ_Gestion_v2.xlsx` en la raíz del repo (mismo nombre que ya
+# lee `export_proyeccion.read_dataframe()` / `gap_analysis.load_proyeccion()` -- ver Adenda 10/hotfix
+# README) -- el reemplazo en el repo lo sigue haciendo el usuario a mano, como ya funciona hoy.
+with st.sidebar.expander('🔧 Generar Excel de gestión (próxima ronda)'):
+    st.caption('Subí los RDOS (.xls) de TODAS las rondas ya jugadas (R0, R1, R2, ...). El número de '
+               'ronda de cada archivo se toma del título de su hoja "Results" -- no hace falta '
+               'nombrarlos de una forma particular ni subirlos en orden.')
+    rdos_uploads = st.file_uploader('RDOS de rondas jugadas', type=['xls'], accept_multiple_files=True,
+                                     key='rdos_uploader_motor')
+    if st.button('Generar Excel', key='btn_generar_excel', disabled=not rdos_uploads):
+        try:
+            import re as _re
+            rdos_files_up = {}
+            errores_detect = []
+            for f in rdos_uploads:
+                f.seek(0)
+                # Se reutiliza rdos_parser (misma lógica que adentro del motor) solo para leer el
+                # título y detectar el número de ronda -- no se relee el archivo dos veces con lógicas
+                # de detección distintas.
+                import xlrd as _xlrd
+                _wb = _xlrd.open_workbook(file_contents=f.read())
+                _titulo = _wb.sheet_by_name('Results').cell(0, 0).value
+                _m = _re.search(r'Ronda\s*(\d+)', str(_titulo), _re.IGNORECASE)
+                if not _m:
+                    errores_detect.append(f.name)
+                    continue
+                rdos_files_up[int(_m.group(1))] = f
+            if errores_detect:
+                st.error('No se pudo detectar el número de ronda en: ' + ', '.join(errores_detect) +
+                          ' -- revisá que sean RDOS originales de CESIM (hoja "Results", título con '
+                          '"Ronda N").')
+            elif not rdos_files_up:
+                st.error('No se detectó ninguna ronda válida en los archivos subidos.')
+            else:
+                for _f in rdos_files_up.values():
+                    _f.seek(0)
+                with st.spinner(f'Generando Excel para rondas {sorted(rdos_files_up)}...'):
+                    buf = generar_excel(rdos_files_up)
+                st.success(f'Excel generado con rondas {sorted(rdos_files_up)}.')
+                st.download_button('⬇️ Descargar CADIZ_Gestion_v2.xlsx', data=buf,
+                                    file_name='CADIZ_Gestion_v2.xlsx',
+                                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                    key='dl_excel_generado')
+        except Exception as e:
+            st.error(f'No se pudo generar el Excel: {e}')
 st.sidebar.divider()
 # BUG REPORTADO Y CONFIRMADO -- es una limitación de la plataforma, no de este código: Streamlit
 # expone el tema elegido (Settings > claro/oscuro/uso del sistema) vía st.context.theme.type, pero
