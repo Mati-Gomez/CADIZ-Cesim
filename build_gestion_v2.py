@@ -11,7 +11,11 @@ columna H = Ronda 1, ..., columna S = Ronda 12 (col = 7+ronda), igual criterio q
 """
 import io
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import openpyxl
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.utils import get_column_letter
@@ -80,7 +84,7 @@ OUT_PATH = "/home/claude/cadiz_gestion/CADIZ_Gestion_v3.xlsx"
 # ronda jugada (rdos_files, ver extract_hist_pais()/build_historico_equipos() y generar_excel()),
 # vía el parser único rdos_parser.py. Dato histórico real, no lógica propia; una sola fuente/lógica
 # de escala para todas las rondas.
-from rdos_parser import parse_rdos_workbook
+from rdos_parser import parse_rdos_workbook, detectar_ronda_desde_nombre
 
 
 def extract_hist_pais(rdos_files):
@@ -115,7 +119,70 @@ def extract_hist_pais(rdos_files):
                 if lbl == "Total" and cf_seccion_actual.get(sec):
                     lbl_out = f"Total ({cf_seccion_actual[sec]})"
                 out[rn].setdefault(cf_labels[sec], {}).setdefault("cf", {})[lbl_out] = row["scaled"].get("CADIZ")
+            # DATO HISTÓRICO REAL (verificado, ver Informe Fase 4): "Acciones en circulación al final
+            # de la ronda, m acciones" -- CESIM la publica dentro de la sección de flujo de efectivo de
+            # Europa (quirk del propio RDOS, es un dato GLOBAL de casa matriz, no de ese país) y con la
+            # unidad abreviada "m acciones" (miles de acciones) en vez de "miles unidades" -- rdos_parser
+            # NO reconoce esa abreviatura (_MILES_RE exige la palabra completa "miles"), así que esta
+            # fila llega en "values" (crudo, sin escalar) y hace falta el x1000 a mano acá. Verificado
+            # contra R0-R3: da 1.625.000.000 acciones en las 4 rondas (CADIZ no emitió/recompró todavía),
+            # consistente con el valor que antes estaba hardcodeado como "DATO HISTÓRICO REAL" para R0/R1.
+            if sec == "Estado de flujo de efectivo, miles USD, Europa" and lbl == "Acciones en circulación al final de la ronda, m acciones":
+                v_nacc = row["values"].get("CADIZ")
+                if isinstance(v_nacc, (int, float)):
+                    out[rn]["_nacc"] = v_nacc * 1000
     return out
+
+
+def extract_mercado_real(rdos_files):
+    """Tamaño de mercado total y Demanda estimada CADIZ, por mercado/tecnología, para CUALQUIER
+    ronda con RDOS (reemplaza los diccionarios tam_hist/dem_real de _ENGINE_MERCADO, que solo
+    cubrían R0/R1 a mano). Dato histórico real, no supuesto ni lógica propia.
+
+    Verificado bottom-up contra R0/R1 (0 diferencia a 10 decimales en Tamaño de mercado, 0
+    mismatches en las 24 combinaciones mercado×tecnología de Demanda) y contra R2/R3 (valores
+    nuevos, plausibles, primera vez que se calculan) -- ver test_mercado_extractor.py / Informe
+    Fase 4.
+
+    tam[mercado][ronda] = Σ("Ventas, miles unidades" x1000, todas las tecnologías, CADIZ, sección
+        "Informe de mercado, {mercado}") / ("Total" de "{mercado} cuotas de mercado, %", CADIZ, /100).
+    dem[(mercado, tecnologia)][ronda] = "Demanda, miles unidades" x1000 de CADIZ, dentro del bloque
+        de esa tecnología en "Informe de mercado, {mercado}" -- 0.0 si CADIZ no tiene fila para esa
+        tecnología (no se inventa un valor).
+    """
+    tam, dem_out = {}, {}
+    secciones_informe = {f"Informe de mercado, {m}": m for m in MERCADOS}
+    for rn, f in rdos_files.items():
+        rows = parse_rdos_workbook(f)
+        ventas_por_mercado = {m: 0.0 for m in MERCADOS}
+        cuota_por_mercado = {m: None for m in MERCADOS}
+        demanda_por_mercado_tech = {}
+        current_mercado, current_tech = None, None
+        for row in rows:
+            sec, lbl, typ = row["section"], row["label"], row["type"]
+            if sec in secciones_informe:
+                current_mercado = secciones_informe[sec]
+                if typ == "subheader" and lbl in TECNOLOGIAS:
+                    current_tech = lbl
+                elif typ == "data" and lbl == "Demanda, miles unidades" and current_tech:
+                    demanda_por_mercado_tech[(current_mercado, current_tech)] = row["scaled"].get("CADIZ")
+                elif typ == "data" and lbl == "Ventas, miles unidades" and current_mercado:
+                    v = row["scaled"].get("CADIZ")
+                    if isinstance(v, (int, float)):
+                        ventas_por_mercado[current_mercado] += v
+            elif sec and sec.endswith("cuotas de mercado, %") and sec != "Cuotas de mercado globales, %":
+                m = sec.replace(" cuotas de mercado, %", "")
+                if typ == "data" and lbl == "Total" and m in MERCADOS:
+                    v = row["values"].get("CADIZ")
+                    if isinstance(v, (int, float)):
+                        cuota_por_mercado[m] = v / 100.0
+        for m in MERCADOS:
+            tam.setdefault(m, {})[rn] = (ventas_por_mercado[m] / cuota_por_mercado[m]) if cuota_por_mercado[m] else None
+        for tech in TECNOLOGIAS:
+            for m in MERCADOS:
+                dem_out.setdefault((m, tech), {})[rn] = demanda_por_mercado_tech.get((m, tech), 0.0)
+    return tam, dem_out
+
 
 # Hojas cuyo NOMBRE empieza con un dígito -- por gramática OOXML, cualquier referencia de fórmula
 # a estas hojas DEBE ir entre comillas simples ('01_INPUTS'!A1), o el archivo es inválido para un
@@ -212,7 +279,7 @@ def fix_digit_sheet_quoting(path, sheet_names=None):
 # ======================================================================================
 # 01_INPUTS
 # ======================================================================================
-def build_inputs(wb):
+def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(INPUTS_SHEET)
     ws.sheet_view.showGridLines = False
     ncols = 6 + len(RONDAS)
@@ -383,10 +450,20 @@ def build_inputs(wb):
     # Cuando el profesor publique los RDOS reales de R2, ese dato se migra aparte (mismo proceso que
     # R0/R1) y recién ahí corresponde pasar Estado(R2) a "REAL". R3 en adelante sigue como ronda activa
     # de planificación (Estado=PLAN, arrastra hasta que se confirme en CESIM).
-    estado_vals = {0: "REAL", 1: "REAL", 2: "PLAN", 3: "PLAN"}
+    # Ronda N.N (Fase 4, frontera dinámica): Estado(rn)="REAL" para TODA ronda con RDOS oficial
+    # cargado (rondas_reales = frozenset(rdos_files.keys()), calculado en generar_excel() a partir de
+    # data/raw/oficial/) -- ya NO un boundary fijo (0,1). La ronda siguiente a la última real
+    # (n_next = max(rondas_reales)+1) arranca en "PLAN" como default de bootstrap; de ahí en más queda
+    # en blanco (kind="input") para que el usuario la cargue o para que el mecanismo de rescate de
+    # decisiones (leer_decisiones_previas/aplicar_overrides_inputs, ver generar_excel) la restaure
+    # desde el último Cadiz_proyeccion_R{N}.xlsx sin perder lo ya planificado a futuro.
+    n_next_estado = (max(rondas_reales) + 1) if rondas_reales else 0
+    estado_vals = {rn: "REAL" for rn in rondas_reales}
+    if n_next_estado <= 12:
+        estado_vals[n_next_estado] = "PLAN"
     for rn in RONDAS:
         v = estado_vals.get(rn)
-        S.apply_cell(ws, row_estado, 7 + rn, value=v, kind=("historico" if rn <= 1 else "input"), align=S.ALIGN_CENTER, size=9, bold=True)
+        S.apply_cell(ws, row_estado, 7 + rn, value=v, kind=("historico" if rn in rondas_reales else "input"), align=S.ALIGN_CENTER, size=9, bold=True)
     row_ronda_activa = put(
         "A. Identificación", "RONDA_ACTIVA (calculado)", "-", "VERDADERO/FALSO", "CÁLCULO",
         "SUPUESTO DE MODELO (Cambio 2, v1.1): VERDADERO si Estado de esta ronda ∈ {PLAN,SIM,REAL} Y el "
@@ -831,7 +908,7 @@ def build_inputs(wb):
 
     # -- Completa RONDA_ACTIVA (reservada en Sección A) ahora que existe row_cuota --
     for rn in RONDAS:
-        if rn in (0, 1):
+        if rn in rondas_reales:
             S.apply_cell(ws, row_ronda_activa, 7 + rn, value=True, kind="calculo", align=S.ALIGN_CENTER, bold=True, size=9)
         else:
             estado_cell = f"{col(rn)}{row_estado}"
@@ -1192,7 +1269,7 @@ def sens_ref(row):
 # _ENGINE_PRODUCCION — Parte 1: capacidad, curva de aprendizaje, costo unitario propio,
 # disponibilidad (oferta previa a ventas), D&A. (Motor E1 + E4 del proyecto anterior, simplificado.)
 # ======================================================================================
-def build_engine_produccion_part1(wb, inputs_idx):
+def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(ENGINE_PROD_SHEET)
     ncols = 6 + len(RONDAS)
     S.set_col_widths(ws, [18, 44, 20, 10, 14, 30] + [13] * len(RONDAS))
@@ -1595,7 +1672,7 @@ def build_engine_produccion_part1(wb, inputs_idx):
 # ventas efectivas, exportaciones, transporte/aranceles y transfer pricing. (Motor E3, MISMA
 # lógica de asignación multi-origen del proyecto anterior — ver README, no se simplificó.)
 # ======================================================================================
-def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None):
+def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None, rdos_files=None, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(ENGINE_MKT_SHEET)
     ncols = 6 + len(RONDAS)
     S.set_col_widths(ws, [18, 50, 26, 10, 10, 8] + [12] * len(RONDAS))
@@ -1622,45 +1699,54 @@ def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None):
         S.style_section_row(ws, r[0], title, ncols)
         r[0] += 1
 
-    # -------- SECCIÓN A1: TAMAÑO DE MERCADO TOTAL --------
-    section("SECCIÓN A1 · TAMAÑO DE MERCADO TOTAL (todas las empresas, por mercado)")
-    tam_hist = {"EE.UU.": {0: 5_074_999.999999999, 1: 5_017_355.179390851},
-                "China": {0: 3_604_999.9999999995, 1: 3_171_865.588413054},
-                "Europa": {0: 5_529_999.999999999, 1: 3_419_440.6584575113}}
+    # Ronda N.N (Fase 4, frontera dinámica): Tamaño de mercado / Demanda estimada CADIZ para
+    # CUALQUIER ronda con RDOS -- ver extract_mercado_real() (verificado bottom-up, reemplaza los
+    # diccionarios tam_hist/dem_real que antes solo cubrían R0/R1 a mano).
+    tam_real, dem_real = extract_mercado_real(rdos_files or {})
     # [DATO EXTERNO NO VERIFICADO EN ARCHIVO PROPIO] Observado directamente por el equipo en la
     # plataforma CESIM al momento de decidir Ronda 2 (no reconstruible desde los archivos del
-    # proyecto). Se usa SOLO como base de crecimiento de Ronda 1→2; no reemplaza ni altera el
-    # histórico real de arriba.
+    # proyecto). Se conserva solo como registro histórico -- YA NO se usa como base de cálculo
+    # (ver nota extendida más abajo, Sección A1).
     BASE_R1_AJUSTADA = {"EE.UU.": 5_193_000.0, "China": 3_808_000.0, "Europa": 6_647_000.0}
+
+    # -------- SECCIÓN A1: TAMAÑO DE MERCADO TOTAL --------
+    section("SECCIÓN A1 · TAMAÑO DE MERCADO TOTAL (todas las empresas, por mercado)")
+    # Ronda N.N (Fase 4, frontera dinámica): tam_real/dem_real ahora vienen de extract_mercado_real()
+    # (verificado bottom-up contra R0-R3: Tamaño de mercado = Σ Ventas CADIZ / Cuota total CADIZ,
+    # exacto a 10 decimales contra los valores antes hardcodeados a mano para R0/R1; Demanda estimada
+    # CADIZ = fila "Demanda, miles unidades" propia de CADIZ dentro de cada tecnología -- 0 mismatches
+    # en las 24 combinaciones mercado×tecnología×ronda de R0/R1). Reemplaza los diccionarios
+    # tam_hist/dem_real (solo R0/R1, copiados a mano) -- ahora cualquier ronda con RDOS entra igual.
+    #
+    # BASE_R1_AJUSTADA (la fila "R1 — BASE AJUSTADA" de más abajo, hoy retirada del cálculo): era un
+    # [DATO EXTERNO NO VERIFICADO] observado a mano en la plataforma CESIM al decidir Ronda 2 (5.193.000
+    # vs. el Tamaño de mercado R1 derivado del RDOS propio, 5.017.355 -- ~3,5% de diferencia), no
+    # reconstruible desde ningún archivo. Esa corrección puntual NO se generaliza (no es automatizable:
+    # requería mirar la plataforma en vivo en un momento específico) -- de acá en más, la base de
+    # crecimiento de CUALQUIER transición Ronda real→Ronda siguiente usa el Tamaño de mercado derivado
+    # de RDOS puro. LIMITACIÓN DOCUMENTADA: la proyección de Ronda 2 en este archivo pudo diferir en
+    # ~3,5% del tamaño de mercado por este motivo puntual; no vuelve a aplicar desde acá en más.
+    n_next = (max(rondas_reales) + 1) if rondas_reales else 0
     row_tam = {}
     row_tam_base = {}
     for mercado in MERCADOS:
-        row_b = put("A1. Tamaño de mercado", "Tamaño de mercado R1 — BASE AJUSTADA para proyectar R2+", mercado, "u.", "DATO EXTERNO (no verificado en archivo propio)",
-                    "Observado por el equipo en la plataforma CESIM (no reconstruible desde archivos del proyecto). Solo se usa como base de crecimiento R1→R2.")
+        row_b = put("A1. Tamaño de mercado", "Tamaño de mercado R1 — BASE AJUSTADA (histórico, ya no usada en el cálculo)", mercado, "u.", "DATO EXTERNO (no verificado en archivo propio)",
+                    "[RETIRADA DEL CÁLCULO, Fase 4] Observado por el equipo en la plataforma CESIM al decidir R2 -- no reconstruible ni generalizable a otras rondas. Se conserva solo como registro histórico.")
         row_tam_base[mercado] = row_b
         row_t = put("A1. Tamaño de mercado", "Tamaño de mercado total estimado", mercado, "u.", "CÁLCULO",
-                    "R0/R1: derivado de RDOS real (ventas CADIZ / cuota total CADIZ). R2: BASE AJUSTADA R1 × (1+crecimiento D1). R3-R12: ronda anterior × (1+crecimiento).")
+                    "Ronda con RDOS: derivado de RDOS real (ventas CADIZ / cuota total CADIZ). Ronda sin RDOS: ronda anterior × (1+crecimiento D1) -- ya sea que la ronda anterior sea real o proyectada.")
         row_tam[mercado] = row_t
         for rn in RONDAS:
             c = col(rn)
-            if rn == 1:
-                S.apply_cell(ws, row_b, 7 + rn, value=BASE_R1_AJUSTADA[mercado], kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
-            else:
-                S.apply_cell(ws, row_b, 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, italic=True, size=7)
+            S.apply_cell(ws, row_b, 7 + rn, value=(BASE_R1_AJUSTADA[mercado] if rn == 1 else "n/a"), kind=("plain" if rn != 1 else "historico"), align=S.ALIGN_CENTER, italic=(rn != 1), size=8 if rn == 1 else 7, numfmt=(S.NUM_UNITS if rn == 1 else None))
             growth_ref = iref(inputs_idx, "B. Condiciones", "Crecimiento de mercado esperado (vs. ronda anterior)", mercado, rn)
-            # Fase 2, cambio 4 [SUPUESTO PROPIO]: Demanda_ajustada = Demanda_base × (1+Factor_Crecimiento_Activo).
-            # Hotfix (cierre de Ronda 2): aplica ESTRICTAMENTE desde Ronda 3 en adelante -- R0/R1 son
-            # históricos reales y R2 queda fijada/congelada como histórico cerrado (Escenario A, ya
-            # jugada) junto con ellos, así que ninguna de las tres se recalcula si mañana se cambia
-            # Escenario Activo a PESIMISTA/OPTIMISTA para planificar R3+. Con Escenario Activo=BASE el
-            # factor es 0% de cualquier forma (multiplicador 1, sin efecto), pero la guarda por ronda
-            # blinda R0-R2 aunque alguien mueva el selector.
-            sens_mult = f"*(1+{sens_ref(sens_rows['factor_crec'])})" if (sens_rows and rn >= 3) else ""
-            if rn in (0, 1):
-                S.apply_cell(ws, row_t, 7 + rn, value=round(tam_hist[mercado][rn]), kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
-            elif rn == 2:
-                f = f"={col(1)}{row_b}*(1+{growth_ref}){sens_mult}"
-                S.apply_cell(ws, row_t, 7 + rn, value=f, kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+            # [SUPUESTO PROPIO] Matriz de sensibilidad: aplica desde la primera ronda a decidir en
+            # adelante (n_next) -- antes fijo a "desde R3" porque R2 ya estaba cerrada/decidida cuando
+            # se creó esta herramienta. Con Escenario Activo=BASE (default) el factor es 0%, sin efecto.
+            sens_mult = f"*(1+{sens_ref(sens_rows['factor_crec'])})" if (sens_rows and rn >= n_next) else ""
+            if rn in rondas_reales:
+                v_tam = tam_real.get(mercado, {}).get(rn)
+                S.apply_cell(ws, row_t, 7 + rn, value=(round(v_tam) if v_tam is not None else "n/d"), kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
             else:
                 cprev = col(rn - 1)
                 f = f"={cprev}{row_t}*(1+{growth_ref}){sens_mult}"
@@ -1669,33 +1755,24 @@ def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None):
 
     # -------- SECCIÓN A2: DEMANDA ESTIMADA CADIZ --------
     section("SECCIÓN A2 · DEMANDA ESTIMADA DE CADIZ POR MERCADO Y TECNOLOGÍA (proyección propia, no garantizada por CESIM)")
-    dem_real = {
-        ("EE.UU.", "Combustión"): {0: 725_000.0, 1: 667_398.0}, ("EE.UU.", "Híbrido"): {0: 0.0, 1: 243_325.0},
-        ("EE.UU.", "Eléctrico"): {0: 0.0, 1: 0.0}, ("EE.UU.", "Hidrógeno"): {0: 0.0, 1: 0.0},
-        ("China", "Combustión"): {0: 515_000.0, 1: 515_109.0}, ("China", "Híbrido"): {0: 0.0, 1: 156_005.0},
-        ("China", "Eléctrico"): {0: 0.0, 1: 0.0}, ("China", "Hidrógeno"): {0: 0.0, 1: 0.0},
-        ("Europa", "Combustión"): {0: 945_000.0, 1: 1_050_557.0}, ("Europa", "Híbrido"): {0: 0.0, 1: 277_464.0},
-        ("Europa", "Eléctrico"): {0: 0.0, 1: 0.0}, ("Europa", "Hidrógeno"): {0: 0.0, 1: 0.0},
-    }
     row_demanda = {}
     for mercado in MERCADOS:
         for tech in TECNOLOGIAS:
             dim = f"{mercado} / {tech}"
             row_d = put("A2. Demanda CADIZ", "Demanda estimada CADIZ", dim, "u.", "CÁLCULO",
-                        "R0/R1: histórico real (RDOS). R2-R12: Tamaño de mercado (A1) × Cuota Resultante SOBRE EL TOTAL (D1c = Mix de "
+                        "Ronda con RDOS: histórico real (RDOS). Ronda sin RDOS: Tamaño de mercado (A1) × Cuota Resultante SOBRE EL TOTAL (D1c = Mix de "
                         "Industria D1a × Cuota sobre la Tecnología D1b) — SUPUESTO, no garantizado por CESIM. Ver Adenda 22.")
             row_demanda[(mercado, tech)] = row_d
             for rn in RONDAS:
                 c = col(rn)
-                if rn in (0, 1):
-                    S.apply_cell(ws, row_d, 7 + rn, value=dem_real[(mercado, tech)][rn], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+                if rn in rondas_reales:
+                    v_dem = dem_real.get((mercado, tech), {}).get(rn, 0.0)
+                    S.apply_cell(ws, row_d, 7 + rn, value=v_dem, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
                 else:
                     cuota_ref = iref(inputs_idx, "D1c · DEMANDA (RESULTANTE)", "Cuota Resultante SOBRE EL TOTAL (Copiar a CESIM)", dim, rn)
-                    # Fase 2, cambio 4 [SUPUESTO PROPIO]: Cuota_efectiva = Cuota_objetivo × (1−Factor_Competencia_Activo).
-                    # Hotfix (cierre de Ronda 2): aplica ESTRICTAMENTE desde Ronda 3 en adelante, misma
-                    # guarda que sens_mult arriba -- R2 (Escenario A, ya jugada) queda blindada como
-                    # histórico cerrado, no se recalcula aunque Escenario Activo deje de ser BASE.
-                    comp_mult = f"*(1-{sens_ref(sens_rows['factor_comp'])})" if (sens_rows and rn >= 3) else ""
+                    # [SUPUESTO PROPIO] Cuota_efectiva = Cuota_objetivo × (1−Factor_Competencia_Activo),
+                    # misma guarda "desde n_next en adelante" que sens_mult arriba.
+                    comp_mult = f"*(1-{sens_ref(sens_rows['factor_comp'])})" if (sens_rows and rn >= n_next) else ""
                     f = f"={c}{row_tam[mercado]}*{cuota_ref}{comp_mult}"
                     S.apply_cell(ws, row_d, 7 + rn, value=f, kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
     r[0] += 1
@@ -1955,7 +2032,7 @@ def build_engine_produccion_part2(ws_prod, ridx_prod, ridx_mkt):
 # consolidado GLOBAL de Estado de Resultados, Balance y Cash Flow (Motor E5, simplificado:
 # balance/CF SOLO a nivel Global, ver README).
 # ======================================================================================
-def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
+def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(ENGINE_FIN_SHEET)
     ncols = 6 + len(RONDAS)
     S.set_col_widths(ws, [16, 48, 14, 10, 14, 34] + [13] * len(RONDAS))
@@ -2319,7 +2396,6 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
     # ============ Fase 2, cambio 2: GFN real por país (saldos de APERTURA) → EBT → carry-forward →
     # Impuesto → Beneficio → BALANCE por país → FLUJO DE FONDOS por país (secuencia no circular,
     # replica MOTOR_VALIDADO_R2/build_engine_e5.py) ============
-    hist_perd_ap = {"EE.UU.": {0: 0.0, 1: 0.0}, "China": {0: 0.0, 1: 0.0}, "Europa": {0: 0.0, 1: 0.0}}
     hist_pais = extract_hist_pais(rdos_files)
 
     def hv(rn_, pais_, sec_, label_):
@@ -2340,15 +2416,26 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
         produce = pais in AREAS
         for rn in RONDAS:
             c = col(rn)
-            if rn in (0, 1):
+            if rn in rondas_reales:
                 # -------- P&L (cola): DATO HISTÓRICO REAL (RDOS), no fórmula --------
+                # Ronda N.N (Fase 4, frontera dinámica): antes fijo a (0,1) -- ahora CUALQUIER ronda
+                # con RDOS oficial cargado (rondas_reales) usa el dato real vía hv()/extract_hist_pais,
+                # bypasseando por completo las fórmulas de la Sección A de más arriba (que para una
+                # ronda real quedan como celdas informativas sin efecto en GFN/EBT/Impuesto/Balance/CF,
+                # igual que ya pasaba con R0/R1 antes de esta generalización).
                 v_gfn = hv(rn, pais, "pl", "Gastos financieros netos")
                 v_ebt = hv(rn, pais, "pl", "Beneficio antes de impuestos")
                 v_imp = hv(rn, pais, "pl", "Impuesto sobre el beneficio")
                 v_ben = hv(rn, pais, "pl", "Beneficio de la ronda")
                 S.apply_cell(ws, cr["gfn"], 7 + rn, value=(v_gfn if v_gfn is not None else "n/d"), kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
                 S.apply_cell(ws, cr["ebt"], 7 + rn, value=(v_ebt if v_ebt is not None else "n/d"), kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
-                S.apply_cell(ws, cr["perd_ap"], 7 + rn, value=hist_perd_ap[pais][rn], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+                # SUPUESTO PROPIO (no verificado contra manual/RDOS -- el RDOS no publica "pérdida
+                # trasladable acumulada" por país): se asume perd_ci=0.0 para TODA ronda real (antes
+                # solo R0/R1). perd_ap se lee de la celda anterior (0.0 si rn==0, sin ronda previa) --
+                # esto reemplaza el diccionario fijo hist_perd_ap[pais][0/1] para que la cadena de
+                # arrastre funcione igual sin importar cuántas rondas sean ya reales.
+                v_perd_ap = 0.0 if rn == 0 else f"={col(rn - 1)}{cr['perd_ci']}"
+                S.apply_cell(ws, cr["perd_ap"], 7 + rn, value=v_perd_ap, kind=("historico" if rn == 0 else "calculo"), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
                 S.apply_cell(ws, cr["base_imp"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
                 S.apply_cell(ws, cr["perd_ci"], 7 + rn, value=0.0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
                 S.apply_cell(ws, cr["tasa"], 7 + rn, value=f"={iref(inputs_idx,'B. Condiciones','Tasa de impuesto corporativo',pais,rn)}", kind="link", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=8)
@@ -2417,10 +2504,11 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
             f_gfn = f"=({dlp_ap}*{tasa_lp})+({cprev}{cr['dcp']}*{tasa_cp})-({cprev}{cr['caja']}*{tasa_ef})"
             S.apply_cell(ws, cr["gfn"], 7 + rn, value=f_gfn, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, cr["ebt"], 7 + rn, value=f"={c}{cr['ebit']}-{c}{cr['gfn']}", kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
-            if rn == 2:
-                S.apply_cell(ws, cr["perd_ap"], 7 + rn, value=hist_perd_ap[pais][1], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-            else:
-                S.apply_cell(ws, cr["perd_ap"], 7 + rn, value=f"={cprev}{cr['perd_ci']}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+            # Ronda N.N: ya no hace falta un caso especial para "la primera ronda proyectada" (antes
+            # hardcodeado a rn==2, sembrando desde hist_perd_ap[pais][1]) -- la celda perd_ci de la
+            # ronda anterior YA está poblada (0.0) para cualquier ronda histórica (ver arriba), así que
+            # la misma fórmula de arrastre sirve sea la ronda anterior histórica o ya proyectada.
+            S.apply_cell(ws, cr["perd_ap"], 7 + rn, value=f"={cprev}{cr['perd_ci']}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, cr["base_imp"], 7 + rn, value=f"=MAX(0,{c}{cr['ebt']}-{c}{cr['perd_ap']})", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, cr["perd_ci"], 7 + rn, value=f"=MAX(0,{c}{cr['perd_ap']}-{c}{cr['ebt']})", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, cr["tasa"], 7 + rn, value=f"={iref(inputs_idx,'B. Condiciones','Tasa de impuesto corporativo',pais,rn)}", kind="link", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=8)
@@ -2480,33 +2568,28 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
             S.apply_cell(ws, cr["cfci"], 7 + rn, value=f"={c}{cr['cfap']}+{c}{cr['cfcambio']}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
 
     # ============ Rellenar SECCIÓN B (GLOBAL P&L) ============
-    hist_pl_g = {
-        0: dict(ing=39_489_000_000.0, costos=35_337_849_217.5511, ebitda=4_151_150_782.44887, dep=1_203_133_800.0,
-                ebit=2_948_016_982.44887, gfn=642_707_584.62952, ebt=2_305_309_397.81935, imp=563_691_413.924514,
-                ben=1_741_617_983.89484),
-        1: dict(ing=None, costos=None, ebitda=None, dep=904_561_560.0 + 178_258_860.0, ebit=None, gfn=None, ebt=None,
-                imp=None, ben=None),
-    }
+    # Ronda N.N (Fase 4, frontera dinámica): reemplaza el diccionario hist_pl_g (copia manual, a mano,
+    # de los 9 valores Global de R0 y "n/a"/parcial para R1) por lectura DIRECTA de la sección propia
+    # "Cuenta de resultados, miles USD, Global" del RDOS -- extract_hist_pais() YA la captura bajo
+    # pais="Global" (no hacía falta un extractor nuevo). Verificado bottom-up con los 4 RDOS reales
+    # (R0-R3): Global.Ingresos/Costos/EBITDA/Depreciación/EBIT/GFN/EBT/Impuesto/Beneficio están
+    # publicados directamente (no hay que sumarlos desde los países) -- y la suma de "Beneficio de la
+    # ronda" de los 3 países coincide EXACTO (diff=0.00 en las 4 rondas) con el Beneficio Global
+    # publicado, así que el control de consistencia (glob['ctrl']) ya no necesita quedar en "n/a": se
+    # activa con la misma fórmula que usan las rondas proyectadas.
+    GLOB_PL_LABELS = {"ing": "Ingresos por ventas", "costos": "Costos y gastos totales",
+                       "ebitda": "Beneficio operativo antes de depreciación (EBITDA)",
+                       "dep": "Depreciación de Activos Fijos", "ebit": "Beneficio operativo (EBIT)",
+                       "gfn": "Gastos financieros netos", "ebt": "Beneficio antes de impuestos",
+                       "imp": "Impuesto sobre el beneficio", "ben": "Beneficio de la ronda"}
     for rn in RONDAS:
         c = col(rn)
-        if rn == 0:
-            hv = hist_pl_g[0]
-            for k in ["ing", "costos", "ebitda", "dep", "ebit", "gfn", "ebt", "imp", "ben"]:
-                S.apply_cell(ws, glob[k], 7 + rn, value=hv[k], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-            S.apply_cell(ws, glob["ctrl"], 7 + rn, value="n/a (Ronda 0, ver RDOS)", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            continue
-        if rn == 1:
-            S.apply_cell(ws, glob["ing"], 7 + rn, value="n/a (RDOS R1 Global no desagregado aquí)", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["costos"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["ebitda"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["dep"], 7 + rn, value=hist_pl_g[1]["dep"], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-            S.apply_cell(ws, glob["ebit"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["gfn"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["ebt"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["imp"], 7 + rn, value="n/a", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
-            S.apply_cell(ws, glob["ben"], 7 + rn, value=3_609_336_474.27, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8,
-                          )
-            S.apply_cell(ws, glob["ctrl"], 7 + rn, value="n/a (Ronda 1, ver RDOS)", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
+        if rn in rondas_reales:
+            for k, lbl in GLOB_PL_LABELS.items():
+                v = hv(rn, "Global", "pl", lbl)
+                S.apply_cell(ws, glob[k], 7 + rn, value=(v if v is not None else "n/d"), kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+            f_sum_ben = "+".join(f"{c}{country_rows[p]['ben']}" for p in PAISES)
+            S.apply_cell(ws, glob["ctrl"], 7 + rn, value=f"={c}{glob['ben']}-({f_sum_ben})", kind="alerta", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             continue
         f_ing = "=" + "+".join(f"{c}{country_rows[p]['mercado']}" for p in PAISES)
         S.apply_cell(ws, glob["ing"], 7 + rn, value=f_ing, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
@@ -2546,10 +2629,9 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
         S.apply_cell(ws, glob["activos"], 7 + rn, value=f"={c}{glob['af']}+{c}{glob['inv']}+{c}{glob['cxc']}+{c}{glob['caja']}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
         f_capsoc = "=" + "+".join(f"{c}{country_rows[p]['capsoc']}" for p in PAISES)
         S.apply_cell(ws, glob["capsoc"], 7 + rn, value=f_capsoc, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-        if rn == 0:
-            S.apply_cell(ws, glob["nacc"], 7 + rn, value=1_625_000_000, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
-        elif rn == 1:
-            S.apply_cell(ws, glob["nacc"], 7 + rn, value=1_625_000_000, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+        if rn in rondas_reales:
+            v_nacc_hist = hist_pais.get(rn, {}).get("_nacc")
+            S.apply_cell(ws, glob["nacc"], 7 + rn, value=(v_nacc_hist if v_nacc_hist is not None else "n/d"), kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
         else:
             emis = iref(inputs_idx, "D8 · FINANZAS", "Emisión de acciones", "Casa matriz EE.UU.", rn)
             recom = iref(inputs_idx, "D8 · FINANZAS", "Recompra de acciones", "Casa matriz EE.UU.", rn)
@@ -2595,7 +2677,12 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
         S.apply_cell(ws, glob["cfi"], 7 + rn, value=f_cfi, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
         f_cff = "=" + "+".join(f"{c}{country_rows[p]['cff']}" for p in PAISES)
         S.apply_cell(ws, glob["cff"], 7 + rn, value=f_cff, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-        if rn == 1:
+        if rn in rondas_reales:
+            # Ronda N.N (Fase 4): generaliza el boundary fijo (antes solo rn==1) -- cr["cfaj"] por
+            # país es texto "n/a" para CUALQUIER ronda histórica (rn>0) desde antes de este cambio
+            # (el "ajuste automático de deuda CP" es una cifra derivada del propio modelo, no un dato
+            # que el RDOS publique), así que sumarlo con "+" para una ronda real más allá de R1 (p.ej.
+            # R2/R3 al pasar a REAL) daba #VALUE! antes de este fix.
             S.apply_cell(ws, glob["cfaj"], 7 + rn, value="n/a (histórico, ver RDOS)", kind="plain", align=S.ALIGN_CENTER, size=7, italic=True)
         else:
             f_cfaj = "=" + "+".join(f"{c}{country_rows[p]['cfaj']}" for p in PAISES)
@@ -2613,7 +2700,7 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files):
 # ======================================================================================
 # 02_ESTADOS_PROYECTADOS — vista GLOBAL de gestión, solo lectura (links a _ENGINE_FINANCIERO)
 # ======================================================================================
-def build_estados_proyectados(wb, glob, inputs_idx, country_rows):
+def build_estados_proyectados(wb, glob, inputs_idx, country_rows, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(ESTADOS_SHEET)
     # Hotfix visual: ncols y set_col_widths deben cubrir TODAS las columnas físicas de la hoja
     # (A,B + C-F espaciador oculto + G-S rondas = 2+4+13=19), no solo hasta la última ronda contada
@@ -2664,9 +2751,13 @@ def build_estados_proyectados(wb, glob, inputs_idx, country_rows):
         return iref(inputs_idx, "A. Identificación", "RONDA_ACTIVA (calculado)", "-", rn)
 
     def guarded(rn, inner_formula_no_eq):
-        """Cambio 2 (v1.1): en rondas no activas (R3-R12 sin Estado+inputs mínimos cargados), la
-        celda queda VACÍA ("") en vez de mostrar un cálculo sin sentido con inputs en blanco. R0/R1
-        (siempre activas por definición histórica) y R2 (activa) no cambian de valor por este wrap."""
+        """Cambio 2 (v1.1): en rondas no activas (sin Estado+inputs mínimos cargados), la celda
+        queda VACÍA ("") en vez de mostrar un cálculo sin sentido con inputs en blanco.
+        Nota (Fase 4, frontera dinámica): el boundary de acá abajo se deja fijo en (0,1) a propósito
+        -- NO hace falta generalizarlo a rondas_reales, porque RONDA_ACTIVA (01_INPUTS, ya
+        generalizada) es un valor LITERAL =VERDADERO para cualquier ronda en rondas_reales, así que
+        IF(RONDA_ACTIVA,inner,"") ya se reduce a "inner" para esas rondas de todas formas -- ambas
+        ramas son equivalentes, esto es solo una simplificación cosmética de la fórmula escrita."""
         if rn in (0, 1):
             return f"={inner_formula_no_eq}"
         return f'=IF({activo_ref(rn)},{inner_formula_no_eq},"")'
@@ -2766,7 +2857,7 @@ def build_estados_proyectados(wb, glob, inputs_idx, country_rows):
 # ======================================================================================
 # 03_RATIOS — ratios de gestión, cortos y útiles para decisión (por ronda)
 # ======================================================================================
-def build_ratios(wb, glob, inputs_idx, cond, decisiones, prod_out, mkt_out):
+def build_ratios(wb, glob, inputs_idx, cond, decisiones, prod_out, mkt_out, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(RATIOS_SHEET)
     # Hotfix visual: idem 02_ESTADOS_PROYECTADOS -- ncols/anchos deben cubrir A,B + C-F (espaciador
     # oculto) + G-S (rondas) = 2+4+13=19, no solo 15.
@@ -2797,7 +2888,9 @@ def build_ratios(wb, glob, inputs_idx, cond, decisiones, prod_out, mkt_out):
 
     def guarded(rn, inner_no_eq):
         """Cambio 2 (v1.1): idéntico criterio que en 02_ESTADOS_PROYECTADOS -- R0/R1 sin cambios,
-        R2 (activa) sin cambios de valor, R3-R12 no activas quedan en blanco ("")."""
+        R2 (activa) sin cambios de valor, R3-R12 no activas quedan en blanco (""). Nota (Fase 4):
+        boundary fijo a propósito, ver comentario equivalente en build_estados_proyectados -- es
+        cosmético (RONDA_ACTIVA ya es =VERDADERO literal para cualquier ronda real)."""
         if rn in (0, 1):
             return f"={inner_no_eq}"
         return f'=IF({activo_ref(rn)},{inner_no_eq},"")'
@@ -2847,6 +2940,13 @@ def build_ratios(wb, glob, inputs_idx, cond, decisiones, prod_out, mkt_out):
         c = col(rn)
         cprev = col(rn - 1) if rn > 0 else None
         ing_ref, ing_prev = fin(rn, "ing"), (fin(rn - 1, "ing") if rn > 0 else None)
+        # PENDIENTE (Fase 4, NO generalizado en este pase): este bloque muestra "n/a" para R0/R1 sin
+        # tocar rondas_reales -- ahora que _ENGINE_FINANCIERO sí calcula P&L/Balance real vía RDOS
+        # para CUALQUIER ronda real (no solo R0/R1), en principio estos ratios podrían calcularse por
+        # fórmula también para R1 en adelante (fin(rn,*) ya tiene dato real). No se generalizó acá por
+        # riesgo/tiempo -- requiere verificar que los inputs de "Condición" que usan estas fórmulas
+        # (tasa de interés, "Valor de referencia de la acción", etc.) estén poblados para la ronda en
+        # cuestión antes de confiar en el resultado. Ver informe de este pase.
         if rn == 0 or rn == 1:
             for rr in [row_growth, row_margen_ebitda, row_ros, row_roe, row_roce, row_wacc, row_roce_wacc, row_eps,
                        row_fcf, row_payout, row_pe_proxy, row_divyield_proxy]:
@@ -2990,7 +3090,7 @@ def build_ratios(wb, glob, inputs_idx, cond, decisiones, prod_out, mkt_out):
 # ======================================================================================
 # 04_CONTROL_MODELO — controles técnicos de salud del modelo (NO es Control de Gestión)
 # ======================================================================================
-def build_control_modelo(wb, inputs_idx, prod_out, mkt_out, glob, cond, decisiones, country_rows=None):
+def build_control_modelo(wb, inputs_idx, prod_out, mkt_out, glob, cond, decisiones, country_rows=None, rondas_reales=frozenset({0, 1})):
     ws = wb.create_sheet(CONTROL_SHEET)
     # Hotfix visual: idem 02/03 -- ncols/anchos deben cubrir A,B,C + D-F (espaciador oculto) + G-S
     # (rondas) = 3+3+13=19, no solo 16.
@@ -3108,7 +3208,7 @@ def build_control_modelo(wb, inputs_idx, prod_out, mkt_out, glob, cond, decision
                 terms_bt.append(f'(NOT(AND(ISNUMBER({terc_ref}),{terc_ref}>0,NOT(ISNUMBER({costo_ref})))))')
                 terms_bt.append(f'(NOT(AND(ISNUMBER({terc_ref}),{terc_ref}>0,ISNUMBER({costo_ref}),{costo_ref}<=0)))')
         S.apply_cell(ws, row_terc_costo, 7 + rn, value="=IF(AND(" + ",".join(terms_bt) + "),\"OK\",\"ERROR — FALTA COSTO DE TERCERIZACIÓN — PROYECCIÓN NO VÁLIDA\")", kind="alerta", align=S.ALIGN_CENTER, size=8, bold=True)
-        if rn <= 1:
+        if rn in rondas_reales:
             S.apply_cell(ws, row_d8_consist, 7 + rn, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         else:
             S.apply_cell(ws, row_d8_consist, 7 + rn, value=f"=IF(AND({cref(ENGINE_FIN_SHEET, glob['pat'], rn)}>=0,{cref(ENGINE_FIN_SHEET, glob['dlp'], rn)}>=0),\"OK\",\"ERROR\")", kind="calculo", align=S.ALIGN_CENTER, size=8)
@@ -3389,6 +3489,15 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
     plan_start = r  # si ninguna ronda R2-R12 está activa, no se escribe nada y r no avanza -> 0 filas
 
     for rn in range(2, 13):
+        if rn in rdos_files:
+            # Ronda N.N (Fase 4, frontera dinámica): esta ronda YA fue migrada como histórico REAL
+            # en el loop de arriba (for ronda in sorted(rdos_files)) -- antes esto era imposible para
+            # rn>=2 (rondas_reales fijo a {0,1}), pero ahora que Estado(rn)="REAL" generaliza a
+            # cualquier ronda con RDOS, sin este guard _ronda_activa_buildtime(rn) daría VERDADERO
+            # también acá (Estado="REAL" ∈ {PLAN,SIM,REAL}) y se escribiría una fila DUPLICADA
+            # (misma clave ronda/CADIZ/Global/métrica) con fórmulas PLAN en vez del valor REAL ya
+            # migrado. Se salta explícitamente.
+            continue
         if not _ronda_activa_buildtime(rn):
             continue
         estado_ref = f"'{INPUTS_SHEET}'!{col(rn)}{estado_row}"
@@ -3442,7 +3551,12 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
             ("Retorno total acumulado del accionista (PROXY)", "retorno_acum", "%", 100),
         ]:
             ref = cref(RATIOS_SHEET, ratios_rows[key], rn)
-            plan_row(label, f"{ref}*{mult}" if mult != 1 else ref, unidad)
+            # Bug real, corregido: 03_RATIOS devuelve IFERROR(...,"") cuando el ratio no es calculable
+            # (p.ej. Ingresos=0 en una ronda con decisiones incompletas) -- multiplicar ese "" x100
+            # directamente (fórmula ="..."&""*100) da #VALUE! en vez de propagar el blank. Se envuelve
+            # en IFERROR acá también para que el blank se propague como blank, no como error.
+            f_ref = f"IFERROR({ref}*{mult},\"\")" if mult != 1 else f"IFERROR({ref},\"\")"
+            plan_row(label, f_ref, unidad)
         # Región va en la columna Región, NO embebida en el texto de la métrica (contrato DATA_EXPORT).
         plan_row("Utilización de capacidad", f"{cref(RATIOS_SHEET, ratios_rows['util_us'], rn)}*100", "%", region="EE.UU.")
         plan_row("Utilización de capacidad", f"{cref(RATIOS_SHEET, ratios_rows['util_cn'], rn)}*100", "%", region="China")
@@ -3622,7 +3736,11 @@ def build_data_export(wb, ws_hist, header_row, ids, plan_start):
             # 05_HISTORICO_EQUIPOS (% x100, o "u.") no es todavía la canónica -- el resto (dinero
             # ya en USD absoluto, EPS ya en USD/acción) se deja como link directo sin cambios.
             if metrica_plan in _RATIO_METRICS_PLAN:
-                S.apply_cell(ws, out_row, 8, value=f"='{HIST_SHEET}'!G{src_row}/100", kind="link", numfmt='0.0000', align=S.ALIGN_RIGHT, size=8)
+                # Bug real, corregido (mismo motivo que el IFERROR agregado en 05_HISTORICO_EQUIPOS/
+                # PLAN/SIM CADIZ): si la celda origen viene en blanco ("" de un IFERROR previo, p.ej.
+                # Ingresos=0 en una ronda con decisiones incompletas), dividir "" /100 da #VALUE! en
+                # vez de propagar el blank -- se envuelve en IFERROR para que el blank se propague.
+                S.apply_cell(ws, out_row, 8, value=f"=IFERROR('{HIST_SHEET}'!G{src_row}/100,\"\")", kind="link", numfmt='0.0000', align=S.ALIGN_RIGHT, size=8)
                 S.apply_cell(ws, out_row, 9, value="ratio", kind="plain", align=S.ALIGN_CENTER, size=8)
             elif metrica_plan in _UNITS_METRICS_PLAN:
                 S.apply_cell(ws, out_row, 8, value=f"='{HIST_SHEET}'!G{src_row}", kind="link", numfmt='#,##0.####', align=S.ALIGN_RIGHT, size=8)
@@ -3671,6 +3789,196 @@ def build_data_export(wb, ws_hist, header_row, ids, plan_start):
     return ws, out_row - 2
 
 
+def descubrir_rdos_oficiales(base_dir):
+    """Escanea base_dir (p.ej. 'data/raw/oficial/') buscando RDOS oficiales (.xls/.xlsx) y arma
+    {ronda_int: path}, detectando la ronda por el NOMBRE del archivo (detectar_ronda_desde_nombre --
+    'ronda0.xlsx', 'Ronda_2.xls', 'RDOS RONDA 3.xls', etc.). Si dos archivos matchean la misma ronda,
+    gana el de modificación más reciente (mtime) -- no se inventa otro criterio de desempate; se
+    imprime un aviso para que quede visible en los logs de la app. Devuelve {} si el directorio no
+    existe o no hay ningún archivo reconocible (no es un error -- puede ser la primera corrida)."""
+    out = {}
+    if not os.path.isdir(base_dir):
+        return out
+    for nombre in sorted(os.listdir(base_dir)):
+        if not nombre.lower().endswith((".xls", ".xlsx")):
+            continue
+        rn = detectar_ronda_desde_nombre(nombre)
+        if rn is None:
+            continue
+        path = os.path.join(base_dir, nombre)
+        if rn in out and os.path.getmtime(path) <= os.path.getmtime(out[rn]):
+            print(f"  [descubrir_rdos_oficiales] Ronda {rn}: se ignora '{nombre}' (más viejo que '{os.path.basename(out[rn])}').")
+            continue
+        out[rn] = path
+    return out
+
+
+# Claves de 01_INPUTS que NUNCA se restauran por rescate de decisiones -- se recalculan siempre
+# desde rondas_reales (frontera REAL/PLAN), aplicado DESPUÉS del rescate para garantizar que ganan
+# ellas y no un valor viejo heredado del archivo anterior (ver aplicar_overrides_inputs()).
+_INPUTS_KEYS_FORZADAS = {
+    "A. Identificación||Estado||-",
+    "A. Identificación||RONDA_ACTIVA (calculado)||-",
+    "A. Identificación||Número de ronda||-",
+}
+
+
+def leer_decisiones_previas(path_excel_anterior, desde_ronda):
+    """Lee el 01_INPUTS de un Cadiz_proyeccion_R{N}.xlsx ANTERIOR (data_only=False, para poder
+    distinguir un valor literal tipeado por el usuario de una fórmula de arrastre '=G10' -- las
+    fórmulas de arrastre NO se rescatan porque build_inputs()/arrastre_rows() ya las regenera solas,
+    correctamente, en el archivo nuevo) y devuelve {(bloque||variable||dimension): {ronda: valor}}
+    para TODAS las columnas de ronda >= desde_ronda que tengan un valor literal cargado -- esto es
+    lo que el usuario pidió como "rescatar las decisiones futuras cargadas para que no se pierdan".
+    Devuelve {} si el archivo no existe (primera corrida / bootstrap, nada que rescatar)."""
+    if not path_excel_anterior or not os.path.exists(path_excel_anterior):
+        return {}
+    wb = openpyxl.load_workbook(path_excel_anterior, data_only=False)
+    if INPUTS_SHEET not in wb.sheetnames:
+        return {}
+    ws = wb[INPUTS_SHEET]
+    overrides = {}
+    # Bug real, corregido: build_inputs() pone el encabezado de 01_INPUTS en la fila 4 (ver
+    # header_row=4 en build_inputs) -- iterar desde min_row=1 incluía esa fila de encabezado
+    # ("Bloque"/"Variable"/"Dimensión" literales en A4/B4/C4, "Ronda N" en las columnas de ronda)
+    # como si fuera una fila de datos real, generando una clave espuria
+    # "Bloque||Variable||Dimensión" -> {3: "Ronda 3", ...} que después aparecía como "sin match"
+    # en los diagnósticos de overrides (inofensiva porque nunca matcheaba una key real de
+    # row_idx, pero de todos modos incorrecta). Se arranca después del encabezado.
+    for row in ws.iter_rows(min_row=5, max_row=ws.max_row):
+        bloque, variable, dimension = row[0].value, row[1].value, row[2].value
+        if not variable:
+            continue
+        key = f"{bloque}||{variable}||{dimension}"
+        if key in _INPUTS_KEYS_FORZADAS:
+            continue
+        vals = {}
+        for rn in range(desde_ronda, 13):
+            col_idx = 7 + rn
+            if col_idx - 1 >= len(row):
+                continue
+            v = row[col_idx - 1].value
+            if v is None:
+                continue
+            if isinstance(v, str) and v.startswith("="):
+                continue  # fórmula (arrastre u otra) -- se regenera sola, no se rescata
+            vals[rn] = v
+        if vals:
+            overrides[key] = vals
+    wb.close()
+    return overrides
+
+
+def aplicar_overrides_inputs(ws_in, row_idx, overrides, desde_ronda):
+    """Overlay POST-build_inputs(): escribe los valores literales rescatados por
+    leer_decisiones_previas() directamente en las celdas ya construidas de 01_INPUTS, emparejando
+    por CLAVE DE TEXTO (bloque||variable||dimension) contra row_idx -- no por número de fila, así que
+    tolera reordenamientos de secciones entre versiones del script. Nunca pisa una celda que ya tenga
+    una fórmula (el motor nuevo, p.ej. RONDA_ACTIVA o un arrastre) -- solo pisa celdas vacías o con
+    otro valor literal. Devuelve (aplicados, sin_match) para loggear en la UI."""
+    aplicados, sin_match = 0, 0
+    for key, valores_por_ronda in overrides.items():
+        row = row_idx.get(key)
+        if row is None:
+            sin_match += 1
+            continue
+        for rn, val in valores_por_ronda.items():
+            if rn < desde_ronda:
+                continue
+            cell = ws_in.cell(row=row, column=7 + rn)
+            actual = cell.value
+            if isinstance(actual, str) and actual.startswith("="):
+                continue
+            cell.value = val
+            aplicados += 1
+    return aplicados, sin_match
+
+
+def extraer_plan_congelado(path_excel_anterior, ronda_actual_a_decidir):
+    """Lee el DATA_EXPORT de un Cadiz_proyeccion_R{N}.xlsx ANTERIOR *ya recalculado* (data_only=True
+    -- necesita valores cacheados; ver _recalcular_con_libreoffice) y devuelve TODAS las filas CADIZ
+    con status="PLAN" cuya ronda sea DISTINTA de `ronda_actual_a_decidir` -- es decir, cualquier
+    proyección ya congelada de una ronda que en el archivo nuevo va a ser REAL o ya lo era (rondas <
+    ronda_actual_a_decidir), tanto si se congeló recién (la ronda que acaba de pasar a REAL con este
+    mismo cambio de frontera) como si ya venía arrastrada de una congelación anterior. Se excluye
+    deliberadamente la ronda `ronda_actual_a_decidir` en sí: esa es la ronda TODAVÍA en curso (sin
+    RDOS todavía) -- si el archivo anterior ya tenía algo cargado para ella, el archivo nuevo la va a
+    recalcular con fórmulas vivas propias (no hace falta, y sería redundante, copiarla como estática).
+
+    Por qué "TODAS" y no solo la última: si no se arrastran las filas YA congeladas en corridas
+    anteriores (p.ej. al simplemente re-generar sin RDOS nuevo, para afinar decisiones), se
+    perderían silenciosamente en cada regeneración -- el dashboard de Plan vs. Real necesita
+    conservarlas indefinidamente. Devuelve None si no hay nada para congelar (bootstrap, o la
+    ronda actual nunca tuvo RDOS/decisiones)."""
+    if not path_excel_anterior or not os.path.exists(path_excel_anterior):
+        return None
+    wb = openpyxl.load_workbook(path_excel_anterior, data_only=True)
+    if DATA_EXPORT_SHEET not in wb.sheetnames:
+        return None
+    ws = wb[DATA_EXPORT_SHEET]
+    filas = [row for row in ws.iter_rows(min_row=2, values_only=True)
+             if row[3] == "CADIZ" and row[2] == "PLAN" and row[0] != ronda_actual_a_decidir]
+    wb.close()
+    return filas or None
+
+
+def inyectar_plan_congelado(ws_export, filas_congeladas):
+    """Agrega filas_congeladas (de extraer_plan_congelado) al FINAL del DATA_EXPORT ya construido,
+    como valores ESTÁTICOS (no fórmulas) -- es la "foto" del Plan Congelado que pidió el usuario:
+    coexiste con las filas REAL de la misma ronda (status distinto: "PLAN" congelado vs. "REAL"
+    migrado del RDOS) para que el dashboard de Control de Gestión pueda comparar Plan vs. Real sin
+    perder lo que se había proyectado antes de tener el resultado real. Devuelve la cantidad de filas
+    agregadas."""
+    if not filas_congeladas:
+        return 0
+    out_row = ws_export.max_row + 1
+    aligns = [S.ALIGN_CENTER] * 6 + [S.ALIGN_RIGHT, S.ALIGN_CENTER, S.ALIGN_RIGHT, S.ALIGN_CENTER, S.ALIGN_CENTER]
+    for row_vals in filas_congeladas:
+        # metric (índice 6, columna 7) va alineado a la izquierda; el resto sigue aligns[] de arriba.
+        for i, v in enumerate(row_vals, start=1):
+            align = S.ALIGN_LEFT if i == 7 else (aligns[i - 1] if i - 1 < len(aligns) else S.ALIGN_CENTER)
+            numfmt = '#,##0.####' if i in (8, 10) else None
+            S.apply_cell(ws_export, out_row, i, value=v, kind="historico", numfmt=numfmt, align=align, size=8)
+        out_row += 1
+    return len(filas_congeladas)
+
+
+def _recalcular_con_libreoffice(path_xlsx, timeout=120):
+    """Recalcula TODAS las fórmulas de path_xlsx in-place, usando LibreOffice headless (mismo
+    approach validado varias veces en este proyecto: 0 errores de fórmula, identidades contables
+    exactas -- ver informes de fases anteriores). Hace falta porque openpyxl NUNCA evalúa fórmulas:
+    sin este paso, un archivo recién generado no tiene valores cacheados para sus celdas de fórmula,
+    y el mecanismo de "Plan Congelado" (leer el DATA_EXPORT de un Cadiz_proyeccion_R{N}.xlsx anterior
+    con data_only=True) devolvería None para todo.
+
+    Devuelve (True, None) si recalculó OK, o (False, mensaje) si LibreOffice no está disponible o
+    falla -- nunca lanza una excepción, para que generar_excel() pueda seguir devolviendo el archivo
+    (sin recalcular) en vez de romper toda la generación por un problema del entorno de despliegue.
+    """
+    if shutil.which("soffice") is None:
+        return False, ("LibreOffice ('soffice') no está disponible en este entorno -- el archivo se "
+                        "generó SIN recalcular (las fórmulas no tienen valor cacheado hasta que se abra "
+                        "una vez en Excel/LibreOffice). Agregar 'libreoffice' a packages.txt si se corre "
+                        "en Streamlit Community Cloud.")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            result = subprocess.run(
+                ["soffice", "--headless", "--norestore", "--convert-to",
+                 "xlsx:Calc MS Excel 2007 XML", "--outdir", tmpdir, path_xlsx],
+                capture_output=True, text=True, timeout=timeout,
+                env={**os.environ, "HOME": tmpdir},
+            )
+        except subprocess.TimeoutExpired:
+            return False, f"LibreOffice tardó más de {timeout}s recalculando -- se devuelve el archivo sin recalcular."
+        except Exception as e:
+            return False, f"Error ejecutando LibreOffice: {e} -- se devuelve el archivo sin recalcular."
+        out_path = os.path.join(tmpdir, os.path.basename(path_xlsx))
+        if result.returncode != 0 or not os.path.exists(out_path):
+            return False, f"LibreOffice devolvió error (code={result.returncode}): {result.stderr[-500:]}"
+        shutil.copyfile(out_path, path_xlsx)
+    return True, None
+
+
 # ======================================================================================
 # GENERAR_EXCEL — ensambla el workbook completo, fija orden/visibilidad de hojas y devuelve un
 # buffer en memoria (io.BytesIO), listo para servir como descarga (Streamlit st.download_button)
@@ -3678,21 +3986,43 @@ def build_data_export(wb, ws_hist, header_row, ids, plan_start):
 # rondas ya jugadas que se quieran migrar como histórico REAL (R0, R1, R2, R3, ...). Reemplaza a
 # main(), que queda como wrapper de línea de comandos para pruebas locales (ver más abajo).
 # ======================================================================================
-def generar_excel(rdos_files, out_buffer=None):
+def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, plan_congelado=None):
+    """overrides: dict de leer_decisiones_previas() -- decisiones/condiciones literales rescatadas
+    del Cadiz_proyeccion_R{N}.xlsx anterior, para no tener que volver a tipear todo cada ronda.
+    plan_congelado: lista de extraer_plan_congelado() -- foto de las filas CADIZ de la última ronda
+    real, tal como estaban proyectadas ANTES de tener el RDOS real, para el dashboard Plan vs. Real."""
     wb = Workbook()
     wb.remove(wb.active)
 
-    ws_in, ridx_in, ids, cond, dec = build_inputs(wb)
-    ws_p, ridx_p, r_p, prod_out = build_engine_produccion_part1(wb, ridx_in)
-    ws_m, ridx_m, r_m, mkt_out = build_engine_mercado(wb, ridx_in, prod_out, sens_rows=ids.get("sens"))
+    # Ronda N.N (Fase 4, frontera dinámica): rondas_reales = TODAS las rondas con RDOS oficial
+    # cargado en rdos_files (data/raw/oficial/ en el flujo de repo) -- ya no un boundary fijo (0,1).
+    # "La última ronda con RDOS define la frontera REAL" (spec del usuario). RDOS se suben en orden
+    # (0,1,2,...) así que en la práctica es siempre un rango contiguo {0..N}, pero se pasa como
+    # frozenset (no un simple N) para que cada función generalice con "rn in rondas_reales" sin
+    # asumir contigüidad.
+    rondas_reales = frozenset(rdos_files.keys())
+    n_next = (max(rondas_reales) + 1) if rondas_reales else 0
+
+    ws_in, ridx_in, ids, cond, dec = build_inputs(wb, rondas_reales=rondas_reales)
+    n_overrides_aplicados = n_overrides_sin_match = 0
+    if overrides:
+        # Rescate de decisiones (spec del usuario: "no quiero tener que modificar las rondas futuras
+        # cada vez") -- overlay POST-build_inputs, nunca pisa fórmulas del motor nuevo. Estado/
+        # RONDA_ACTIVA quedan siempre excluidos (ver _INPUTS_KEYS_FORZADAS) porque ya los fijó
+        # build_inputs() arriba, a partir de rondas_reales -- esa es la fuente de verdad, no el
+        # archivo anterior.
+        n_overrides_aplicados, n_overrides_sin_match = aplicar_overrides_inputs(ws_in, ridx_in, overrides, desde_ronda=n_next)
+    ws_p, ridx_p, r_p, prod_out = build_engine_produccion_part1(wb, ridx_in, rondas_reales=rondas_reales)
+    ws_m, ridx_m, r_m, mkt_out = build_engine_mercado(wb, ridx_in, prod_out, sens_rows=ids.get("sens"), rdos_files=rdos_files, rondas_reales=rondas_reales)
     build_engine_produccion_part2(ws_p, ridx_p, ridx_m)
-    ws_f, ridx_f, r_f, country_rows, glob, finparams = build_engine_financiero(wb, ridx_in, prod_out, mkt_out, rdos_files)
-    ws_e = build_estados_proyectados(wb, glob, ridx_in, country_rows)
-    ws_r, ratios_rows = build_ratios(wb, glob, ridx_in, cond, dec, prod_out, mkt_out)
-    ws_c = build_control_modelo(wb, ridx_in, prod_out, mkt_out, glob, cond, dec, country_rows=country_rows)
+    ws_f, ridx_f, r_f, country_rows, glob, finparams = build_engine_financiero(wb, ridx_in, prod_out, mkt_out, rdos_files, rondas_reales=rondas_reales)
+    ws_e = build_estados_proyectados(wb, glob, ridx_in, country_rows, rondas_reales=rondas_reales)
+    ws_r, ratios_rows = build_ratios(wb, glob, ridx_in, cond, dec, prod_out, mkt_out, rondas_reales=rondas_reales)
+    ws_c = build_control_modelo(wb, ridx_in, prod_out, mkt_out, glob, cond, dec, country_rows=country_rows, rondas_reales=rondas_reales)
     ws_h, n_hist, n_plan, plan_start = build_historico_equipos(
         wb, rdos_files, glob, ratios_rows, prod_out, mkt_out, ridx_in)
     ws_d, n_export = build_data_export(wb, ws_h, 4, ids, plan_start)
+    n_congeladas = inyectar_plan_congelado(ws_d, plan_congelado) if plan_congelado else 0
 
     # Orden final: 5 hojas visibles + hojas ocultas (motores + DATA_EXPORT)
     order = [INPUTS_SHEET, ESTADOS_SHEET, RATIOS_SHEET, CONTROL_SHEET, HIST_SHEET,
@@ -3735,11 +4065,95 @@ def generar_excel(rdos_files, out_buffer=None):
     for letter in ("D", "E", "F"):
         ws_control.column_dimensions[letter].hidden = True
 
-    buf = out_buffer if out_buffer is not None else io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    recalc_info = {"ok": False, "mensaje": "No solicitado (recalcular=False)."}
+    if recalcular:
+        # Recalcula con LibreOffice headless (necesario para que las fórmulas -- en particular
+        # DATA_EXPORT!status="PLAN" de la ronda activa -- tengan valor cacheado, indispensable para
+        # que un futuro "Plan Congelado" pueda leerlas con openpyxl(data_only=True)) y arregla el bug
+        # de quoting de hojas con nombre que empieza en dígito que introduce ese mismo recálculo (ver
+        # fix_digit_sheet_quoting() y DIGIT_LEAD_SHEETS más arriba). Se hace sobre un archivo temporal
+        # en disco porque LibreOffice necesita un path, no un buffer en memoria.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = os.path.join(tmpdir, "CADIZ_Gestion_tmp.xlsx")
+            wb.save(tmp_path)
+            ok, msg = _recalcular_con_libreoffice(tmp_path)
+            if ok:
+                fix_digit_sheet_quoting(tmp_path)
+                with open(tmp_path, "rb") as fh:
+                    data = fh.read()
+                recalc_info = {"ok": True, "mensaje": None}
+            else:
+                # No se pudo recalcular (LibreOffice ausente o falló): se sirve igual el archivo SIN
+                # recalcular (openpyxl, sin quoting-fix porque no hizo falta) en vez de bloquear la
+                # generación -- mejor un Excel usable (que Excel/LibreOffice recalculan solos al
+                # abrirlo) que ningún archivo.
+                buf0 = io.BytesIO()
+                wb.save(buf0)
+                data = buf0.getvalue()
+                recalc_info = {"ok": False, "mensaje": msg}
+        buf = out_buffer if out_buffer is not None else io.BytesIO()
+        buf.write(data)
+        buf.seek(0)
+    else:
+        buf = out_buffer if out_buffer is not None else io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
     print(f"Filas históricas migradas: {n_hist} | Filas PLAN/SIM CADIZ (rondas activas R2-R12): {n_plan} | Filas DATA_EXPORT: {n_export}")
-    return buf
+    if overrides:
+        print(f"Rescate de decisiones: {n_overrides_aplicados} valores aplicados, {n_overrides_sin_match} claves sin match en 01_INPUTS")
+    if plan_congelado:
+        print(f"Plan Congelado: {n_congeladas} filas inyectadas en DATA_EXPORT")
+    print(f"Recálculo LibreOffice: {'OK' if recalc_info['ok'] else 'NO -- ' + str(recalc_info['mensaje'])}")
+    info = dict(recalc_info)
+    info.update(rondas_reales=sorted(rondas_reales), ronda_a_decidir=n_next,
+                overrides_aplicados=n_overrides_aplicados, overrides_sin_match=n_overrides_sin_match,
+                plan_congelado_filas=n_congeladas)
+    return buf, info
+
+
+# ======================================================================================
+# GENERAR_EXCEL_DESDE_REPO — punto de entrada del flujo "todo en rutas fijas del repo" (spec del
+# usuario, Fase 4): sin file_uploader en Streamlit. Detecta automáticamente la frontera REAL a
+# partir de dir_oficial, arma el nombre del archivo de salida Cadiz_proyeccion_R{N+1}.xlsx, rescata
+# decisiones futuras + Plan Congelado del último Cadiz_proyeccion_R{N}.xlsx en dir_decisiones (si
+# existe -- si no, es la primera corrida / bootstrap y arranca de cero, sin overrides ni plan
+# congelado, que es un resultado válido, no un error) y genera el workbook ya recalculado.
+# ======================================================================================
+def generar_excel_desde_repo(dir_oficial="data/raw/oficial", dir_decisiones="data/decisiones", recalcular=True):
+    rdos_files = descubrir_rdos_oficiales(dir_oficial)
+    if not rdos_files:
+        raise FileNotFoundError(
+            f"No se encontró ningún RDOS oficial reconocible en '{dir_oficial}' (se esperaba algo "
+            f"como 'ronda0.xlsx', 'ronda1.xlsx', ... -- ver detectar_ronda_desde_nombre()). No se "
+            f"puede determinar la frontera REAL sin al menos un RDOS.")
+    n_real = max(rdos_files)
+    n_next = n_real + 1
+    nombre_salida = f"Cadiz_proyeccion_R{n_next}.xlsx"
+
+    # Ronda N.N: el archivo con las decisiones a rescatar puede ser uno de dos, según si esta corrida
+    # AVANZA la frontera (llegó RDOS nuevo) o simplemente REGENERA la misma ronda en curso (el usuario
+    # afinó decisiones y corre de nuevo, sin RDOS nuevo todavía):
+    #   1. Cadiz_proyeccion_R{n_next}.xlsx -- MISMA ronda que se está por generar de nuevo (existe si
+    #      ya se había generado antes para esta misma frontera). Se prioriza porque es la versión más
+    #      reciente de las decisiones de la ronda en curso.
+    #   2. Cadiz_proyeccion_R{n_real}.xlsx -- el archivo de la corrida ANTERIOR, de cuando n_real
+    #      todavía era la ronda a decidir (recién ahora pasa a REAL con el RDOS nuevo).
+    # En ambos casos se rescatan columnas >= n_next (incluye la propia ronda n_next: sus decisiones
+    # ya cargadas no deben perderse) y se arrastran las filas ya congeladas del Plan (ver
+    # extraer_plan_congelado) excluyendo la ronda n_next (todavía no tiene RDOS, no se congela).
+    path_mismo_next = os.path.join(dir_decisiones, f"Cadiz_proyeccion_R{n_next}.xlsx")
+    path_anterior = os.path.join(dir_decisiones, f"Cadiz_proyeccion_R{n_real}.xlsx")
+    path_previo = path_mismo_next if os.path.exists(path_mismo_next) else (path_anterior if os.path.exists(path_anterior) else None)
+
+    overrides, plan_congelado = {}, None
+    if path_previo:
+        overrides = leer_decisiones_previas(path_previo, desde_ronda=n_next)
+        plan_congelado = extraer_plan_congelado(path_previo, ronda_actual_a_decidir=n_next)
+
+    buf, info = generar_excel(rdos_files, recalcular=recalcular, overrides=overrides, plan_congelado=plan_congelado)
+    info.update(nombre_salida=nombre_salida, archivo_previo_usado=path_previo,
+                rdos_detectados={rn: os.path.basename(p) for rn, p in sorted(rdos_files.items())})
+    return buf, nombre_salida, info
 
 
 # ------------------------------------------------------------------------------------------------
@@ -3755,10 +4169,12 @@ def main():
         2: "/root/.claude/uploads/09e8cf51-b7ac-568d-b78d-5c25fdf40d52/82948c81-1789935829915_RDOS_RONDA_2.xls",
         3: "/root/.claude/uploads/09e8cf51-b7ac-568d-b78d-5c25fdf40d52/3fa98713-1789935781896_RDOS_RONDA_3.xls",
     }
-    buf = generar_excel(rdos_files_default)
+    buf, recalc_info = generar_excel(rdos_files_default)
     with open(OUT_PATH, "wb") as f:
         f.write(buf.getvalue())
     print(f"Guardado: {OUT_PATH}")
+    if not recalc_info["ok"]:
+        print(f"ADVERTENCIA: {recalc_info['mensaje']}")
     return OUT_PATH
 
 

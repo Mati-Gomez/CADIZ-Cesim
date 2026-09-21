@@ -16,7 +16,13 @@ from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OP
 # Motor de proyección (build_gestion_v2.py, ver README del motor): genera el Excel de gestión
 # ("CADIZ_Gestion_v2.xlsx") al vuelo a partir de los RDOS de cada ronda jugada, sin tocar el disco
 # del servidor (io.BytesIO) -- ver bloque "Generar Excel de gestión" en la sidebar, más abajo.
-from build_gestion_v2 import generar_excel
+# Ronda N.N (Fase 4 -- arquitectura basada en repo, sin file_uploader): la fuente de RDOS oficiales y
+# de decisiones previas ya no se sube a mano en cada corrida -- se lee de rutas fijas DENTRO del
+# propio repo de GitHub (data/raw/oficial/ y data/decisiones/), commiteadas como parte del repo (igual
+# que ya se commitea CADIZ_Gestion_v2.xlsx hoy). generar_excel_desde_repo() hace todo: detecta la
+# frontera REAL/PLAN, arma el Excel completo, rescata decisiones futuras cargadas en el archivo de
+# decisiones anterior y congela el plan de la ronda que acaba de pasar a REAL.
+from build_gestion_v2 import generar_excel_desde_repo
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
@@ -1170,53 +1176,48 @@ empresa_analisis = st.sidebar.selectbox('Equipo en foco', COMPANIES, index=0, ke
 st.sidebar.divider()
 
 # ---------------- Generar Excel de gestión (motor de proyección, build_gestion_v2.py) ----------------
-# Flujo: se suben acá los RDOS (.xls) de TODAS las rondas ya jugadas (los mismos archivos que CESIM
-# publica y que normalmente se commitean a data/raw) -- el motor los parsea al vuelo (rdos_parser.py,
-# un solo parser/una sola lógica de escala para todas las rondas) y arma el Excel de gestión completo
-# en memoria (io.BytesIO, NUNCA se escribe nada en el disco del servidor). El botón de descarga entrega
-# ese archivo lista para reemplazar a `CADIZ_Gestion_v2.xlsx` en la raíz del repo (mismo nombre que ya
-# lee `export_proyeccion.read_dataframe()` / `gap_analysis.load_proyeccion()` -- ver Adenda 10/hotfix
-# README) -- el reemplazo en el repo lo sigue haciendo el usuario a mano, como ya funciona hoy.
+# Ronda N.N (Fase 4): ya NO se suben archivos a mano -- todo se resuelve leyendo rutas fijas DEL PROPIO
+# REPO de GitHub (mismas que usa el resto de la app / el modelo):
+#   - data/raw/oficial/      : RDOS oficiales de CESIM ya commiteados (ronda0.xlsx, ronda1.xlsx, ...).
+#     La última ronda con RDOS ahí define la frontera REAL; la ronda a decidir es automáticamente N+1.
+#   - data/decisiones/       : Excels de trabajo con las proyecciones/decisiones de CADIZ, nombrados
+#     Cadiz_proyeccion_R{N}.xlsx. El botón toma el más reciente relevante (misma ronda en curso, o la
+#     ronda que acaba de pasar a REAL), rescata ahí las decisiones futuras ya cargadas y congela el
+#     plan de la ronda que acaba de cerrarse, todo dentro de generar_excel_desde_repo().
+# El archivo nuevo se arma en memoria (io.BytesIO, nunca se escribe en el disco del servidor) y se
+# ofrece para descargar con su nombre auto-detectado (Cadiz_proyeccion_R{N+1}.xlsx) -- el usuario lo
+# commitea a mano en data/decisiones/, mismo flujo manual que ya usa hoy para CADIZ_Gestion_v2.xlsx.
 with st.sidebar.expander('🔧 Generar Excel de gestión (próxima ronda)'):
-    st.caption('Subí los RDOS (.xls) de TODAS las rondas ya jugadas (R0, R1, R2, ...). El número de '
-               'ronda de cada archivo se toma del título de su hoja "Results" -- no hace falta '
-               'nombrarlos de una forma particular ni subirlos en orden.')
-    rdos_uploads = st.file_uploader('RDOS de rondas jugadas', type=['xls'], accept_multiple_files=True,
-                                     key='rdos_uploader_motor')
-    if st.button('Generar Excel', key='btn_generar_excel', disabled=not rdos_uploads):
+    st.caption('Lee los RDOS oficiales de `data/raw/oficial/` y las decisiones previas de '
+               '`data/decisiones/` -- ya commiteados en el repo, no hace falta subir nada acá.')
+    if st.button('Generar Excel de la próxima ronda', key='btn_generar_excel'):
         try:
-            import re as _re
-            rdos_files_up = {}
-            errores_detect = []
-            for f in rdos_uploads:
-                f.seek(0)
-                # Se reutiliza rdos_parser (misma lógica que adentro del motor) solo para leer el
-                # título y detectar el número de ronda -- no se relee el archivo dos veces con lógicas
-                # de detección distintas.
-                import xlrd as _xlrd
-                _wb = _xlrd.open_workbook(file_contents=f.read())
-                _titulo = _wb.sheet_by_name('Results').cell(0, 0).value
-                _m = _re.search(r'Ronda\s*(\d+)', str(_titulo), _re.IGNORECASE)
-                if not _m:
-                    errores_detect.append(f.name)
-                    continue
-                rdos_files_up[int(_m.group(1))] = f
-            if errores_detect:
-                st.error('No se pudo detectar el número de ronda en: ' + ', '.join(errores_detect) +
-                          ' -- revisá que sean RDOS originales de CESIM (hoja "Results", título con '
-                          '"Ronda N").')
-            elif not rdos_files_up:
-                st.error('No se detectó ninguna ronda válida en los archivos subidos.')
+            with st.spinner('Generando Excel...'):
+                buf, nombre_salida, info = generar_excel_desde_repo()
+            rondas_reales_txt = ', '.join(f'R{r}' for r in info['rondas_reales'])
+            st.success(f'{nombre_salida} generado -- rondas reales detectadas: {rondas_reales_txt} · '
+                       f'ronda a decidir: R{info["ronda_a_decidir"]}.')
+            detalle = []
+            if info.get('archivo_previo_usado'):
+                detalle.append(f'Decisiones previas rescatadas de `{os.path.basename(info["archivo_previo_usado"])}` '
+                                f'({info["overrides_aplicados"]} valores aplicados'
+                                + (f', {info["overrides_sin_match"]} sin match' if info.get('overrides_sin_match') else '')
+                                + ').')
             else:
-                for _f in rdos_files_up.values():
-                    _f.seek(0)
-                with st.spinner(f'Generando Excel para rondas {sorted(rdos_files_up)}...'):
-                    buf = generar_excel(rdos_files_up)
-                st.success(f'Excel generado con rondas {sorted(rdos_files_up)}.')
-                st.download_button('⬇️ Descargar CADIZ_Gestion_v2.xlsx', data=buf,
-                                    file_name='CADIZ_Gestion_v2.xlsx',
-                                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                    key='dl_excel_generado')
+                detalle.append('No había un archivo de decisiones previo -- primera corrida (bootstrap).')
+            if info.get('plan_congelado_filas'):
+                detalle.append(f'Plan Congelado: {info["plan_congelado_filas"]} filas inyectadas en DATA_EXPORT.')
+            if not info.get('ok', True):
+                detalle.append(f'⚠️ No se pudo recalcular con LibreOffice ({info.get("mensaje")}) -- el '
+                                'Excel se generó igual, pero Excel recalculará las fórmulas recién al abrirlo.')
+            for d in detalle:
+                st.caption(d)
+            st.download_button(f'⬇️ Descargar {nombre_salida}', data=buf,
+                                file_name=nombre_salida,
+                                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                key='dl_excel_generado')
+        except FileNotFoundError as e:
+            st.error(f'No se pudo generar el Excel: {e}')
         except Exception as e:
             st.error(f'No se pudo generar el Excel: {e}')
 st.sidebar.divider()

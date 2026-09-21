@@ -24,11 +24,73 @@ número final directo, ej. extract_hist_pais() -> _ENGINE_FINANCIERO).
 """
 import re
 import xlrd
+import openpyxl
 
 TEAMS = ["CADIZ", "CEOS", "CHIEF", "CLAVE", "CUORE", "FOCUS", "TOKIO"]
 
 _MILES_RE = re.compile(r"miles\s+(usd|de\s+usd|unidades|de\s+unidades)", re.IGNORECASE)
 _UNIT_TOKEN_RE = re.compile(r"\b(USD|EUR|RMB|%|kWh|m3|kg|u\.|unidades|ton|acci[oó]n(?:es)?)\b", re.IGNORECASE)
+
+# Ronda N.N (Fase 4): el repo de GitHub guarda los resultados oficiales como .xlsx (no el binario
+# .xls original que exporta CESIM) -- xlrd 2.x (ver requirements.txt) DEJÓ de poder abrir .xlsx, así
+# que hace falta soportar los dos formatos y despachar por firma de bytes/extensión, no asumir uno
+# solo. openpyxl (ya en requirements.txt) lee el .xlsx.
+_RONDA_FILENAME_RE = re.compile(r"ronda[\s_-]*0*(\d+)", re.IGNORECASE)
+
+
+def detectar_ronda_desde_nombre(filename):
+    """Extrae el número de ronda de un nombre de archivo tipo 'ronda0.xlsx', 'Ronda_2.xls',
+    'RDOS RONDA 3.xls' -- None si no matchea (no se inventa un número)."""
+    m = _RONDA_FILENAME_RE.search(filename or "")
+    return int(m.group(1)) if m else None
+
+
+def _sniff_formato(file_or_path):
+    """'xlsx' o 'xls' -- por extensión si es un path/nombre confiable, si no por firma de bytes
+    (xlsx es un .zip, firma 'PK\\x03\\x04'; xls binario es OLE2, firma 'ÐÏ\\x11à')."""
+    nombre = getattr(file_or_path, "name", None)
+    candidato = nombre if nombre else (file_or_path if isinstance(file_or_path, str) else None)
+    if candidato:
+        low = str(candidato).lower()
+        if low.endswith(".xlsx") or low.endswith(".xlsm"):
+            return "xlsx"
+        if low.endswith(".xls"):
+            return "xls"
+    if hasattr(file_or_path, "read"):
+        pos = file_or_path.tell() if hasattr(file_or_path, "tell") else None
+        if hasattr(file_or_path, "seek"):
+            file_or_path.seek(0)
+        head = file_or_path.read(4)
+        if hasattr(file_or_path, "seek"):
+            file_or_path.seek(0 if pos is None else pos)
+    else:
+        with open(file_or_path, "rb") as fh:
+            head = fh.read(4)
+    return "xlsx" if head[:4] == b"PK\x03\x04" else "xls"
+
+
+def _leer_grilla_xls(file_or_path, sheet_name):
+    if hasattr(file_or_path, "read"):
+        if hasattr(file_or_path, "seek"):
+            file_or_path.seek(0)
+        data = file_or_path.read()
+        wb = xlrd.open_workbook(file_contents=data)
+    else:
+        wb = xlrd.open_workbook(file_or_path)
+    sh = wb.sheet_by_name(sheet_name)
+    return [sh.row_values(r) for r in range(sh.nrows)]
+
+
+def _leer_grilla_xlsx(file_or_path, sheet_name):
+    if hasattr(file_or_path, "seek"):
+        file_or_path.seek(0)
+    wb = openpyxl.load_workbook(file_or_path, data_only=True, read_only=True)
+    ws = wb[sheet_name]
+    filas = []
+    for row in ws.iter_rows(values_only=True):
+        filas.append(["" if v is None else v for v in row])
+    wb.close()
+    return filas
 
 
 def _resolve_unit(label, inherited):
@@ -61,22 +123,21 @@ def parse_rdos_workbook(file_or_path, sheet_name="Results"):
     # reabre el archivo sin problema, pero con un objeto tipo archivo EN MEMORIA (io.BytesIO / el
     # UploadedFile que entrega Streamlit) la 2ª llamada encontraba el cursor al final (ya consumido
     # por la 1ª lectura) y f.read() devolvía b"" -- xlrd.open_workbook(file_contents=b"") explota con
-    # un TypeError confuso ("not NoneType") en vez de un error claro. Se reposiciona el cursor al
-    # inicio antes de leer (no-op para un archivo recién abierto, corrige el caso de reuso).
-    if hasattr(file_or_path, "read"):
-        if hasattr(file_or_path, "seek"):
-            file_or_path.seek(0)
-        data = file_or_path.read()
-    else:
-        data = None
-    wb = xlrd.open_workbook(file_contents=data) if data is not None else xlrd.open_workbook(file_or_path)
-    sh = wb.sheet_by_name(sheet_name)
+    # un TypeError confuso ("not NoneType") en vez de un error claro. Cada lector de grilla
+    # (_leer_grilla_xls/_leer_grilla_xlsx) reposiciona el cursor al inicio antes de leer.
+    #
+    # Soporte .xlsx (Fase 4): el repo de GitHub guarda los resultados oficiales como .xlsx, no el
+    # .xls binario original de CESIM -- se detecta el formato (extensión o firma de bytes) y se
+    # despacha a xlrd o a openpyxl, pero AMBOS devuelven la misma grilla plana (lista de filas, cada
+    # una lista de valores) -- toda la lógica de acá en adelante (detección de sección/unidad) es
+    # IDÉNTICA para los dos formatos, no hay dos parsers distintos.
+    fmt = _sniff_formato(file_or_path)
+    filas = _leer_grilla_xlsx(file_or_path, sheet_name) if fmt == "xlsx" else _leer_grilla_xls(file_or_path, sheet_name)
 
     out = []
     current_section = None
     unit_ctx = None
-    for r in range(sh.nrows):
-        row = sh.row_values(r)
+    for row in filas:
         label = str(row[0]).strip()
         rest = row[1:8]
         rest_str = [str(x).strip() for x in rest]
