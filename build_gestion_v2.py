@@ -4197,6 +4197,24 @@ def generar_excel_desde_repo(dir_oficial="data/raw/practicas/oficial", dir_decis
             f"No se encontró ningún RDOS oficial reconocible en '{dir_oficial}' (se esperaba algo "
             f"como 'ronda0.xlsx', 'ronda1.xlsx', ... -- ver detectar_ronda_desde_nombre()). No se "
             f"puede determinar la frontera REAL sin al menos un RDOS.")
+    # Bug real, corregido -- Ronda 0 es la ronda FUNDACIONAL de todo el modelo (saldos de apertura,
+    # semilla FIFO de inventario, etc. -- toda la cadena de balance del resto de las rondas arranca
+    # de ahí). Si su RDOS no está entre los descubiertos, "Estado" y "RONDA_ACTIVA" de Ronda 0 quedan
+    # sin definir (ninguna ronda R1+ puede migrarse como histórica sin que Ronda 0 también lo esté,
+    # ver build_inputs/build_historico_equipos) y el workbook queda con cientos de #VALUE! en cascada
+    # en vez de fallar con un mensaje claro -- verificado con una corrida de prueba deliberadamente
+    # sin RDOS de Ronda 0 (312 errores de fórmula, Ronda 0 ausente de DATA_EXPORT). Antes se
+    # confiaba en que Ronda 0 fuera la primera SIEMPRE presente; ahora se lo exige explícitamente en
+    # vez de permitir un workbook roto en silencio.
+    if 0 not in rdos_files:
+        raise FileNotFoundError(
+            f"Se encontraron RDOS de las rondas {sorted(rdos_files)} en '{dir_oficial}', pero falta "
+            f"el de Ronda 0. Ronda 0 es la base de todo el modelo (saldos de apertura, inventario "
+            f"inicial, etc.) -- sin su RDOS ahí, el Excel se genera roto (decenas de #VALUE! en "
+            f"cascada desde Ronda 1 en adelante) en vez de fallar de entrada. Agregá el RDOS oficial "
+            f"de Ronda 0 a esa carpeta (con nombre que contenga 'ronda0', o con la hoja 'Results' "
+            f"titulada 'Ronda 0' -- ver descubrir_rdos_oficiales/_detectar_ronda_desde_titulo) antes "
+            f"de generar de nuevo.")
     n_real = max(rdos_files)
     n_next = n_real + 1
     nombre_salida = f"Cadiz_proyeccion_R{n_next}.xlsx"
