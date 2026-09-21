@@ -22,7 +22,7 @@ from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OP
 # que ya se commitea CADIZ_Gestion_v2.xlsx hoy). generar_excel_desde_repo() hace todo: detecta la
 # frontera REAL/PLAN, arma el Excel completo, rescata decisiones futuras cargadas en el archivo de
 # decisiones anterior y congela el plan de la ronda que acaba de pasar a REAL.
-from build_gestion_v2 import generar_excel_desde_repo
+from build_gestion_v2 import generar_excel_desde_repo, descubrir_ultima_proyeccion
 # --- IDENTIDAD Y PALETA SEMÁNTICA ---
 MY_COMPANY = 'CADIZ'
 COMPANIES = ['CADIZ', 'CEOS', 'CHIEF', 'CLAVE', 'CUORE', 'FOCUS', 'TOKIO']
@@ -97,6 +97,7 @@ ALTURA_TARJETA = 370    # alto FIJO de toda tarjeta de gráfico, con o sin leyen
                         # es lo que garantiza que dos gráficos en columnas queden parejos
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, 'data', 'raw')
+DIR_DECISIONES = os.path.join(BASE_DIR, 'data', 'decisiones')
 st.set_page_config(page_title='CÁDIZ | Tablero Directivo', layout='wide')
 # ---------------- Carga de datos y Helpers ----------------
 def get_pais(estado: str) -> str:
@@ -125,13 +126,21 @@ def _cargar_proyeccion_cached(path: str, mtime: float):
     # el caché y relee el Excel en vez de servir una versión vieja. Devuelve un DataFrame o None.
     return load_proyeccion(path)
 def get_proyeccion():
-    """CADIZ_Gestion_v2.xlsx vive en la raíz del repo (al lado de este archivo): el usuario lo
-    reemplaza (siempre el mismo nombre) cada vez que hay una versión nueva del modelo de gestión, y
-    la próxima carga de la app toma automáticamente esa versión como 'la más actual' -- no hace falta
-    subir ningún CSV ni correr ningún script aparte."""
-    if not os.path.exists(DEFAULT_PROYECCION_EXCEL):
+    """Ronda N.N (Fase 4): la proyección de CADIZ ya NO se lee de un archivo fijo en la raíz del
+    repo ('CADIZ_Gestion_v2.xlsx', que había que reemplazar a mano con ese mismo nombre) -- se
+    autodetecta el 'Cadiz_proyeccion_R{N}.xlsx' de N más alto en data/decisiones/ (el mismo que arma
+    y descarga el botón 'Generar Excel de gestión' de la sidebar): ese archivo ya trae todo el
+    histórico REAL migrado + la proyección PLAN de la ronda en curso + los planes congelados de
+    rondas previas, así que ninguna otra fuente hace falta. Si todavía no se commiteó ningún
+    Cadiz_proyeccion_R{N}.xlsx (repo recién migrado a esta arquitectura), se cae al viejo
+    CADIZ_Gestion_v2.xlsx en la raíz por compatibilidad -- si tampoco existe, no hay proyección
+    para mostrar (la app debe poder arrancar igual)."""
+    path = descubrir_ultima_proyeccion(DIR_DECISIONES)
+    if path is None and os.path.exists(DEFAULT_PROYECCION_EXCEL):
+        path = DEFAULT_PROYECCION_EXCEL
+    if path is None:
         return None
-    return _cargar_proyeccion_cached(DEFAULT_PROYECCION_EXCEL, os.path.getmtime(DEFAULT_PROYECCION_EXCEL))
+    return _cargar_proyeccion_cached(path, os.path.getmtime(path))
 def num(series):
     return pd.to_numeric(series, errors='coerce')
 def format_num(val, dec=1):
@@ -536,8 +545,9 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
             return
     df_proy = get_proyeccion()
     if df_proy is None:
-        st.info('Todavía no se subió `CADIZ_Gestion_v2.xlsx` a la raíz del repo (o no se pudo leer '
-                'la hoja `DATA_EXPORT`) — subilo con ese mismo nombre para ver la Comparativa Plan vs. Real.')
+        st.info('Todavía no hay ningún `Cadiz_proyeccion_R{N}.xlsx` en `data/decisiones/` (o no se '
+                'pudo leer la hoja `DATA_EXPORT`) — generalo con el botón "Generar Excel de gestión" '
+                'de la sidebar y commiteá el resultado en esa carpeta para ver la Comparativa Plan vs. Real.')
         return
     ronda_num = ronda_a_num(ronda_snapshot)
     claves_no_publicadas = {k for k, spec in crosswalk.items() if spec.get('real_no_publicado')}
