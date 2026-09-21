@@ -84,6 +84,8 @@ OUT_PATH = "/home/claude/cadiz_gestion/CADIZ_Gestion_v3.xlsx"
 # ronda jugada (rdos_files, ver extract_hist_pais()/build_historico_equipos() y generar_excel()),
 # vía el parser único rdos_parser.py. Dato histórico real, no lógica propia; una sola fuente/lógica
 # de escala para todas las rondas.
+import xlrd
+import rdos_parser
 from rdos_parser import parse_rdos_workbook, detectar_ronda_desde_nombre
 
 
@@ -3789,25 +3791,59 @@ def build_data_export(wb, ws_hist, header_row, ids, plan_start):
     return ws, out_row - 2
 
 
+def _detectar_ronda_desde_titulo(path):
+    """Respaldo de detectar_ronda_desde_nombre() para cuando el nombre del ARCHIVO no dice 'rondaN'
+    (Bug real, corregido -- descubierto contra el repo real de CADIZ: sus RDOS oficiales están
+    nombrados 'results-r01.xls', etc., que no matchea ningún patrón de nombre razonable). CESIM
+    siempre exporta el RDOS con la hoja 'Results' titulada 'Ronda N' en la celda superior izquierda
+    (A1) -- mismo criterio que usaba el viejo flujo de carga manual (file_uploader) de app.py antes
+    de esta migración a rutas fijas. Devuelve None si no se puede leer el archivo o si el título no
+    matchea (nunca levanta excepción -- un archivo no reconocible se ignora, no rompe el descubrimiento
+    de los demás)."""
+    try:
+        fmt = rdos_parser._sniff_formato(path)
+        if fmt == "xlsx":
+            wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+            titulo = wb["Results"].cell(row=1, column=1).value
+            wb.close()
+        else:
+            wb = xlrd.open_workbook(path)
+            titulo = wb.sheet_by_name("Results").cell(0, 0).value
+    except Exception:
+        return None
+    m = re.search(r"Ronda\s*(\d+)", str(titulo), re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
 def descubrir_rdos_oficiales(base_dir):
-    """Escanea base_dir (p.ej. 'data/raw/oficial/') buscando RDOS oficiales (.xls/.xlsx) y arma
-    {ronda_int: path}, detectando la ronda por el NOMBRE del archivo (detectar_ronda_desde_nombre --
-    'ronda0.xlsx', 'Ronda_2.xls', 'RDOS RONDA 3.xls', etc.). Si dos archivos matchean la misma ronda,
-    gana el de modificación más reciente (mtime) -- no se inventa otro criterio de desempate; se
-    imprime un aviso para que quede visible en los logs de la app. Devuelve {} si el directorio no
-    existe o no hay ningún archivo reconocible (no es un error -- puede ser la primera corrida)."""
+    """Escanea base_dir de forma RECURSIVA (cualquier subcarpeta debajo, ej. 'data/raw/practicas/
+    oficial/' -- el repo real de CADIZ tiene esta anidación un poco rara, y no hace falta forzar una
+    reorganización del repo para que este descubrimiento funcione) buscando RDOS oficiales (.xls/
+    .xlsx) y arma {ronda_int: path}. Detecta la ronda en dos pasos: primero por el NOMBRE del archivo
+    (detectar_ronda_desde_nombre -- 'ronda0.xlsx', 'Ronda_2.xls', 'RDOS RONDA 3.xls'), y si el nombre
+    no la delata (ej. 'results-r01.xls'), abre el archivo y lee el título de la hoja 'Results'
+    ('Ronda N', ver _detectar_ronda_desde_titulo) -- así funciona sin importar cómo se llame el
+    archivo, siempre que sea un RDOS real de CESIM. Si dos archivos matchean la misma ronda, gana el
+    de modificación más reciente (mtime) -- no se inventa otro criterio de desempate; se imprime un
+    aviso para que quede visible en los logs de la app. Devuelve {} si el directorio no existe o no
+    hay ningún archivo reconocible (no es un error -- puede ser la primera corrida)."""
     out = {}
     if not os.path.isdir(base_dir):
         return out
-    for nombre in sorted(os.listdir(base_dir)):
-        if not nombre.lower().endswith((".xls", ".xlsx")):
-            continue
+    paths_encontrados = []
+    for carpeta_actual, _subcarpetas, nombres in os.walk(base_dir):
+        for nombre in sorted(nombres):
+            if nombre.lower().endswith((".xls", ".xlsx")):
+                paths_encontrados.append(os.path.join(carpeta_actual, nombre))
+    for path in sorted(paths_encontrados):
+        nombre = os.path.basename(path)
         rn = detectar_ronda_desde_nombre(nombre)
         if rn is None:
+            rn = _detectar_ronda_desde_titulo(path)
+        if rn is None:
             continue
-        path = os.path.join(base_dir, nombre)
         if rn in out and os.path.getmtime(path) <= os.path.getmtime(out[rn]):
-            print(f"  [descubrir_rdos_oficiales] Ronda {rn}: se ignora '{nombre}' (más viejo que '{os.path.basename(out[rn])}').")
+            print(f"  [descubrir_rdos_oficiales] Ronda {rn}: se ignora '{path}' (más viejo que '{out[rn]}').")
             continue
         out[rn] = path
     return out
@@ -4154,7 +4190,7 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
 # existe -- si no, es la primera corrida / bootstrap y arranca de cero, sin overrides ni plan
 # congelado, que es un resultado válido, no un error) y genera el workbook ya recalculado.
 # ======================================================================================
-def generar_excel_desde_repo(dir_oficial="data/raw/oficial", dir_decisiones="data/decisiones", recalcular=True):
+def generar_excel_desde_repo(dir_oficial="data/raw/practicas/oficial", dir_decisiones="data/decisiones", recalcular=True):
     rdos_files = descubrir_rdos_oficiales(dir_oficial)
     if not rdos_files:
         raise FileNotFoundError(
