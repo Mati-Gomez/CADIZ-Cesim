@@ -1188,8 +1188,10 @@ st.sidebar.divider()
 # ---------------- Generar Excel de gestión (motor de proyección, build_gestion_v2.py) ----------------
 # Ronda N.N (Fase 4): ya NO se suben archivos a mano -- todo se resuelve leyendo rutas fijas DEL PROPIO
 # REPO de GitHub (mismas que usa el resto de la app / el modelo):
-#   - data/raw/oficial/      : RDOS oficiales de CESIM ya commiteados (ronda0.xlsx, ronda1.xlsx, ...).
-#     La última ronda con RDOS ahí define la frontera REAL; la ronda a decidir es automáticamente N+1.
+#   - data/raw/practicas/oficial/ : RDOS oficiales de CESIM ya commiteados (nombre de archivo libre --
+#     descubrir_rdos_oficiales() detecta la ronda por el nombre O, si no matchea, abriendo el propio
+#     RDOS y leyendo el título 'Ronda N' de la hoja Results). La última ronda con RDOS ahí define la
+#     frontera REAL; la ronda a decidir es automáticamente N+1.
 #   - data/decisiones/       : Excels de trabajo con las proyecciones/decisiones de CADIZ, nombrados
 #     Cadiz_proyeccion_R{N}.xlsx. El botón toma el más reciente relevante (misma ronda en curso, o la
 #     ronda que acaba de pasar a REAL), rescata ahí las decisiones futuras ya cargadas y congela el
@@ -1198,7 +1200,7 @@ st.sidebar.divider()
 # ofrece para descargar con su nombre auto-detectado (Cadiz_proyeccion_R{N+1}.xlsx) -- el usuario lo
 # commitea a mano en data/decisiones/, mismo flujo manual que ya usa hoy para CADIZ_Gestion_v2.xlsx.
 with st.sidebar.expander('🔧 Generar Excel de gestión (próxima ronda)'):
-    st.caption('Lee los RDOS oficiales de `data/raw/oficial/` y las decisiones previas de '
+    st.caption('Lee los RDOS oficiales de `data/raw/practicas/oficial/` y las decisiones previas de '
                '`data/decisiones/` -- ya commiteados en el repo, no hace falta subir nada acá.')
     if st.button('Generar Excel de la próxima ronda', key='btn_generar_excel'):
         try:
