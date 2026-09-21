@@ -3813,6 +3813,41 @@ def descubrir_rdos_oficiales(base_dir):
     return out
 
 
+_PROYECCION_FILENAME_RE = re.compile(r"^Cadiz_proyeccion_R(\d+)\.xlsx?$", re.IGNORECASE)
+
+
+def descubrir_ultima_proyeccion(dir_decisiones="data/decisiones"):
+    """Escanea dir_decisiones (p.ej. 'data/decisiones/') buscando archivos 'Cadiz_proyeccion_R{N}.xlsx'
+    y devuelve el path del de N más alto -- ese es siempre el más actual (contiene todo el histórico
+    REAL ya migrado + la proyección PLAN de la ronda en curso + los planes congelados de rondas
+    previas en DATA_EXPORT, ver extraer_plan_congelado/inyectar_plan_congelado), así que no hace
+    falta ningún otro criterio de "más reciente" (ni mtime ni orden de commit).
+
+    Bug real, corregido (Fase 4 -- integración repo/tablero): antes de esta función, el tablero web
+    (app.py -> gap_analysis.load_proyeccion() -> export_proyeccion.DEFAULT_EXCEL) leía un archivo
+    DISTINTO y completamente desacoplado de esta arquitectura -- 'CADIZ_Gestion_v2.xlsx' en la raíz
+    del repo, que el usuario tenía que reemplazar A MANO con el mismo nombre fijo cada vez. Subir
+    'Cadiz_proyeccion_R3.xlsx' a data/decisiones/ (el flujo que pide esta arquitectura) no tenía
+    ningún efecto sobre el tablero, que seguía mostrando lo último que hubiera en CADIZ_Gestion_v2.xlsx
+    (desactualizado, o inexistente) -- de ahí que el Plan vs. Real apareciera vacío. Ver
+    app.get_proyeccion(), que ahora llama a esta función en lugar de usar DEFAULT_PROYECCION_EXCEL.
+
+    Devuelve None si el directorio no existe o no hay ningún archivo que matchee el patrón exacto
+    'Cadiz_proyeccion_R{N}.xlsx' (no es un error -- puede ser la primera corrida, antes de generar
+    cualquier proyección)."""
+    if not os.path.isdir(dir_decisiones):
+        return None
+    mejor_rn, mejor_path = None, None
+    for nombre in os.listdir(dir_decisiones):
+        m = _PROYECCION_FILENAME_RE.match(nombre)
+        if not m:
+            continue
+        rn = int(m.group(1))
+        if mejor_rn is None or rn > mejor_rn:
+            mejor_rn, mejor_path = rn, os.path.join(dir_decisiones, nombre)
+    return mejor_path
+
+
 # Claves de 01_INPUTS que NUNCA se restauran por rescate de decisiones -- se recalculan siempre
 # desde rondas_reales (frontera REAL/PLAN), aplicado DESPUÉS del rescate para garantizar que ganan
 # ellas y no un valor viejo heredado del archivo anterior (ver aplicar_overrides_inputs()).
