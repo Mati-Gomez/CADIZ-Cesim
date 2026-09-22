@@ -10,6 +10,7 @@ from cesim_parser import build_historico
 from gap_analysis import (calcular_gaps, load_proyeccion, ronda_a_num, DEFAULT_PROYECCION_EXCEL,
                           precio_volumen_mercado, variacion_precio_volumen_mix, costo_unitario_area,
                           cuota_mercado_objetivo_vs_real, flujo_caja_plan_real_global,
+                          demanda_estimada_vs_real,
                           TECNOLOGIAS as _TECNOLOGIAS_GAP, MERCADOS as _MERCADOS_GAP, AREAS as _AREAS_GAP,
                           MONEDA_MERCADO as _MONEDA_MERCADO_GAP)
 from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
@@ -632,6 +633,38 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
 # (no desde panel_comparativa_plan_real, que es genérico y no conoce estas métricas de grano fino
 # por mercado/tecnología/área) -- y solo tiene sentido con team=CADIZ (son cruces contra SU propia
 # proyección en CADIZ_Gestion_v2.xlsx). ---
+def fila_cg_demanda_estimada(df_all, ronda_snapshot, ronda_num, df_proy):
+    """Adenda 30 (a pedido del equipo, Nivel 2 de Control de Gestión): desvío PURO de pronóstico de
+    demanda -- Demanda Estimada por CADIZ (D1c·DEMANDA, al planificar) vs. Demanda Real (RDOS), por
+    tecnología, ANTES del corte de Ventas efectivas (que ya depende de disponibilidad/capacidad, no
+    solo del pronóstico -- eso se ve aparte más abajo, en el waterfall de Ingresos). Barras agrupadas
+    (mismo lenguaje visual que fila3_mercado_cuota_objetivo, para no introducir un tercer estilo de
+    gráfico en la misma pantalla)."""
+    st.markdown('###### Desvío de Pronóstico — Demanda Estimada vs. Demanda Real')
+    st.caption('Antes del corte de Ventas efectivas: acá se ve si CADIZ estimó bien cuánto le iba a '
+               'demandar el mercado, más allá de si después pudo o no abastecer toda esa demanda '
+               '(eso se ve en el desvío de Ingresos, más abajo).')
+    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_demanda_estimada_mercado')
+    datos = demanda_estimada_vs_real(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
+    if not datos:
+        return st.info(f'Sin datos de demanda estimada/real en {mercado_sel} para {ronda_snapshot}.')
+    if all(d['plan'] is None for d in datos.values()):
+        return st.info(f'CADIZ no tiene una demanda estimada cargada para {mercado_sel} en {ronda_snapshot} '
+                        '— el modelo de gestión proyecta recién desde Ronda 2, no hay Plan con el que comparar.')
+    filas = []
+    for tech, d in datos.items():
+        if d['plan'] is not None:
+            filas.append({'Tecnología': tech, 'Tipo': 'Demanda Estimada', 'Unidades': d['plan']})
+        if d['real'] is not None:
+            filas.append({'Tecnología': tech, 'Tipo': 'Demanda Real', 'Unidades': d['real']})
+    dfd = pd.DataFrame(filas)
+    fig = px.bar(dfd, x='Tecnología', y='Unidades', color='Tipo', barmode='group',
+                 color_discrete_map={'Demanda Estimada': MUTED_PALETTE[0], 'Demanda Real': COLOR_CADIZ},
+                 text=dfd['Unidades'].apply(format_num), title=f'Demanda Estimada vs. Real — {mercado_sel}, {ronda_snapshot}')
+    fig.update_traces(textposition='outside', cliponaxis=False)
+    fig.update_layout(yaxis_title='Unidades')
+    mostrar(fig)
+
 def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
     st.markdown('###### Análisis de Desvíos de Ingresos — Precio / Volumen / Mix')
     mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_resultados_mercado')
@@ -1293,7 +1326,14 @@ def seccion_resultado():
     # (panel_comparativa_plan_real + fila3_resultados_ingresos, que se llamaban desde acá) ahora vive
     # consolidado en la sección propia 'Control de Gestión' (Nivel 2 de esa narrativa), sin perder
     # ningún gráfico -- ver seccion_control_gestion() más abajo.
-    _seccion_resultado_resumen()
+    # Adenda 30 (a pedido del equipo, "reubicar la vista de Mercado"): la vista macro de industria
+    # (que en la Adenda 29 había entrado como 4ta pestaña de seccion_mercado()) se muda ACÁ, como
+    # 2da pestaña 'Mercado' junto a 'Resumen' -- ver _seccion_resultado_mercado_macro() más abajo.
+    tab_resumen, tab_mercado_macro = st.tabs(['Resumen', 'Mercado'])
+    with tab_resumen:
+        _seccion_resultado_resumen()
+    with tab_mercado_macro:
+        _seccion_resultado_mercado_macro()
 def _seccion_resultado_resumen():
     val_ronda = df[(df['Estado'] == 'Valuación - Global') & (df['Ronda'] == ronda_snapshot)]
     ratios_ronda_r1 = df[(df['Estado'] == 'Ratios e indicadores financieros clave') & (df['Ronda'] == ronda_snapshot)]
@@ -1546,6 +1586,124 @@ def _seccion_resultado_resumen():
     # chart_evolucion() ya antepone "Evolución — " al titulo -- pasarle "Evolución de la ..." de nuevo
     # duplicaba la palabra ("Evolución — Evolución de..."). Solo el sustantivo acá.
     chart_evolucion(cap_sub, 'Capitalización de Mercado (USD)')
+
+def _seccion_resultado_mercado_macro():
+    """Adenda 29/30 (a pedido del equipo): vista de mercado AGREGADA -- a diferencia del resto del
+    tablero (que siempre corta por tecnología y/o por equipo), acá se ve la industria entera (7
+    equipos, 4 tecnologías) sumada, para responder "¿el mercado crece por volumen o por precio?" sin
+    ese detalle. Vivía como 4ta pestaña de seccion_mercado() (Adenda 29); se muda acá, como 2da
+    pestaña de Resultados, a pedido del equipo (Adenda 30)."""
+    st.caption('Los 7 equipos y las 4 tecnologías sumados -- para ver si el negocio crece por '
+               'volumen o por precio, sin el detalle de tecnología/equipo de la pestaña "Resumen" '
+               'ni de la sección Mercado.')
+    paises_macro = ['EE.UU.', 'China', 'Europa']
+
+    def _industria_dinamica_mercado(paises_incluir):
+        """Ventas efectivas, Demanda Total (=Ventas+Demanda insatisfecha) y Valoración de toda la
+        industria (7 equipos, todas las tecnologías), sumados sobre `paises_incluir`, por ronda.
+
+        Ventas/Demanda: 'Ventas, miles unidades' / 'Demanda, miles unidades' de 'Informe de mercado,
+        {país}' -- Demanda YA es "lo que el mercado hubiera comprado" (Demanda >= Ventas por
+        construcción; Demanda − Ventas = demanda potencial insatisfecha, terminología del manual
+        CESIM), así que no hace falta recalcularla sumando un componente de insatisfecha aparte.
+
+        Valoración: NO se calcula como 'Precio de venta' nativo × Volumen -- el Precio de venta que
+        publica CESIM está en USD solo en EE.UU.; en China está en RMB y en Europa en EUR (ver
+        Metrica 'Precio de venta, RMB' / 'Precio de venta, EUR' en cesim_parser). Convertir eso a USD
+        acá asumiría un tipo de cambio que el RDOS no publica -- justo lo que se evita en toda la app
+        (ver fila3_resultados_ingresos, que por eso muestra el waterfall de Ingresos en moneda
+        nativa, sin convertir). En cambio se usa 'Ingresos por ventas' (Estado='Cuenta de resultados,
+        miles USD, {país}', Sección 'Ingresos por ventas') -- CESIM YA reporta esa cifra en USD para
+        las 3 regiones (el título de la hoja lo dice, 'miles USD', incluso para China/Europa: es la
+        cifra que el propio simulador usa para consolidar el P&L Global). Verificado contra los RDOS
+        reales de CADIZ (R0-R3): sumar 'de mercados' (EE.UU./China, único componente que es venta
+        real a consumidor) + 'Ingresos por ventas' (Europa, que al no tener fábrica propia no tiene
+        el desglose 'de mercados' / 'de transferencias internas') reconcilia EXACTO con 'Cuenta de
+        resultados, miles USD, Global' de cada equipo/ronda. Se excluye 'de transferencias internas'
+        (envíos entre áreas productivas, no venta a consumidor final) y el subtotal 'Beneficio de
+        Ventas Totales' (= 'de mercados' + 'de transferencias internas' exacto -- un artefacto de la
+        celda combinada del RDOS al parsear, no una tercera cifra). Equivale a "Volumen × Precio
+        promedio" (el promedio ponderado por Ventas queda implícito: Valoración / Volumen)."""
+        ven = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises_incluir])) &
+                 (df['Metrica'] == 'Ventas, miles unidades')].copy()
+        dem = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises_incluir])) &
+                 (df['Metrica'] == 'Demanda, miles unidades')].copy()
+        ven['Valor'] = num(ven['Valor']); dem['Valor'] = num(dem['Valor'])
+        ven_r = ven.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Ventas'})
+        dem_r = dem.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'DemandaTotal'})
+        val = df[(df['Estado'].isin([f'Cuenta de resultados, miles USD, {p}' for p in paises_incluir])) &
+                 (df['Seccion'] == 'Ingresos por ventas') &
+                 (df['Metrica'].isin(['de mercados', 'Ingresos por ventas']))].copy()
+        val['Valor'] = num(val['Valor'])
+        val_r = val.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Valoracion'})
+        out = ven_r.merge(dem_r, on=['Ronda', 'Ronda_Orden'], how='outer').merge(val_r, on=['Ronda', 'Ronda_Orden'], how='outer')
+        return out.sort_values('Ronda_Orden')
+
+    def _chart_dinamica_mercado(serie, titulo_sufijo):
+        """Un solo gráfico de doble eje Y (a pedido explícito del equipo -- mismo criterio/excepción
+        ya documentado en chart_dos_metricas_apiladas, que reintroduce a propósito el patrón de
+        doble eje que el resto de la app evita): eje izquierdo = unidades (Ventas efectivas +
+        Demanda Total, punteada), eje derecho = Valoración en USD. Curvas suaves (spline) en las 3
+        series, a pedido del equipo."""
+        d = serie.dropna(subset=['Ventas', 'DemandaTotal', 'Valoracion'], how='all')
+        if d.empty:
+            return st.info(f'Sin datos para graficar "Dinámica de Mercado — {titulo_sufijo}".')
+        spline = dict(shape='spline', smoothing=1.3)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=d['Ronda'], y=d['Ventas'], name='Ventas efectivas de la industria',
+                                  mode='lines+markers', line=dict(color=COLOR_METRICA['eficiencia'], width=3, **spline),
+                                  marker=dict(size=6), yaxis='y1',
+                                  hovertemplate='%{x} — Ventas: %{y:,.0f} mil u.<extra></extra>'))
+        fig.add_trace(go.Scatter(x=d['Ronda'], y=d['DemandaTotal'], name='Demanda Total (Ventas + Insatisfecha)',
+                                  mode='lines+markers', line=dict(color=COLOR_METRICA['riesgo'], width=2, dash='dot', **spline),
+                                  marker=dict(size=5), yaxis='y1',
+                                  hovertemplate='%{x} — Demanda Total: %{y:,.0f} mil u.<extra></extra>'))
+        fig.add_trace(go.Scatter(x=d['Ronda'], y=d['Valoracion'], name='Valoración total de mercado, USD',
+                                  mode='lines+markers', line=dict(color=COLOR_METRICA['dinero'], width=3, **spline),
+                                  marker=dict(size=6), yaxis='y2',
+                                  hovertemplate='%{x} — Valoración: %{y:,.0f} USD<extra></extra>'))
+        fig.update_layout(
+            title=f'Dinámica de Mercado — {titulo_sufijo}',
+            yaxis=dict(title='Miles de unidades', side='left', rangemode='tozero', showgrid=False),
+            yaxis2=dict(title='Valoración, USD', side='right', overlaying='y', showgrid=False, rangemode='tozero'),
+            legend=dict(orientation='h', yanchor='top', y=-0.25, xanchor='center', x=0.5))
+        mostrar(fig)
+        st.caption('La brecha entre "Ventas efectivas" y "Demanda Total" (ambas en el eje izquierdo) '
+                   'ES la demanda insatisfecha de la ronda -- no se grafica aparte para no duplicar el '
+                   'mismo dato dos veces.')
+
+    st.markdown('###### Evolución Global — toda la industria')
+    _chart_dinamica_mercado(_industria_dinamica_mercado(paises_macro), 'Global')
+
+    st.divider()
+    st.markdown('###### Evolución Regional')
+    pais_macro_sel = st.selectbox('Mercado', paises_macro, key='sel_mercado_macro_pais')
+    _chart_dinamica_mercado(_industria_dinamica_mercado([pais_macro_sel]), pais_macro_sel)
+
+    st.divider()
+    st.markdown(f'###### Mix de Demanda por Región — {ronda_snapshot}')
+    st.caption('Participación % de cada tecnología sobre la Demanda total (7 equipos sumados) de '
+               'cada mercado, en la ronda seleccionada.')
+    # category_orders fija el orden de categoría->color de Plotly (mismo criterio que ya usa el
+    # gráfico de Balance ESG más abajo, con category_orders={'Empresa': orden_emp}) -- sin esto, una
+    # tecnología ausente en un país (ej. Eléctrico todavía sin ventas) corre el orden de aparición y
+    # cada donut le asigna un color de MUTED_SIN_MARRON distinto a la MISMA tecnología (mismo bug de
+    # fondo que ya se corrigió en 'Mix tecnológico', Adenda 25 -- acá se previene desde el vamos).
+    col1, col2, col3 = st.columns(3)
+    for col, pais_mix in zip([col1, col2, col3], paises_macro):
+        with col:
+            d_mix = df[(df['Estado'] == f'Informe de mercado, {pais_mix}') &
+                       (df['Metrica'] == 'Demanda, miles unidades') & (df['Ronda'] == ronda_snapshot)].copy()
+            d_mix['Valor'] = num(d_mix['Valor'])
+            por_tech = d_mix.groupby('Seccion', as_index=False)['Valor'].sum().rename(columns={'Seccion': 'Tecnología', 'Valor': 'Demanda'})
+            por_tech = por_tech[por_tech['Demanda'] > 0]
+            if por_tech.empty:
+                st.info(f'Sin datos en {pais_mix}.')
+                continue
+            fig_donut = px.pie(por_tech, names='Tecnología', values='Demanda', hole=0.5,
+                                category_orders={'Tecnología': _TECNOLOGIAS_GAP},
+                                color_discrete_sequence=MUTED_SIN_MARRON, title=pais_mix)
+            mostrar(fig_donut)
 # =================================================================
 # SECCIÓN 2 — MERCADO
 # =================================================================
@@ -1553,9 +1711,11 @@ def seccion_mercado():
     # Adenda 29 (a pedido del equipo, "Control de Gestión" centralizado): se elimina la sub-pestaña
     # 'Comparativa Plan vs. Real' -- ver mismo comentario en seccion_resultado(). El desvío de cuota
     # (panel_comparativa_plan_real + fila3_mercado_cuota_objetivo) pasa al Nivel 2 de 'Control de
-    # Gestión'. En su lugar se suma 'Evolución Macro de la Industria' (nueva, a pedido del equipo):
-    # vista de mercado agregada, sin segmentar por tecnología, con los 7 equipos sumados.
-    tab_pos, tab_pan, tab_evo, tab_macro = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución', 'Evolución Macro de la Industria'])
+    # Gestión'. Adenda 30 (a pedido del equipo, "reubicar la vista de Mercado"): 'Evolución Macro de
+    # la Industria' -- que en la Adenda 29 había entrado ACÁ como 4ta pestaña -- se muda a una
+    # sub-pestaña 'Mercado' dentro de seccion_resultado() (junto a 'Resumen'); ver
+    # _seccion_resultado_mercado_macro() más abajo. Esta sección vuelve a sus 3 pestañas originales.
+    tab_pos, tab_pan, tab_evo = st.tabs(['Posicionamiento', 'Panorama Competitivo', 'Evolución'])
     tecnologias = ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno']
 
     with tab_pos:
@@ -1784,149 +1944,6 @@ def seccion_mercado():
         # de verdad que quedaba en la app (el resto ya se había migrado a paneles apilados, ver
         # chart_dos_metricas_apiladas) -- señalado como pendiente en la Adenda 18 y sacado a pedido
         # explícito del equipo.
-
-    with tab_macro:
-        # Adenda 29 (a pedido del equipo, "vista estratégica de Mercado"): NUEVO -- a diferencia del
-        # resto de la sección (que siempre corta por tecnología y/o por equipo), acá se ve la
-        # industria entera (7 equipos, 4 tecnologías) sumada, para responder "¿el mercado crece por
-        # volumen o por precio?" sin ese detalle.
-        st.caption('Los 7 equipos y las 4 tecnologías sumados -- para ver si el negocio crece por '
-                   'volumen o por precio, sin el detalle de tecnología/equipo de las otras pestañas.')
-        paises_macro = ['EE.UU.', 'China', 'Europa']
-
-        def _industria_volumen_valor(paises_incluir):
-            """Volumen (miles u.) y Valoración (USD) de toda la industria (7 equipos, todas las
-            tecnologías), sumados sobre `paises_incluir`, por ronda.
-
-            Valoración: NO se calcula como 'Precio de venta' nativo × Volumen -- el Precio de venta
-            que publica CESIM está en USD solo en EE.UU.; en China está en RMB y en Europa en EUR
-            (ver Metrica 'Precio de venta, RMB' / 'Precio de venta, EUR' en cesim_parser). Convertir
-            eso a USD acá asumiría un tipo de cambio que el RDOS no publica -- justo lo que se evita
-            en toda la app (ver fila3_resultados_ingresos, que por eso muestra el waterfall de
-            Ingresos en moneda nativa, sin convertir).
-            En cambio se usa 'Ingresos por ventas' (Estado='Cuenta de resultados, miles USD, {país}',
-            Sección 'Ingresos por ventas') -- CESIM YA reporta esa cifra en USD para las 3 regiones
-            (el título de la hoja lo dice, 'miles USD', incluso para China/Europa: es la cifra que el
-            propio simulador usa para consolidar el P&L Global). Verificado contra los RDOS reales de
-            CADIZ (R0-R3): sumar 'de mercados' (EE.UU./China, único componente que es venta real a
-            consumidor) + 'Ingresos por ventas' (Europa, que al no tener fábrica propia no tiene el
-            desglose 'de mercados' / 'de transferencias internas') reconcilia EXACTO con 'Cuenta de
-            resultados, miles USD, Global' de cada equipo/ronda. Se excluye 'de transferencias
-            internas' (envíos entre áreas productivas, no venta a consumidor final) y el subtotal
-            'Beneficio de Ventas Totales' (= 'de mercados' + 'de transferencias internas' exacto --
-            un artefacto de la celda combinada del RDOS al parsear, no una tercera cifra)."""
-            vol = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises_incluir])) &
-                     (df['Metrica'] == 'Ventas, miles unidades')].copy()
-            vol['Valor'] = num(vol['Valor'])
-            vol_r = vol.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Volumen'})
-            val = df[(df['Estado'].isin([f'Cuenta de resultados, miles USD, {p}' for p in paises_incluir])) &
-                     (df['Seccion'] == 'Ingresos por ventas') &
-                     (df['Metrica'].isin(['de mercados', 'Ingresos por ventas']))].copy()
-            val['Valor'] = num(val['Valor'])
-            val_r = val.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Valoracion'})
-            return vol_r.merge(val_r, on=['Ronda', 'Ronda_Orden'], how='outer').sort_values('Ronda_Orden')
-
-        def _chart_linea_industria(serie, columna, titulo, color, sufijo=''):
-            d = serie.dropna(subset=[columna])
-            if d.empty:
-                return st.info(f'Sin datos para graficar "{titulo}".')
-            fig = go.Figure(go.Scatter(x=d['Ronda'], y=d[columna], mode='lines+markers', name=titulo,
-                                        line=dict(color=color, width=3), marker=dict(size=7),
-                                        hovertemplate=f'%{{x}} — %{{y:,.0f}}{sufijo}<extra></extra>'))
-            fig.update_layout(title=titulo, showlegend=False)
-            mostrar(fig)
-
-        st.markdown('###### Evolución Global — toda la industria')
-        serie_global = _industria_volumen_valor(paises_macro)
-        cgm1, cgm2 = st.columns(2)
-        with cgm1:
-            _chart_linea_industria(serie_global, 'Volumen', 'Volumen total, miles de unidades', MUTED_PALETTE[0], sufijo=' mil u.')
-        with cgm2:
-            _chart_linea_industria(serie_global, 'Valoracion', 'Valoración total, USD', COLOR_METRICA['dinero'])
-
-        st.divider()
-        st.markdown('###### Evolución Regional')
-        pais_macro_sel = st.selectbox('Mercado', paises_macro, key='sel_mercado_macro_pais')
-        serie_regional = _industria_volumen_valor([pais_macro_sel])
-        crm1, crm2 = st.columns(2)
-        with crm1:
-            _chart_linea_industria(serie_regional, 'Volumen', f'Volumen — {pais_macro_sel}, miles de unidades', MUTED_PALETTE[0], sufijo=' mil u.')
-        with crm2:
-            _chart_linea_industria(serie_regional, 'Valoracion', f'Valoración — {pais_macro_sel}, USD', COLOR_METRICA['dinero'])
-        st.caption('Volumen y Valoración por separado (nunca en el mismo eje) para no sugerir una '
-                   'correlación entre las dos series que no está probada -- si crecen a ritmos '
-                   'distintos, ese es justo el dato: el mercado crece más por precio que por volumen, '
-                   'o viceversa.')
-
-        st.divider()
-        st.markdown('###### Ventas de la Industria vs. Demanda Insatisfecha')
-        st.caption('Escala Global (los 3 mercados sumados). "Demanda potencial insatisfecha" es '
-                   'terminología del propio manual CESIM (sección de Producto: "la demanda potencial '
-                   'insatisfecha o el inventario final") = Demanda − Ventas, sumada entre los 7 equipos '
-                   'y las 4 tecnologías -- volumen que el mercado hubiera comprado pero que algún '
-                   'competidor (no necesariamente CADIZ) no tuvo suficiente producto disponible para '
-                   'vender esa ronda. Es un síntoma agregado de toda la industria, no atribuye la causa '
-                   'puntual de cada equipo (puede ser capacidad instalada, una decisión de producción, o '
-                   'importación insuficiente).')
-
-        def _industria_demanda_insatisfecha(paises_incluir):
-            dem = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises_incluir])) &
-                     (df['Metrica'] == 'Demanda, miles unidades')].copy()
-            ven = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises_incluir])) &
-                     (df['Metrica'] == 'Ventas, miles unidades')].copy()
-            dem['Valor'] = num(dem['Valor']); ven['Valor'] = num(ven['Valor'])
-            dem_r = dem.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Demanda'})
-            ven_r = ven.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Ventas'})
-            out = dem_r.merge(ven_r, on=['Ronda', 'Ronda_Orden'], how='outer').sort_values('Ronda_Orden')
-            out['Insatisfecha'] = (out['Demanda'] - out['Ventas']).clip(lower=0)
-            return out
-
-        serie_ins = _industria_demanda_insatisfecha(paises_macro)
-        if serie_ins.dropna(subset=['Demanda']).empty:
-            st.info('Sin datos de demanda/ventas para graficar.')
-        else:
-            fig_ins = go.Figure()
-            fig_ins.add_trace(go.Bar(x=serie_ins['Ronda'], y=serie_ins['Ventas'], name='Ventas de la industria',
-                                      marker_color=COLOR_METRICA['eficiencia']))
-            fig_ins.add_trace(go.Bar(x=serie_ins['Ronda'], y=serie_ins['Insatisfecha'], name='Demanda insatisfecha',
-                                      marker_color=COLOR_METRICA['riesgo']))
-            fig_ins.update_layout(barmode='stack', title='Ventas vs. Demanda Insatisfecha, miles de unidades',
-                                   legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
-            mostrar(fig_ins, margen_b=70)
-
-        st.divider()
-        st.markdown('###### Mix de Demanda Real — % de cada tecnología sobre la demanda total, por región')
-        st.caption('Sobre la Demanda (no la Ventas) de los 7 equipos sumados en cada mercado -- el tamaño '
-                   'de la torta de cada tecnología en cada región, más allá de quién se la reparte.')
-
-        def _mix_demanda_real(pais):
-            d = df[(df['Estado'] == f'Informe de mercado, {pais}') & (df['Metrica'] == 'Demanda, miles unidades')].copy()
-            d['Valor'] = num(d['Valor'])
-            por_tech = d.groupby(['Ronda', 'Ronda_Orden', 'Seccion'], as_index=False)['Valor'].sum()
-            total = por_tech.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Total'})
-            m = por_tech.merge(total, on=['Ronda', 'Ronda_Orden'])
-            m['Pct'] = np.where(m['Total'] > 0, m['Valor'] / m['Total'] * 100, np.nan)
-            return m.sort_values('Ronda_Orden').rename(columns={'Seccion': 'Tecnología'})
-
-        color_tech_mix = dict(zip(tecnologias, MUTED_SIN_MARRON))
-        cols_mix_macro = st.columns(3)
-        for i, pais_mix in enumerate(paises_macro):
-            mix_m = _mix_demanda_real(pais_mix)
-            with cols_mix_macro[i]:
-                if mix_m.dropna(subset=['Pct']).empty:
-                    st.info(f'Sin datos en {pais_mix}.')
-                    continue
-                fig_mix_m = go.Figure()
-                for tech in tecnologias:
-                    d_t = mix_m[mix_m['Tecnología'] == tech]
-                    if d_t.empty:
-                        continue
-                    fig_mix_m.add_trace(go.Scatter(x=d_t['Ronda'], y=d_t['Pct'], name=tech, mode='lines',
-                                                    stackgroup='uno', line=dict(width=0.5, color=color_tech_mix[tech]),
-                                                    fillcolor=_hex_a_rgba(color_tech_mix[tech], 0.75)))
-                fig_mix_m.update_layout(title=pais_mix, yaxis=dict(ticksuffix='%', range=[0, 100]),
-                                         legend=dict(orientation='h', yanchor='top', y=-0.35, xanchor='center', x=0.5))
-                mostrar(fig_mix_m, margen_b=95)
 # =================================================================
 # SECCIÓN 3 — OPERACIONES
 # =================================================================
@@ -2846,6 +2863,11 @@ def seccion_control_gestion():
 
     st.divider()
     st.markdown('#### Nivel 2 — Desvío Comercial e Ingresos')
+    # Adenda 30 (a pedido del equipo): se agrega el desvío de pronóstico de demanda (Estimada vs.
+    # Real) COMO PRIMER gráfico del nivel -- es lo más upstream del embudo comercial (antes de que la
+    # demanda se traduzca en Ventas efectivas, sujeta a disponibilidad/capacidad).
+    fila_cg_demanda_estimada(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
+    st.divider()
     fila3_resultados_ingresos(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
     st.divider()
     fila3_mercado_cuota_objetivo(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
