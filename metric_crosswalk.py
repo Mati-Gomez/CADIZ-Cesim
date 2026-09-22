@@ -45,11 +45,17 @@ CROSSWALK_FINANZAS = {
         "tipo": "ratio",
         "gap_favorable": "real_mayor",
     },
-    "ros": {
-        "label": "ROS",
-        "proyeccion": {"metric": "ROS", "region": "Global"},
+    "roce": {
+        # Adenda 30 (a pedido del equipo): reemplaza a ROS en el panel de Nivel 1 de Control de
+        # Gestión -- mismo criterio de verificación que el resto de este archivo. Proyección: DATA_EXPORT
+        # metric="ROCE", region="Global" (build_gestion_v2.py, 03_RATIOS -> row_roce, "REGLA VERIFICADA
+        # manual cap.13": EBIT / Capital empleado promedio apertura-cierre). Real: Estado='Ratios e
+        # indicadores financieros clave', Metrica='Rentabilidad del capital empleado (ROCE)' -- string
+        # exacto verificado contra los RDOS reales (R0-R3) de cesim_parser.
+        "label": "ROCE",
+        "proyeccion": {"metric": "ROCE", "region": "Global"},
         "real": {"estado": "Ratios e indicadores financieros clave",
-                 "metrica": "Rentabilidad de las ventas (ROS)", "seccion": None},
+                 "metrica": "Rentabilidad del capital empleado (ROCE)", "seccion": None},
         "tipo": "ratio",
         "gap_favorable": "real_mayor",
     },
