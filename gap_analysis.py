@@ -296,6 +296,25 @@ def cuota_mercado_objetivo_vs_real(df_real, df_proy, ronda_nombre, ronda_num, me
     return out
 
 
+def demanda_estimada_vs_real(df_real, df_proy, ronda_nombre, ronda_num, mercado, team="CADIZ"):
+    """Demanda Estimada (Plan, D1c·DEMANDA -- lo que CADIZ pronosticó que el mercado le iba a
+    demandar) vs. Demanda Real (RDOS), por tecnología, en un mercado -- desvío PURO de pronóstico de
+    demanda, antes de cualquier corte por disponibilidad/capacidad (eso es 'Ventas', que ya se
+    compara aparte en precio_volumen_mercado / fila3_resultados_ingresos). Mismo grano y misma
+    convención de unidades ('Demanda estimada CADIZ (unidades)' en DATA_EXPORT, ya absoluto -- 'u.';
+    'Demanda, miles unidades' del RDOS real, x1000 para llevarlo a unidades absolutas, mismo criterio
+    que ya usa metric_crosswalk.CROSSWALK_MERCADO vía _to_absoluto(tipo='unidades'))."""
+    out = {}
+    for tech in TECNOLOGIAS:
+        plan, _ = _valor_proyeccion(df_proy, ronda_num, {"metric": "Demanda estimada CADIZ (unidades)", "region": mercado, "tech": tech}, team)
+        real = _valor_real_grano(df_real, ronda_nombre, f"Informe de mercado, {mercado}", tech, "Demanda, miles unidades", empresa=team)
+        real = real * 1000.0 if real is not None else None
+        if not ((plan or 0) or (real or 0)):
+            continue
+        out[tech] = {"plan": plan, "real": real}
+    return out
+
+
 def flujo_caja_plan_real_global(df_real, df_proy, ronda_nombre, ronda_num, team="CADIZ"):
     """Composición del Flujo de Caja (CFO/CFI/CFF), Plan vs. Real, a nivel Global -- insumo del
     gráfico de Composición de Flujo de Caja en la Comparativa Plan vs. Real de Finanzas (Adenda 12).
