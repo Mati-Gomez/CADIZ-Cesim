@@ -67,6 +67,18 @@ RONDAS = list(range(0, 13))
 ENFOQUES_MKT = ["Equilibrado", "Precio bajo", "Características", "Sostenibilidad", "Marca"]
 MONEDA_MERCADO = {"EE.UU.": "USD", "China": "RMB", "Europa": "EUR"}
 
+# Costo unitario de producción tercerizada (CONDICIÓN DE RONDA publicada por CESIM), por
+# área/tecnología. Única fuente de verdad -- usada tanto por build_inputs() (celda de 01_INPUTS)
+# como por build_engine_produccion_part1() (valuación del inventario heredado en unidades
+# tercerizadas reales, Sección C). R3+: "NO DETERMINADO / PENDIENTE DE CARGA" -- el manual (cap. 5)
+# confirma que varía según volumen y se revela recién en la pantalla de decisión, no se publica de
+# antemano.
+COSTO_TERC_R0 = {"EE.UU.": {"Combustión": 11425.6408888889}, "China": {"Combustión": 10264.4712345679}}
+COSTO_TERC_R1 = {"EE.UU.": {"Combustión": 11142.1602938292, "Híbrido": 17630.5229121633},
+                  "China": {"Combustión": 10358.738390622, "Híbrido": 16285.8239718646}}
+COSTO_TERC_R2 = {"China": {"Combustión": 10106.74, "Híbrido": 15649.15}}
+COSTO_TERC_POR_RONDA = {0: COSTO_TERC_R0, 1: COSTO_TERC_R1, 2: COSTO_TERC_R2}
+
 INPUTS_SHEET = "01_INPUTS"
 ESTADOS_SHEET = "02_ESTADOS_PROYECTADOS"
 RATIOS_SHEET = "03_RATIOS"
@@ -141,23 +153,32 @@ def extract_mercado_real(rdos_files):
     ronda con RDOS (reemplaza los diccionarios tam_hist/dem_real de _ENGINE_MERCADO, que solo
     cubrían R0/R1 a mano). Dato histórico real, no supuesto ni lógica propia.
 
-    Verificado bottom-up contra R0/R1 (0 diferencia a 10 decimales en Tamaño de mercado, 0
-    mismatches en las 24 combinaciones mercado×tecnología de Demanda) y contra R2/R3 (valores
-    nuevos, plausibles, primera vez que se calculan) -- ver test_mercado_extractor.py / Informe
-    Fase 4.
+    CORRECCIÓN (auditoría R3, hallazgo verificado a la unidad contra RDOS R2): la versión anterior
+    calculaba Tamaño de mercado = Ventas propias de CADIZ / Cuota propia de CADIZ -- que es
+    IDÉNTICO algebraicamente a Σ Ventas de los 7 equipos (la cuota de CADIZ ya es, por
+    construcción del propio RDOS, Ventas_CADIZ / Ventas_totales). Eso solo coincide con el
+    Tamaño de mercado real cuando NINGÚN equipo se queda sin stock. En Ronda 2 hubo demanda
+    insatisfecha real en varios equipos (ej. FOCUS: pidió 353.469 u. de Híbrido en EE.UU. y solo
+    vendió 180.038 -- RDOS R2, 'Informe de mercado, EE.UU.'), así que Σ Ventas < Σ Demanda, y el
+    Tamaño de mercado derivado por el método viejo quedó sistemáticamente por debajo del real
+    (verificado: EE.UU. 4.906.731 vs. 5.101.785 reales, China 3.580.597 vs. 4.069.664, Europa
+    6.209.595 vs. 6.237.256 -- coincide a la unidad con Σ Demanda de los 7 equipos). En R0/R1 no
+    hubo demanda insatisfecha, así que las dos fórmulas daban el mismo número por casualidad --
+    de ahí que la verificación anterior ("0 diferencia a 10 decimales") no detectara el error: no
+    había ningún caso con stockouts para exponerlo.
 
-    tam[mercado][ronda] = Σ("Ventas, miles unidades" x1000, todas las tecnologías, CADIZ, sección
-        "Informe de mercado, {mercado}") / ("Total" de "{mercado} cuotas de mercado, %", CADIZ, /100).
+    tam[mercado][ronda] = Σ("Demanda, miles unidades" x1000, TODOS los equipos, todas las
+        tecnologías, sección "Informe de mercado, {mercado}") -- REGLA CESIM VERIFICADA (Tamaño de
+        mercado = demanda total de la industria, no ventas efectivas).
     dem[(mercado, tecnologia)][ronda] = "Demanda, miles unidades" x1000 de CADIZ, dentro del bloque
         de esa tecnología en "Informe de mercado, {mercado}" -- 0.0 si CADIZ no tiene fila para esa
-        tecnología (no se inventa un valor).
+        tecnología (no se inventa un valor). Sin cambios respecto de la versión anterior.
     """
     tam, dem_out = {}, {}
     secciones_informe = {f"Informe de mercado, {m}": m for m in MERCADOS}
     for rn, f in rdos_files.items():
         rows = parse_rdos_workbook(f)
-        ventas_por_mercado = {m: 0.0 for m in MERCADOS}
-        cuota_por_mercado = {m: None for m in MERCADOS}
+        demanda_total_por_mercado = {m: 0.0 for m in MERCADOS}
         demanda_por_mercado_tech = {}
         current_mercado, current_tech = None, None
         for row in rows:
@@ -168,22 +189,112 @@ def extract_mercado_real(rdos_files):
                     current_tech = lbl
                 elif typ == "data" and lbl == "Demanda, miles unidades" and current_tech:
                     demanda_por_mercado_tech[(current_mercado, current_tech)] = row["scaled"].get("CADIZ")
-                elif typ == "data" and lbl == "Ventas, miles unidades" and current_mercado:
-                    v = row["scaled"].get("CADIZ")
-                    if isinstance(v, (int, float)):
-                        ventas_por_mercado[current_mercado] += v
-            elif sec and sec.endswith("cuotas de mercado, %") and sec != "Cuotas de mercado globales, %":
-                m = sec.replace(" cuotas de mercado, %", "")
-                if typ == "data" and lbl == "Total" and m in MERCADOS:
-                    v = row["values"].get("CADIZ")
-                    if isinstance(v, (int, float)):
-                        cuota_por_mercado[m] = v / 100.0
+                    # Tamaño de mercado = Σ Demanda de TODOS los equipos (no solo CADIZ) -- ver
+                    # docstring. row["scaled"] es {equipo: valor}, ya escalado x1000.
+                    for v in row["scaled"].values():
+                        if isinstance(v, (int, float)):
+                            demanda_total_por_mercado[current_mercado] += v
         for m in MERCADOS:
-            tam.setdefault(m, {})[rn] = (ventas_por_mercado[m] / cuota_por_mercado[m]) if cuota_por_mercado[m] else None
+            tam.setdefault(m, {})[rn] = demanda_total_por_mercado[m] if demanda_total_por_mercado[m] else None
         for tech in TECNOLOGIAS:
             for m in MERCADOS:
                 dem_out.setdefault((m, tech), {})[rn] = demanda_por_mercado_tech.get((m, tech), 0.0)
     return tam, dem_out
+
+
+_SECTION_IS_TOP_RE = __import__("re").compile(r"miles USD|Informe de|Indicadores Financieros|Tasas de inter|Creaci[oó]n de valor|% *$")
+
+
+def extract_inventario_real(rdos_files):
+    """Inventario inicial/final (unidades) y composición de origen (producción propia vs.
+    tercerizada) del inventario final, por área/tecnología, para CUALQUIER ronda con RDOS. Lee la
+    sección 'Detalles de logística' del RDOS (CADIZ únicamente).
+
+    Auditoría R3 (hallazgo verificado a la unidad contra RDOS R2): antes de esta función,
+    build_engine_produccion_part1() calculaba el inventario de CUALQUIER ronda >=2 con su propio
+    FIFO simplificado (solo producción propia+tercerizada de CADIZ, sin importaciones/exportaciones
+    entre países) -- eso inventaba un reparto EE.UU./China del inventario final que no correspondía
+    al real (verificado: el motor daba 139.641 u. en EE.UU. / 84.880 u. en China para el stock
+    inicial de R3, cuando el RDOS de R2 confirma 0 u. en EE.UU. / 224.321 u. en China, 100%). Esta
+    función reemplaza esa inferencia por el dato real del RDOS.
+
+    out[(area,tech)][ronda] = dict con:
+      inicial_u, final_u, prod_propia_u, prod_terc_u, importado_u, total_disp_u -- TODOS dato
+        histórico real (RDOS), en unidades (ya escalado x1000 sobre 'miles unidades').
+      propia_final_u, terc_final_u -- de qué origen es el inventario FINAL que queda. NO viene así
+        en el RDOS (que solo da el total) -- se deriva aplicando un orden de depleción
+        propia-primero, tercerizada-después dentro de cada área/tecnología (observación del equipo
+        sobre la plataforma CESIM, no confirmada en el texto del manual disponible -- SUPUESTO
+        PROPIO, no Regla CESIM verificada). La cantidad total (propia_final_u + terc_final_u) SIEMPRE
+        coincide con final_u (dato real) -- lo que es un supuesto es únicamente CÓMO se reparte esa
+        cantidad entre los dos orígenes, lo cual solo importa para la VALUACIÓN ($) del inventario
+        heredado, no para las unidades.
+      ambiguo_origen -- True si en esa área/tecnología/ronda hubo unidades importadas Y quedó
+        inventario final simultáneamente: ahí no hay evidencia de en qué orden entran las
+        importadas frente a la producción propia/tercerizada, así que propia_final_u/terc_final_u
+        se devuelven en None (no se inventa un reparto) y hay que resolverlo a mano.
+    """
+    import re
+    out = {}
+    for rn, f in rdos_files.items():
+        rows = parse_rdos_workbook(f)
+        current_tech, current_area, in_logistica = None, None, False
+        datos = {}  # (area,tech) -> {label: valor}
+        importado_u = {}
+        for row in rows:
+            lbl, typ = row["label"], row["type"]
+            if lbl == "Detalles de logística":
+                in_logistica, current_tech, current_area = True, None, None
+                continue
+            if not in_logistica:
+                continue
+            if typ == "subheader":
+                if _SECTION_IS_TOP_RE.search(lbl):
+                    # Terminó 'Detalles de logística' -- empezó una sección nueva de verdad
+                    # (ej. 'Informe de costos').
+                    in_logistica = False
+                    continue
+                base_lbl = lbl.split(",")[0].strip()
+                if base_lbl in TECNOLOGIAS:
+                    current_tech, current_area = base_lbl, None
+                elif base_lbl in AREAS or base_lbl == "Europa":
+                    current_area = base_lbl
+                continue
+            if typ == "data" and current_tech and current_area in AREAS:
+                v = row["scaled"].get("CADIZ")
+                if not isinstance(v, (int, float)):
+                    continue
+                key = (current_area, current_tech)
+                datos.setdefault(key, {})[lbl] = v
+                if lbl.startswith("Importado desde"):
+                    importado_u[key] = importado_u.get(key, 0.0) + v
+        for area in AREAS:
+            for tech in TECNOLOGIAS:
+                key = (area, tech)
+                d = datos.get(key, {})
+                inicial_u = d.get("Inventario inicial", 0.0)
+                final_u = d.get("Inventario final", 0.0)
+                prod_propia = d.get("Producción interna", 0.0)
+                prod_terc = d.get("Producción contratada", 0.0)
+                total_disp = d.get("Total disponible", 0.0)
+                imp = importado_u.get(key, 0.0)
+                consumido = max(total_disp - final_u, 0.0)
+                # Depleción propia-primero, tercerizada-después (SUPUESTO PROPIO -- ver docstring).
+                left = consumido
+                used_propia = min(prod_propia, left)
+                left = max(left - used_propia, 0.0)
+                used_terc = min(prod_terc, left)
+                propia_final = prod_propia - used_propia
+                terc_final = prod_terc - used_terc
+                ambiguo = imp > 1e-6 and final_u > 1e-6
+                out.setdefault(key, {})[rn] = dict(
+                    inicial_u=inicial_u, final_u=final_u, prod_propia_u=prod_propia,
+                    prod_terc_u=prod_terc, importado_u=imp, total_disp_u=total_disp,
+                    propia_final_u=(None if ambiguo else propia_final),
+                    terc_final_u=(None if ambiguo else terc_final),
+                    ambiguo_origen=ambiguo,
+                )
+    return out
 
 
 # Hojas cuyo NOMBRE empieza con un dígito -- por gramática OOXML, cualquier referencia de fórmula
@@ -727,11 +838,8 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
         S.apply_cell(ws, row, 7 + 2, value=costo_fab_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
 
-    # -- Costo unitario de producción tercerizada --
-    costo_terc_r0 = {"EE.UU.": {"Combustión": 11425.6408888889}, "China": {"Combustión": 10264.4712345679}}
-    costo_terc_r1 = {"EE.UU.": {"Combustión": 11142.1602938292, "Híbrido": 17630.5229121633},
-                      "China": {"Combustión": 10358.738390622, "Híbrido": 16285.8239718646}}
-    costo_terc_r2 = {"China": {"Combustión": 10106.74, "Híbrido": 15649.15}}
+    # -- Costo unitario de producción tercerizada (fuente única: COSTO_TERC_* a nivel módulo) --
+    costo_terc_r0, costo_terc_r1, costo_terc_r2 = COSTO_TERC_R0, COSTO_TERC_R1, COSTO_TERC_R2
     row_costo_terc = {}
     for area in AREAS:
         for tech in TECNOLOGIAS:
@@ -1044,15 +1152,28 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     #
     # Baseline Ronda 1 (dato aportado por el usuario, no inventado ni heredado del motor anterior): el
     # usuario explicó el mecanismo con "si tengo 7 y genero 1 característica extra... paso a tener 8
-    # disponibles", y confirmó para Ronda 2 "combustión: 8 características ya que desarrollamos una
-    # extra" / "híbrido: 3 características ya que se generaron nuevas" -- de donde se deduce que el
-    # stock ANTES de Ronda 2 (= Ronda 1) era Combustión=7, Híbrido=2 (Eléctrico/Hidrógeno=0, no
-    # habilitadas). Es un dato histórico real aportado por el usuario (categoría 2 del marco del
-    # proyecto), no un supuesto propio de este modelo.
+    # disponibles" -- de donde se deduce que el stock ANTES de Ronda 2 (= Ronda 1) era Combustión=7,
+    # Híbrido=2 (Eléctrico/Hidrógeno=0, no habilitadas). Es un dato histórico real aportado por el
+    # usuario (categoría 2 del marco del proyecto), no un supuesto propio de este modelo.
+    #
+    # CORRECCIÓN (auditoría R2→R3, sesión Mati): el valor de Híbrido R2 estaba hardcodeado en 3
+    # ("híbrido: 3 características ya que se generaron nuevas", dato de una sesión anterior), pero
+    # el archivo Cadiz_proyeccion_R3.xlsx que el equipo cargó -- fuente autoritativa para este dato,
+    # porque "Características disponibles" es tracking interno propio, no algo que el RDOS de CESIM
+    # reporte -- trae Híbrido R2=4 tipeado a mano. Se verificó que 4 es el valor internamente
+    # consistente: el propio archivo del usuario, con R2=4 y R3=10, cachea en "Costo estimado de
+    # generar/adquirir características nuevas (referencia)" Híbrido R3 = diferencial(10-4=6) ×
+    # 325.000.000 = 1.950.000.000 -- exactamente el monto que motivó el reporte del Hallazgo 2
+    # ("compra de licencia" no impactaba EBITDA). Con el valor viejo (R2=3) el diferencial sería 7,
+    # no 6, y esa cifra de referencia no cuadraría. Además, una comparación barrido de las 172
+    # celdas de decisión R2 comparables entre este código y el archivo del usuario dio UNA sola
+    # diferencia: esta. Se corrige 3->4 acá; sigue siendo categoría 2 (dato histórico real), solo que
+    # con una fuente más confiable que la que se usó originalmente.
     disponible_r1 = {"Combustión": 7, "Híbrido": 2, "Eléctrico": 0, "Hidrógeno": 0}
-    disponible_r2 = {"Combustión": 8, "Híbrido": 3, "Eléctrico": 0, "Hidrógeno": 0}
+    disponible_r2 = {"Combustión": 8, "Híbrido": 4, "Eléctrico": 0, "Hidrógeno": 0}
     row_disponible = {}
     row_diferencial = {}
+    row_adq_ext = {}
     row_costo_caract_calc = {}
     for tech in TECNOLOGIAS:
         row = put("D4 · I+D / TECNOLOGÍA", "Características disponibles (acumulado, stock por tecnología)", tech, "cantidad", "DECISIÓN CADIZ",
@@ -1064,7 +1185,7 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
         arrastre_rows(row, 2, numfmt=S.NUM_UNITS)
 
         row_d = put("D4 · I+D / TECNOLOGÍA", "Características nuevas generadas esta ronda (diferencial)", tech, "cantidad", "CÁLCULO",
-                     "= stock disponible esta ronda − stock disponible ronda anterior (fila de arriba). Esta es la cantidad que corresponde multiplicar por 'Costo de generar/adquirir característica nueva' (Sección B) -- NUNCA el stock total acumulado.")
+                     "= stock disponible esta ronda − stock disponible ronda anterior (fila de arriba). Suma TODO el crecimiento del stock, sin importar si vino de jornadas propias o de licencia -- para separar cuánto de esto es licencia, ver la fila 'Características adquiridas externamente' debajo.")
         row_diferencial[tech] = row_d
         S.apply_cell(ws, row_d, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         for rn in range(1, 13):
@@ -1073,15 +1194,33 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
             f_diff = f'=IF(AND(ISNUMBER({cur_cell}),ISNUMBER({prev_cell})),{cur_cell}-{prev_cell},"")'
             S.apply_cell(ws, row_d, 7 + rn, value=f_diff, kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
 
+        # Fila nueva (a pedido del equipo, iteración post-auditoría R2->R3): manual cap. 7 confirma que
+        # I+D propio (jornadas) y compra de licencia son vías SUSTITUTAS -- desarrollar con jornadas NO
+        # tiene costo incremental por característica (ya se paga vía RRHH fijo -- salario+capacitación,
+        # sección D3, independiente de cómo se asignen las jornadas); el "Costo de generar/adquirir
+        # característica nueva" (Sección B) es el precio de la LICENCIA. Antes la fila de referencia de
+        # abajo multiplicaba el DIFERENCIAL TOTAL (jornadas + licencia mezcladas) por ese costo, como si
+        # todo el crecimiento se hubiera comprado -- sobreestimaba cuando parte vino de jornadas. Ahora
+        # el equipo carga acá, a mano, cuántas de las nuevas características de esta ronda adquirió
+        # EXTERNAMENTE (vía licencia) -- el resto del diferencial se asume generado con jornadas propias,
+        # sin costo adicional. Dato manual (DECISIÓN CADIZ), no una fórmula: el modelo no tiene forma de
+        # inferir esta separación por sí solo (el manual no publica una tasa jornadas->características).
+        row_adq = put("D4 · I+D / TECNOLOGÍA", "Características adquiridas externamente (compra de licencia) esta ronda", tech, "cantidad", "DECISIÓN CADIZ",
+                      "De las 'Características nuevas generadas esta ronda' (fila de arriba), cuántas se adquirieron EXTERNAMENTE (vía licencia) -- el resto se asume generado con jornadas propias (sin costo incremental, ya cubierto por el RRHH fijo de D3). Se cruza con 'Costo de generar/adquirir característica nueva' (Sección B) en la fila de abajo. Dato manual del equipo -- el modelo no puede inferir esta separación por sí solo.")
+        row_adq_ext[tech] = row_adq
+        S.apply_cell(ws, row_adq, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+        for rn in range(1, 13):
+            S.apply_cell(ws, row_adq, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+
         row_cc = put("D4 · I+D / TECNOLOGÍA", "Costo estimado de generar/adquirir características nuevas (referencia)", tech, "USD", "CÁLCULO",
-                      "= diferencial (fila de arriba) × 'Costo de generar/adquirir característica nueva' (Sección B, condición de ronda publicada por CESIM). Es una ESTIMACIÓN de referencia para dimensionar la decisión 'Compra de licencia (USD)' de esta misma sección -- NO se suma automáticamente a los Costos y gastos del P&L, para no duplicar con lo que ya se carga manualmente ahí (ver README, hotfix Adenda 9).")
+                      "= 'Características adquiridas externamente' (fila de arriba) × 'Costo de generar/adquirir característica nueva' (Sección B, condición de ronda publicada por CESIM). SOLO cuenta la porción adquirida externamente -- la porción generada con jornadas propias no tiene costo incremental acá (manual cap. 7: son vías sustitutas; jornadas ya se paga vía RRHH fijo de D3). Iteración post-auditoría R2->R3 (a pedido del equipo, 'tiene que poder impactar'): a partir de acá SÍ se suma a los Costos y gastos del P&L (_ENGINE_FINANCIERO, fila 'I+D — Características adquiridas externamente'), prorrateada por N° de fábricas igual que 'I+D — Licencias' -- pero en una línea APARTE y ADITIVA, no reemplaza ni se mezcla con 'Compra de licencia (USD)' (el equipo confirmó que son dos costos reales y distintos: la licencia es mucho más cara que una característica individual).")
         row_costo_caract_calc[tech] = row_cc
         costo_ref_row = row_costo_caract_nueva[tech]
         S.apply_cell(ws, row_cc, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         for rn in range(1, 13):
-            diff_cell = f"{col(rn)}{row_d}"
+            adq_cell = f"{col(rn)}{row_adq}"
             costo_cell = f"{col(rn)}{costo_ref_row}"
-            f_costo = f'=IF(AND(ISNUMBER({diff_cell}),ISNUMBER({costo_cell})),{diff_cell}*{costo_cell},"")'
+            f_costo = f'=IF(AND(ISNUMBER({adq_cell}),ISNUMBER({costo_cell})),{adq_cell}*{costo_cell},"")'
             S.apply_cell(ws, row_cc, 7 + rn, value=f_costo, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
     r[0] += 1
 
@@ -1246,7 +1385,7 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
 
     decisiones = dict(cuota=row_cuota, prod_propia=row_prod_propia, prod_terc=row_prod_terc, inv_fab=row_inv_fab,
                        d3=row_d3, jornadas=row_jornadas, licencia=row_licencia, caract=row_caract,
-                       disponible=row_disponible, diferencial=row_diferencial, costo_caract_calc=row_costo_caract_calc,
+                       disponible=row_disponible, diferencial=row_diferencial, adq_ext=row_adq_ext, costo_caract_calc=row_costo_caract_calc,
                        precio=row_precio, promo=row_promo, enfoque=row_enfoque, ranking=row_ranking,
                        mult_tp=row_mult_tp, d8=row_d8, transf=row_transf, div_filial=row_div_filial)
 
@@ -1274,7 +1413,7 @@ def sens_ref(row):
 # _ENGINE_PRODUCCION — Parte 1: capacidad, curva de aprendizaje, costo unitario propio,
 # disponibilidad (oferta previa a ventas), D&A. (Motor E1 + E4 del proyecto anterior, simplificado.)
 # ======================================================================================
-def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1})):
+def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}), rdos_files=None):
     ws = wb.create_sheet(ENGINE_PROD_SHEET)
     ncols = 6 + len(RONDAS)
     S.set_col_widths(ws, [18, 44, 20, 10, 14, 30] + [13] * len(RONDAS))
@@ -1435,6 +1574,11 @@ def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}
     finu_hist = {t: dict(ZERO2) for t in ventas_hist_u}
     finv_hist = {t: dict(ZERO2) for t in ventas_hist_u}
 
+    # Fix 1 (auditoría R3): inventario real por área/tecnología para CUALQUIER ronda >1 con RDOS
+    # (ej. R2) -- ver extract_inventario_real(). R0/R1 siguen con los seeds() hardcodeados de
+    # arriba (ya verificados, sin cambios).
+    real_inv = extract_inventario_real(rdos_files) if rdos_files else {}
+
     def seed(area, tech, r0=None, r1=None):
         k = (area, tech)
         if r0:
@@ -1510,6 +1654,79 @@ def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}
                     S.apply_cell(ws, row_cg, 7 + rn, value=cogs_hist[k_at][rn], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
                     S.apply_cell(ws, row_fu, 7 + rn, value=finu_hist[k_at][rn], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
                     S.apply_cell(ws, row_fv, 7 + rn, value=finv_hist[k_at][rn], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+                elif rn in rondas_reales:
+                    # Fix 1 (auditoría R3): ronda YA JUGADA con RDOS pero >1 (ej. R2) -- sembrar con
+                    # el dato REAL (extract_inventario_real), no con el FIFO propio del motor (que
+                    # antes se aplicaba por igual a CUALQUIER ronda >1, real o planificada, e
+                    # inventaba un reparto EE.UU./China del inventario final que no era el real --
+                    # ver docstring de extract_inventario_real()).
+                    cprev = col(rn - 1)
+                    S.apply_cell(ws, row_ini_u, 7 + rn, value=f"={cprev}{row_fu}", kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+                    S.apply_cell(ws, row_ini_v, 7 + rn, value=f"={cprev}{row_fv}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+
+                    d_real = real_inv.get(k_at, {}).get(rn, {})
+                    final_u = d_real.get("final_u", 0.0)
+                    total_disp_real = d_real.get("total_disp_u", 0.0)
+                    importado_u = d_real.get("importado_u", 0.0)
+                    ventas_real = max(total_disp_real - final_u, 0.0)
+
+                    # Bug real, corregido (auditoría R2->R3): "Total disponible" acá SOLO sumaba
+                    # inicial+producción propia local+tercerizada local, con la CANTIDAD de producción
+                    # leída de la celda vinculada a la DECISIÓN cargada en 01_INPUTS (prod_propia_r2/
+                    # prod_terc_r2, "miles unidades" redondeadas a entero -- p.ej. 60 en vez de 60,2) en
+                    # vez del dato RDOS real y preciso (60.200) -- y sin contar "Importado desde [otra
+                    # área]" (transferencia entre áreas, RDOS "Detalles de logística"), que esta
+                    # fórmula no tenía ningún término para sumar. Las dos cosas juntas hacían que, para
+                    # más de un área/tecnología en R2 (EE.UU./Combustión, EE.UU./Híbrido), "Ventas"
+                    # (ya sembrada con el dato real preciso, ver row_v abajo) terminara superando a
+                    # "Disponibilidad" -- ERROR físicamente imposible en el control "Ventas <=
+                    # Disponibilidad". Se corrige sembrando Disponibilidad TAMBIÉN 100% desde el dato
+                    # real (mismas cantidades que ya usa ventas_real/final_u, en vez de mezclar celdas
+                    # redondeadas con literales reales): unidades = total_disp_real (RDOS, tal cual).
+                    # En valor (USD) no hay un "total disponible en dólares" publicado por el RDOS como
+                    # tal -- se reconstruye a partir de las CANTIDADES reales (prod_propia_u/prod_terc_u/
+                    # importado_u, todas de extract_inventario_real, sin redondeo) por sus costos
+                    # unitarios: producción propia/tercerizada de ESTA área a su costo ya modelado
+                    # (Wright's Law / condición de ronda publicada, celdas -- eso sí es preciso, el
+                    # redondeo estaba solo en la CANTIDAD, no en el costo unitario), e importado
+                    # (SUPUESTO PROPIO -- no hay forma de saber a qué costo interno se transfirió esa
+                    # unidad entre áreas sin datos de logística que el RDOS no publica) valorizado al
+                    # costo básico de referencia del área DESTINO (Sección A, calibrado R0) -- mismo
+                    # criterio de aproximación ya usado para el caso "origen ambiguo" del inventario
+                    # final.
+                    prod_propia_real = d_real.get("prod_propia_u", 0.0)
+                    prod_terc_real = d_real.get("prod_terc_u", 0.0)
+                    S.apply_cell(ws, row_du, 7 + rn, value=total_disp_real, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, bold=True, size=8)
+                    f = (f"={c}{row_ini_v}+{prod_propia_real}*{c}{row_costo_propio[(area,tech)]}"
+                         f"+{prod_terc_real}*{c}{row_ct}+{importado_u}*{costo_basico_r0[area]}")
+                    S.apply_cell(ws, row_dv, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                    S.apply_cell(ws, row_v, 7 + rn, value=ventas_real, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+                    S.apply_cell(ws, row_fu, 7 + rn, value=final_u, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
+
+                    propia_final_u = d_real.get("propia_final_u")
+                    terc_final_u = d_real.get("terc_final_u")
+                    costo_terc_lit = COSTO_TERC_POR_RONDA.get(rn, {}).get(area, {}).get(tech)
+                    if final_u <= 1e-6:
+                        finv_num = 0.0
+                    elif d_real.get("ambiguo_origen") or propia_final_u is None or (terc_final_u and costo_terc_lit is None):
+                        # SUPUESTO PROPIO (fallback, no ejercido por los datos reales conocidos a la
+                        # fecha de este fix): sin evidencia para separar origen propia/tercerizada
+                        # (unidades importadas + inventario final simultáneos), o falta el costo de
+                        # tercerización publicado para esa ronda -- se valoriza TODO el inventario
+                        # final a costo básico de producción propia (Sección A, calibrado R0) como
+                        # aproximación conservadora. Revisar a mano si este caso se activa alguna vez.
+                        finv_num = final_u * costo_basico_r0[area]
+                    else:
+                        finv_num = (terc_final_u or 0.0) * (costo_terc_lit or 0.0) + (propia_final_u or 0.0) * costo_basico_r0[area]
+                    S.apply_cell(ws, row_fv, 7 + rn, value=finv_num, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                    f = f"={c}{row_dv}-{c}{row_fv}"
+                    S.apply_cell(ws, row_cg, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                    f = f"=IFERROR({c}{row_cg}/{c}{row_v},0)"
+                    S.apply_cell(ws, row_w, 7 + rn, value=f, kind="output", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=8)
+                    # Alimenta el diccionario Python (no solo la celda) para que el ancla FIFO de la
+                    # próxima ronda PLANIFICADA (rama de abajo) parta de este dato real.
+                    finu_hist[k_at][rn] = final_u
+                    finv_hist[k_at][rn] = finv_num
                 else:
                     cprev = col(rn - 1)
                     S.apply_cell(ws, row_ini_u, 7 + rn, value=f"={cprev}{row_fu}", kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
@@ -1523,12 +1740,16 @@ def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}
                     # la CELDA (no el valor python), así que recalcula bien una vez parcheada.
                     S.apply_cell(ws, row_v, 7 + rn, value=0, kind="calculo", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
                     # Fase 2, cambio 1: FIFO multicapa (reemplaza WAC). Capa heredada = Inventario final
-                    # REAL de Ronda 1 (histórico, no recalculado); capas R2..rn = producción propia y
-                    # tercerizada de cada ronda a su propio costo de origen, consumidas en orden FIFO.
-                    her_qty = finu_hist[k_at][1]
-                    her_cost = (finv_hist[k_at][1] / her_qty) if her_qty else 0.0
+                    # REAL de la ÚLTIMA ronda jugada antes de ésta (histórico, no recalculado) -- antes
+                    # fijo a Ronda 1 y r_min=2; generalizado (Fix 1, auditoría R3) para anclar en
+                    # CUALQUIER última ronda real disponible (ej. R2), no solo R1, así R3+ no vuelve a
+                    # recalcular una ronda que ya se sembró con el dato real de arriba.
+                    rondas_previas_reales = [r2 for r2 in rondas_reales if r2 < rn]
+                    ultimo_real = max(rondas_previas_reales) if rondas_previas_reales else 1
+                    her_qty = finu_hist[k_at][ultimo_real]
+                    her_cost = (finv_hist[k_at][ultimo_real] / her_qty) if her_qty else 0.0
                     f_fifo = fifo_layer_terms(row_prod_u[(area, tech)], row_costo_propio[(area, tech)],
-                                               row_t, row_ct, row_v, her_qty, her_cost, 2, rn)
+                                               row_t, row_ct, row_v, her_qty, her_cost, ultimo_real + 1, rn)
                     S.apply_cell(ws, row_fv, 7 + rn, value="=" + f_fifo, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
                     f = f"={c}{row_dv}-{c}{row_fv}"
                     S.apply_cell(ws, row_cg, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
@@ -1545,6 +1766,26 @@ def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}
         "EE.UU.": {"bruto0": 9_045_615_600.0, "dep0": 1_005_068_400.0, "pago1": 14_000_000.0, "bruto1": 9_059_615_600.0, "dep1": 904_561_560.0, "depacum1": 904_561_560.0, "resid1": 8_155_054_040.0},
         "China": {"bruto0": 1_782_588_600.0, "dep0": 198_065_400.0, "pago1": 4_000_000.0, "bruto1": 1_786_588_600.0, "dep1": 178_258_860.0, "depacum1": 178_258_860.0, "resid1": 1_608_329_740.0},
     }
+    # Fix 4 (auditoría R2->R3, hallazgo NUEVO no reportado por el usuario -- detectado al regenerar
+    # R3 con R2 real): el rollforward de "Valor residual/neto" de acá abajo NUNCA se reancla al
+    # Balance REAL de CESIM en ninguna ronda >1 -- sigue su propia depreciación 10% saldo decreciente
+    # (SUPUESTO PROPIO) desde la semilla R1 para SIEMPRE, sin importar cuántas rondas ya jugadas haya
+    # (rondas_reales). Mientras solo R0/R1 eran reales esto era invisible (coincidía con el Balance de
+    # _ENGINE_FINANCIERO, que SÍ usa el dato real desde R2 en adelante -- ver extract_hist_pais() /
+    # hv() ahí). Al extender rondas_reales a R2 (Fase 4), _ENGINE_FINANCIERO empezó a mostrar el
+    # "Activo fijo" REAL de R2 (Balance RDOS) pero esta Sección D siguió devolviendo su propio
+    # residual MODELADO (que ya había acumulado una pequeña deriva de depreciación vs. lo real) -- la
+    # próxima ronda planificada (R3) hereda esa deriva como apertura, y el Balance país deja de cerrar
+    # (Activo ≠ Patrimonio+Pasivo) por exactamente esa diferencia. Se reancla acá: para la ÚLTIMA
+    # ronda real (max(rondas_reales), si es >=2), "Valor residual/neto (cierre)" se pisa con el dato
+    # real de esa misma ronda (mismo Balance que ya usa _ENGINE_FINANCIERO) -- así la ronda
+    # planificada siguiente arranca del mismo número en los dos motores. "Valor bruto" y
+    # "Depreciación acumulada (cierre)" de esa ronda quedan con su valor MODELADO (no hay Balance
+    # RDOS que los desagregue así) -- quedan como memo informativo, ya no suman exactamente al
+    # residual reanclado en esa ronda puntual (a partir de la ronda siguiente vuelven a ser
+    # consistentes entre sí, porque el rollforward parte del residual ya corregido).
+    hist_pais_real = extract_hist_pais(rdos_files) if rdos_files else {}
+    ultima_real_af = max(rondas_reales) if rondas_reales else None
     row_af_bruto = {}
     row_af_depacum = {}
     row_af_resid = {}
@@ -1658,8 +1899,30 @@ def build_engine_produccion_part1(wb, inputs_idx, rondas_reales=frozenset({0, 1}
                 S.apply_cell(ws, row_depacum_ap, 7 + rn, value=f, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
                 f = f"={c}{row_depacum_ap}+{c}{row_dep}-{c}{row_bajadep}"
                 S.apply_cell(ws, row_depacum_ci, 7 + rn, value=f, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-                f = f"={c}{row_bruto_ci}-{c}{row_depacum_ci}"
-                S.apply_cell(ws, row_resid_ci, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                if rn == ultima_real_af and rn in rondas_reales:
+                    # Reancla al Balance REAL de esta misma ronda (ver nota "Fix 4" más arriba) --
+                    # pisa el residual MODELADO con el que ya usa _ENGINE_FINANCIERO para esta ronda,
+                    # para que la ronda planificada siguiente arranque del mismo número en los dos
+                    # motores y el Balance país vuelva a cerrar. "Depreciación acumulada (cierre)"
+                    # se ajusta EN LA MISMA celda-ronda (como plug: bruto_ci − residual_real) para que
+                    # bruto−depacum siga reconciliando exactamente con el residual reanclado -- si no
+                    # se ajustara, la ronda SIGUIENTE heredaría "Depreciación acumulada (apertura)"
+                    # del track viejo (no reanclado) mientras "Valor residual (apertura)" ya vendría
+                    # del nuevo, y el propio Balance de esa ronda siguiente volvería a romper (bug real
+                    # detectado en la primera prueba de este fix: el Balance R3 seguía en ERROR por el
+                    # mismo monto, porque solo se había corregido el residual de R2, no su depreciación
+                    # acumulada -- las dos deben moverse juntas).
+                    v_af_real = (hist_pais_real.get(rn, {}).get(area, {}).get("bal", {}) or {}).get("Activo fijo")
+                    if isinstance(v_af_real, (int, float)):
+                        S.apply_cell(ws, row_resid_ci, 7 + rn, value=v_af_real, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                        f_depacum_plug = f"={c}{row_bruto_ci}-{v_af_real}"
+                        S.apply_cell(ws, row_depacum_ci, 7 + rn, value=f_depacum_plug, kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+                    else:
+                        f = f"={c}{row_bruto_ci}-{c}{row_depacum_ci}"
+                        S.apply_cell(ws, row_resid_ci, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+                else:
+                    f = f"={c}{row_bruto_ci}-{c}{row_depacum_ci}"
+                    S.apply_cell(ws, row_resid_ci, 7 + rn, value=f, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
         r[0] += 1
     return ws, row_idx, r, dict(cap=row_cap, prodtot=row_prodtot, util=row_util, mult=row_mult,
                                   costobasico=row_costobasico, costo_propio=row_costo_propio,
@@ -2032,15 +2295,20 @@ def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None, rdos_files=No
                                   pt=row_pt, costo_tot=row_costo_tot, costo_tot_u=row_costo_tot_u)
 
 
-def build_engine_produccion_part2(ws_prod, ridx_prod, ridx_mkt):
-    """Completa, en _ENGINE_PRODUCCION (Sección C), las celdas 'Ventas (unidades)' de Ronda 2-12 con
-    el link a _ENGINE_MERCADO (Sección C, 'Ventas efectivas VALIDADAS'). R0/R1 ya quedaron con el dato
-    histórico real en build_engine_produccion_part1() y no se tocan."""
+def build_engine_produccion_part2(ws_prod, ridx_prod, ridx_mkt, rondas_reales=frozenset({0, 1})):
+    """Completa, en _ENGINE_PRODUCCION (Sección C), las celdas 'Ventas (unidades)' de las rondas
+    PLANIFICADAS (no en rondas_reales) con el link a _ENGINE_MERCADO (Sección C, 'Ventas efectivas
+    VALIDADAS'). R0/R1 y cualquier otra ronda con RDOS real (ej. R2, Fix 1 auditoría R3) ya
+    quedaron con el dato histórico real en build_engine_produccion_part1() -- no se tocan, porque
+    la asignación multi-origen modelada de _ENGINE_MERCADO para una ronda que YA se jugó no tiene
+    por qué coincidir unidad a unidad con lo que realmente pasó (logística/competencia reales)."""
     for area in AREAS:
         for tech in TECNOLOGIAS:
             dim = f"{area} / {tech}"
             row_v = ridx_prod[f"C. Disponibilidad||Ventas (unidades)||{dim}"]
             for rn in range(2, 13):
+                if rn in rondas_reales:
+                    continue
                 ref = cref(ENGINE_MKT_SHEET, ridx_mkt[f"C. Asignación||Ventas efectivas VALIDADAS de esta área/tecnología||{dim}"], rn)
                 S.apply_cell(ws_prod, row_v, 7 + rn, value=f"={ref}", kind="link", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=8)
     ws_prod.sheet_state = "hidden"
@@ -2121,6 +2389,8 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, ronda
                        "Ronda). Da 0 hasta cargar los inputs.")
         row_rrhh = put("A. P&L país", "I+D — RRHH (prorrateado por N° de fábricas)", pais, "USD")
         row_lic = put("A. P&L país", "I+D — Licencias (D4, prorrateado)", pais, "USD")
+        row_caradq = put("A. P&L país", "I+D — Características adquiridas externamente (D4, prorrateado)", pais, "USD", "CÁLCULO",
+                          "Iteración post-auditoría R2->R3 (a pedido del equipo: 'comprar licencia es aparte de comprar características, ambas son externas pero la licencia es mucho más cara'). = Σ_tecnología 'Características adquiridas externamente' (01_INPUTS D4) × 'Costo de generar/adquirir característica nueva' (condición de ronda), prorrateado por N° de fábricas igual que Licencias. Costo DISTINTO y ADITIVO a 'I+D — Licencias' -- no lo reemplaza.")
         row_id = put("A. P&L país", "I+D total", pais, "USD")
         row_promo = put("A. P&L país", "Promoción", pais, "USD")
         row_admin = put("A. P&L país", "Administración", pais, "USD")
@@ -2139,7 +2409,7 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, ronda
         row_ben = put("A. P&L país", "Beneficio de la ronda", pais, "USD", "OUTPUT")
         cr.update(dict(mercado=row_mercado, transf=row_transf, ing=row_ing, cogs=row_cogs, imp_cost=row_import,
                        transp=row_transp, nfab=row_nfab, car=row_car, ginv=row_ginv, energia=row_energia, agua=row_agua,
-                       carbono=row_carbono, rrhh=row_rrhh, lic=row_lic, id_tot=row_id,
+                       carbono=row_carbono, rrhh=row_rrhh, lic=row_lic, caradq=row_caradq, id_tot=row_id,
                        promo=row_promo, admin=row_admin, gyc=row_gyc, ebitda=row_ebitda, dep=row_dep, ebit=row_ebit,
                        gfn=row_gfn, ebt=row_ebt, perd_ap=row_perd_ap, base_imp=row_base_imp, perd_ci=row_perd_ci,
                        tasa=row_tasa, imp=row_imp, ben=row_ben))
@@ -2274,7 +2544,8 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, ronda
 
             S.apply_cell(ws, cr["rrhh"], 7 + rn, value=0, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, cr["lic"], 7 + rn, value=0, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-            S.apply_cell(ws, cr["id_tot"], 7 + rn, value=f"={c}{cr['rrhh']}+{c}{cr['lic']}", kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+            S.apply_cell(ws, cr["caradq"], 7 + rn, value=0, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+            S.apply_cell(ws, cr["id_tot"], 7 + rn, value=f"={c}{cr['rrhh']}+{c}{cr['lic']}+{c}{cr['caradq']}", kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
 
             f_promo = "=" + "+".join(f'IF(ISNUMBER({iref(inputs_idx,"D5 · MARKETING","Presupuesto de promoción",f"{pais} / {t}",rn)}),{iref(inputs_idx,"D5 · MARKETING","Presupuesto de promoción",f"{pais} / {t}",rn)},0)' for t in TECNOLOGIAS)
             S.apply_cell(ws, cr["promo"], 7 + rn, value=f_promo, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
@@ -2315,6 +2586,16 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, ronda
             lic_terms = "+".join(f'IF(ISNUMBER({iref(inputs_idx,"D4 · I+D / TECNOLOGÍA","Compra de licencia (USD)",tech,rn)}),{iref(inputs_idx,"D4 · I+D / TECNOLOGÍA","Compra de licencia (USD)",tech,rn)},0)' for tech in TECNOLOGIAS)
             f_lic = f"=IFERROR(({lic_terms})*{c}{row_nfab_this}/({c}{nfab_eeuu}+{c}{nfab_china}),0)"
             S.apply_cell(ws, cr["lic"], 7 + rn, value=f_lic, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
+
+            # Iteración post-auditoría R2->R3: costo DISTINTO de "Compra de licencia" (ver nota de la
+            # fila) -- características adquiridas externamente (D4, cantidad cargada a mano) × costo de
+            # la condición de ronda, ya calculado en 01_INPUTS ("Costo estimado de generar/adquirir
+            # características nuevas"). Antes esa fila era solo referencia informativa y no impactaba acá
+            # -- el equipo confirmó que sí debe impactar el P&L, igual que Licencias pero sumado aparte
+            # (no en la misma celda), porque son dos costos reales distintos.
+            caradq_terms = "+".join(f'IF(ISNUMBER({iref(inputs_idx,"D4 · I+D / TECNOLOGÍA","Costo estimado de generar/adquirir características nuevas (referencia)",tech,rn)}),{iref(inputs_idx,"D4 · I+D / TECNOLOGÍA","Costo estimado de generar/adquirir características nuevas (referencia)",tech,rn)},0)' for tech in TECNOLOGIAS)
+            f_caradq = f"=IFERROR(({caradq_terms})*{c}{row_nfab_this}/({c}{nfab_eeuu}+{c}{nfab_china}),0)"
+            S.apply_cell(ws, cr["caradq"], 7 + rn, value=f_caradq, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             if rn not in (0, 1):
                 pct_bruto = iref(inputs_idx, "B. Condiciones", "% Sueldo bruto sobre costo laboral total (RRHH)", "Global", rn)
                 otros_id = iref(inputs_idx, "B. Condiciones", "Otros costos de I+D por empleado/mes", "Global", rn)
@@ -2339,7 +2620,7 @@ def build_engine_financiero(wb, inputs_idx, prod_out, mkt_out, rdos_files, ronda
                 S.apply_cell(ws, cr["rrhh"], 7 + rn, value=f_rrhh, kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
             else:
                 S.apply_cell(ws, cr["rrhh"], 7 + rn, value=0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=8)
-            S.apply_cell(ws, cr["id_tot"], 7 + rn, value=f"={c}{cr['rrhh']}+{c}{cr['lic']}", kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
+            S.apply_cell(ws, cr["id_tot"], 7 + rn, value=f"={c}{cr['rrhh']}+{c}{cr['lic']}+{c}{cr['caradq']}", kind="output", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, bold=True, size=8)
 
     # ============ Fase 2, cambio 2: PARÁMETROS CxC/CxP CALIBRADOS POR PAÍS (reemplaza el pool blended GLOBAL de v1.2) ============
     section("PARÁMETROS · CxC/CxP calibrados POR PAÍS (Fase 2 — MISMAS 3 tasas por país que usaba MOTOR_VALIDADO_R2/build_engine_e5.py, calibradas contra RDOS Ronda 1 real; ver 01_INPUTS)")
@@ -3253,7 +3534,7 @@ def build_control_modelo(wb, inputs_idx, prod_out, mkt_out, glob, cond, decision
     S.apply_cell(ws, row_hist_r1, 7, value="OK (verificar manualmente contra RDOS si se sospecha edición)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     r += 1
 
-    S.apply_cell(ws, r, 1, value="NOTA: 'Costo de gestión de inventario' (manual cap.5.2) está declarado en 01_INPUTS pero en blanco -- NO se encontró la tasa/monto publicado en los archivos del proyecto. No alimenta ninguna fórmula de este workbook (ni EBITDA ni Balance). Ver Informe de Construcción punto 14 (pendiente, no es una decisión estratégica de CADIZ).", kind="alerta", align=S.ALIGN_LEFT_WRAP, size=8, italic=True)
+    S.apply_cell(ws, r, 1, value="NOTA (actualizada, auditoría R3): 'Costo de gestión de inventario' (manual cap.5.2) SÍ está wired a fórmula real -- ver 'Costos de gestión de inventario' en _ENGINE_FINANCIERO (Fijo×1000 + Variable×Inventario final u.), que lee 01_INPUTS 'B. Condiciones' filas 86-89. Da 0 en cualquier ronda donde esas celdas estén en blanco (Condición de Ronda todavía no cargada) -- revisar visualmente 01_INPUTS antes de dar una ronda por completa.", kind="alerta", align=S.ALIGN_LEFT_WRAP, size=8, italic=True)
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncols)
     ws.row_dimensions[r].height = 30
 
@@ -3957,13 +4238,27 @@ def leer_decisiones_previas(path_excel_anterior, desde_ronda):
     return overrides
 
 
+_ARRASTRE_FORMULA_RE = __import__("re").compile(r"^=[A-Za-z]{1,3}(\d+)$")
+
+
 def aplicar_overrides_inputs(ws_in, row_idx, overrides, desde_ronda):
     """Overlay POST-build_inputs(): escribe los valores literales rescatados por
     leer_decisiones_previas() directamente en las celdas ya construidas de 01_INPUTS, emparejando
     por CLAVE DE TEXTO (bloque||variable||dimension) contra row_idx -- no por número de fila, así que
-    tolera reordenamientos de secciones entre versiones del script. Nunca pisa una celda que ya tenga
-    una fórmula (el motor nuevo, p.ej. RONDA_ACTIVA o un arrastre) -- solo pisa celdas vacías o con
-    otro valor literal. Devuelve (aplicados, sin_match) para loggear en la UI."""
+    tolera reordenamientos de secciones entre versiones del script.
+
+    Nunca pisa una celda con una fórmula "protegida" del motor (p.ej. RONDA_ACTIVA, o cualquier
+    fórmula que combine varias celdas/hojas) -- solo pisa celdas vacías, con otro valor literal, o con
+    una fórmula de ARRASTRE simple (patrón "=<col><misma fila>", el único que genera arrastre_rows()
+    para dejar un default "visible, editable" en las rondas futuras de una decisión). Bug real,
+    corregido (auditoría R2->R3, sesión Mati): antes CUALQUIER fórmula bloqueaba el rescate, así que
+    una decisión tipeada por el usuario en una ronda que build_inputs() había prellenado por arrastre
+    (p.ej. "Características disponibles" R3, prellenada como "=I{fila}" copiando R2) nunca se
+    aplicaba -- el archivo regenerado volvía silenciosamente al default arrastrado, no al valor real
+    que el usuario había cargado. Una fórmula de arrastre SIEMPRE referencia su propia fila (mismo
+    número de fila que la celda que la contiene) -- eso la distingue de cualquier fórmula del motor,
+    que combina filas/hojas distintas y nunca tiene ese patrón. Devuelve (aplicados, sin_match) para
+    loggear en la UI."""
     aplicados, sin_match = 0, 0
     for key, valores_por_ronda in overrides.items():
         row = row_idx.get(key)
@@ -3976,7 +4271,10 @@ def aplicar_overrides_inputs(ws_in, row_idx, overrides, desde_ronda):
             cell = ws_in.cell(row=row, column=7 + rn)
             actual = cell.value
             if isinstance(actual, str) and actual.startswith("="):
-                continue
+                m = _ARRASTRE_FORMULA_RE.match(actual)
+                es_arrastre = bool(m) and int(m.group(1)) == row
+                if not es_arrastre:
+                    continue
             cell.value = val
             aplicados += 1
     return aplicados, sin_match
@@ -4100,9 +4398,9 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
         # build_inputs() arriba, a partir de rondas_reales -- esa es la fuente de verdad, no el
         # archivo anterior.
         n_overrides_aplicados, n_overrides_sin_match = aplicar_overrides_inputs(ws_in, ridx_in, overrides, desde_ronda=n_next)
-    ws_p, ridx_p, r_p, prod_out = build_engine_produccion_part1(wb, ridx_in, rondas_reales=rondas_reales)
+    ws_p, ridx_p, r_p, prod_out = build_engine_produccion_part1(wb, ridx_in, rondas_reales=rondas_reales, rdos_files=rdos_files)
     ws_m, ridx_m, r_m, mkt_out = build_engine_mercado(wb, ridx_in, prod_out, sens_rows=ids.get("sens"), rdos_files=rdos_files, rondas_reales=rondas_reales)
-    build_engine_produccion_part2(ws_p, ridx_p, ridx_m)
+    build_engine_produccion_part2(ws_p, ridx_p, ridx_m, rondas_reales=rondas_reales)
     ws_f, ridx_f, r_f, country_rows, glob, finparams = build_engine_financiero(wb, ridx_in, prod_out, mkt_out, rdos_files, rondas_reales=rondas_reales)
     ws_e = build_estados_proyectados(wb, glob, ridx_in, country_rows, rondas_reales=rondas_reales)
     ws_r, ratios_rows = build_ratios(wb, glob, ridx_in, cond, dec, prod_out, mkt_out, rondas_reales=rondas_reales)
