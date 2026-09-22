@@ -1154,9 +1154,12 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     }
     row_ranking = {}
     # Hotfix regional: lista oculta en columna U (filas 12-14) en vez de cadena separada por comas.
-    S.apply_cell(ws, 12, LIST_COL, value="1", kind="plain", size=8)
-    S.apply_cell(ws, 13, LIST_COL, value="2", kind="plain", size=8)
-    S.apply_cell(ws, 14, LIST_COL, value="3", kind="plain", size=8)
+    # Guardados como NÚMERO (no texto) para que el desplegable inserte siempre un valor numérico en la
+    # celda de decisión -- ver bugfix de _ENGINE_MERCADO más abajo (comparación VALUE(...)=slot) que
+    # además tolera el caso de que el usuario tipee el dígito a mano en vez de usar el desplegable.
+    S.apply_cell(ws, 12, LIST_COL, value=1, kind="plain", size=8)
+    S.apply_cell(ws, 13, LIST_COL, value=2, kind="plain", size=8)
+    S.apply_cell(ws, 14, LIST_COL, value=3, kind="plain", size=8)
     dv_rank = DataValidation(type="list", formula1=f"${list_col_letter}$12:${list_col_letter}$14", allow_blank=True)
     ws.add_data_validation(dv_rank)
     for area in AREAS:
@@ -1809,9 +1812,23 @@ def build_engine_mercado(wb, inputs_idx, prod_out, sens_rows=None, rdos_files=No
                 rank_cell = {m: iref(inputs_idx, "D6 · LOGÍSTICA", "Orden de prioridad de entrega (1=primero, 3=último)", f"Área {area} / {tech} → mercado {m}", rn) for m in MERCADOS}
                 for slot in (1, 2, 3):
                     row_m = slot_mercado_row[(area, tech, slot)]
-                    f_m = (f'=IF({rank_cell["EE.UU."]}="{slot}","EE.UU.",'
-                           f'IF({rank_cell["China"]}="{slot}","China",'
-                           f'IF({rank_cell["Europa"]}="{slot}","Europa","(sin definir)")))')
+                    # BUGFIX (verificado con Cadiz_proyeccion_R3_subir.xlsx): la celda de decisión
+                    # 'Orden de prioridad de entrega' (D6 · LOGÍSTICA) admite que el usuario la cargue
+                    # de dos maneras equivalentes en Excel -- eligiendo del desplegable (lista U12:U14,
+                    # que guarda "1"/"2"/"3" como TEXTO) o tipeando el dígito directamente (Excel lo
+                    # guarda como NÚMERO). Comparar contra el literal de texto "{slot}" sólo detecta el
+                    # primer caso: cuando la celda es numérica, texto="1" es FALSO en Excel/LibreOffice
+                    # (no hay coerción implícita en el operador de igualdad), y la prioridad queda
+                    # "(sin definir)" en forma silenciosa -- sin error, sin aviso. Esto se confirmó
+                    # celda por celda en el archivo de prueba: filas con "1"/"2" numéricos evaluaban
+                    # sin definir, mientras que la única celda guardada como texto '3' sí se reconocía.
+                    # Fix: forzar ambos lados a número con IFERROR(VALUE(...),"") -- VALUE() normaliza
+                    # tanto números como texto numérico al mismo tipo, y una celda vacía o no numérica
+                    # cae a "" (que nunca iguala a un slot 1/2/3), preservando el "(sin definir)" para
+                    # el caso real de decisión no cargada.
+                    f_m = (f'=IF(IFERROR(VALUE({rank_cell["EE.UU."]}),"")={slot},"EE.UU.",'
+                           f'IF(IFERROR(VALUE({rank_cell["China"]}),"")={slot},"China",'
+                           f'IF(IFERROR(VALUE({rank_cell["Europa"]}),"")={slot},"Europa","(sin definir)")))')
                     S.apply_cell(ws, row_m, 7 + rn, value=f_m, kind="calculo", align=S.ALIGN_CENTER, size=7)
 
     other_area = {AREAS[0]: AREAS[1], AREAS[1]: AREAS[0]}
