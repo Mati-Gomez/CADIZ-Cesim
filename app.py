@@ -1587,6 +1587,28 @@ def _seccion_resultado_resumen():
     # duplicaba la palabra ("Evolución — Evolución de..."). Solo el sustantivo acá.
     chart_evolucion(cap_sub, 'Capitalización de Mercado (USD)')
 
+    # Adenda 31 (a pedido del equipo, "Evolución vs. Año 0"): TSR es un dato REAL que CESIM ya
+    # publica acumulado (no hay que sumarlo nosotros) -- Estado='Ratios e indicadores financieros
+    # clave', Metrica='Retorno total acumulado del accionista (p.a.), %'. chart_evolucion() sirve
+    # directo, sin transformar nada.
+    tsr_sub = df[(df['Estado'] == 'Ratios e indicadores financieros clave') &
+                 (df['Metrica'] == 'Retorno total acumulado del accionista (p.a.), %')].copy()
+    chart_evolucion(tsr_sub, 'Retorno Total Acumulado del Accionista (TSR), %')
+
+    # Beneficio Neto Acumulado: a diferencia del TSR, CESIM NO publica un acumulado de esta métrica
+    # -- 'Beneficio de la ronda' es el resultado DE ESA ronda únicamente. La acumulación (suma
+    # corrida Ronda 0 -> ronda en análisis, por equipo) es una transformación nuestra sobre un dato
+    # 100% real, no una proyección ni un supuesto de valor. Sin escalar x1000 pese a que el Estado
+    # dice "miles USD": se mantiene la misma convención que el resto del tablero nativo (que muestra
+    # el valor de cesim_parser tal cual, sin resolver esa etiqueta -- ver Adenda 27 en gap_analysis
+    # para el detalle de esa inconsistencia conocida y por qué acá no se toca).
+    bn_sub = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
+                (df['Metrica'] == 'Beneficio de la ronda')].copy()
+    bn_sub['Valor'] = num(bn_sub['Valor'])
+    bn_sub = bn_sub.dropna(subset=['Valor']).sort_values('Ronda_Orden')
+    bn_sub['Valor'] = bn_sub.groupby('Empresa')['Valor'].cumsum()
+    chart_evolucion(bn_sub, 'Beneficio Neto Acumulado (USD, desde Ronda 0)')
+
 def _seccion_resultado_mercado_macro():
     """Adenda 29/30 (a pedido del equipo): vista de mercado AGREGADA -- a diferencia del resto del
     tablero (que siempre corta por tecnología y/o por equipo), acá se ve la industria entera (7
@@ -1679,6 +1701,83 @@ def _seccion_resultado_mercado_macro():
     st.markdown('###### Evolución Regional')
     pais_macro_sel = st.selectbox('Mercado', paises_macro, key='sel_mercado_macro_pais')
     _chart_dinamica_mercado(_industria_dinamica_mercado([pais_macro_sel]), pais_macro_sel)
+
+    st.divider()
+    st.markdown('###### Dinámica de Mercado por Tecnología')
+    st.caption('Mismo par Demanda Total / Valoración de arriba, pero desagregado por las 2 '
+               'tecnologías con más Demanda del mercado elegido en la ronda actual (máx. 4 líneas: '
+               '2 de volumen, sólidas, + 2 de valorización, punteadas).')
+    COLOR_TECH_MERCADO = dict(zip(_TECNOLOGIAS_GAP, MUTED_SIN_MARRON))
+
+    def _industria_dinamica_mercado_tech(pais_scope):
+        """Igual que _industria_dinamica_mercado(), pero desagregado por tecnología (Seccion) en vez
+        de sumar toda la industria. Ingresos por tecnología (para derivar el precio promedio y de ahí
+        la Valoración) NO existen a nivel 'Cuenta de resultados' (esa hoja ya viene sumada por
+        tecnología) -- CESIM sí los publica en 'Desglose de margen por tec, miles USD, {país}' ->
+        Metrica='Ingresos por ventas', Seccion=tecnología. Verificado contra RDOS reales de CADIZ
+        (R0-R3, EE.UU./China/Europa): sumado sobre tecnologías, reconcilia EXACTO con la cifra de
+        Ingresos a nivel compañía ya validada en _industria_dinamica_mercado (ver esa nota) -- así que
+        es la misma fuente 100% real, ya en USD, solo que sin colapsar la dimensión tecnología."""
+        paises = ['EE.UU.', 'China', 'Europa'] if pais_scope == 'Global' else [pais_scope]
+        ing = df[(df['Estado'].isin([f'Desglose de margen por tec, miles USD, {p}' for p in paises])) &
+                 (df['Metrica'] == 'Ingresos por ventas') & (df['Seccion'].isin(_TECNOLOGIAS_GAP))].copy()
+        ven = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises])) &
+                 (df['Metrica'] == 'Ventas, miles unidades') & (df['Seccion'].isin(_TECNOLOGIAS_GAP))].copy()
+        dem = df[(df['Estado'].isin([f'Informe de mercado, {p}' for p in paises])) &
+                 (df['Metrica'] == 'Demanda, miles unidades') & (df['Seccion'].isin(_TECNOLOGIAS_GAP))].copy()
+        for d_ in (ing, ven, dem):
+            d_['Valor'] = num(d_['Valor'])
+        clave = ['Ronda', 'Ronda_Orden', 'Seccion']
+        ing_r = ing.groupby(clave, as_index=False)['Valor'].sum().rename(columns={'Seccion': 'Tecnología', 'Valor': 'Ingresos'})
+        ven_r = ven.groupby(clave, as_index=False)['Valor'].sum().rename(columns={'Seccion': 'Tecnología', 'Valor': 'Ventas'})
+        dem_r = dem.groupby(clave, as_index=False)['Valor'].sum().rename(columns={'Seccion': 'Tecnología', 'Valor': 'DemandaTotal'})
+        out = ven_r.merge(dem_r, on=['Ronda', 'Ronda_Orden', 'Tecnología'], how='outer') \
+                    .merge(ing_r, on=['Ronda', 'Ronda_Orden', 'Tecnología'], how='outer')
+        # Supuesto de modelo (Categoría 3, NO regla CESIM verificada): CESIM no publica un "precio
+        # promedio" ni una "valoración" de la demanda insatisfecha por tecnología -- se deriva
+        # PrecioPromedio = Ingresos reales / Ventas reales (100% real) y se lo EXTRAPOLA a toda la
+        # Demanda Total (Ventas + insatisfecha) para estimar cuánto "valdría" capturar esa demanda al
+        # precio promedio ya realizado. Asume que la demanda no atendida se hubiera vendido al mismo
+        # precio promedio que la vendida -- una hipótesis razonable pero no un hecho observado.
+        out['PrecioPromedio'] = out['Ingresos'] / out['Ventas'].replace(0, pd.NA)
+        out['Valoracion'] = out['PrecioPromedio'] * out['DemandaTotal']
+        return out.sort_values('Ronda_Orden')
+
+    pais_tech_sel = st.selectbox('Mercado', ['Global'] + paises_macro, key='sel_mercado_tech_dinamica')
+    serie_tech = _industria_dinamica_mercado_tech(pais_tech_sel)
+    ronda_actual_tech = serie_tech[serie_tech['Ronda'] == ronda_snapshot]
+    top2_tech = ronda_actual_tech.dropna(subset=['DemandaTotal']).sort_values('DemandaTotal', ascending=False)['Tecnología'].tolist()[:2]
+    if len(top2_tech) < 2:
+        # si la ronda actual no alcanza a distinguir 2 (ej. una tecnología recién debuta), se completa
+        # con lo que haya tenido demanda en CUALQUIER ronda, mismo criterio de "activa" que en la
+        # Curva de Aprendizaje más arriba.
+        activas = [t for t in _TECNOLOGIAS_GAP if (serie_tech[serie_tech['Tecnología'] == t]['DemandaTotal'].fillna(0) > 0).any()]
+        top2_tech = (top2_tech + [t for t in activas if t not in top2_tech])[:2]
+    if not top2_tech:
+        st.info(f'Sin datos de demanda por tecnología para {pais_tech_sel}.')
+    else:
+        spline = dict(shape='spline', smoothing=1.3)
+        fig_tech = go.Figure()
+        for tech in top2_tech:
+            d_t = serie_tech[serie_tech['Tecnología'] == tech].dropna(subset=['DemandaTotal', 'Valoracion'], how='all')
+            color_t = COLOR_TECH_MERCADO.get(tech, MUTED_SIN_MARRON[0])
+            fig_tech.add_trace(go.Scatter(x=d_t['Ronda'], y=d_t['DemandaTotal'], name=f'{tech} — Demanda Total',
+                                           mode='lines+markers', line=dict(color=color_t, width=3, **spline),
+                                           marker=dict(size=6), yaxis='y1',
+                                           hovertemplate=f'%{{x}} — {tech} Demanda: ' + '%{y:,.0f} mil u.<extra></extra>'))
+            fig_tech.add_trace(go.Scatter(x=d_t['Ronda'], y=d_t['Valoracion'], name=f'{tech} — Valoración',
+                                           mode='lines+markers', line=dict(color=color_t, width=2, dash='dash', **spline),
+                                           marker=dict(size=5), yaxis='y2',
+                                           hovertemplate=f'%{{x}} — {tech} Valoración: ' + '%{y:,.0f} USD<extra></extra>'))
+        fig_tech.update_layout(
+            title=f'Dinámica de Mercado por Tecnología — {pais_tech_sel}',
+            yaxis=dict(title='Miles de unidades', side='left', rangemode='tozero', showgrid=False),
+            yaxis2=dict(title='Valoración, USD', side='right', overlaying='y', showgrid=False, rangemode='tozero'),
+            legend=dict(orientation='h', yanchor='top', y=-0.3, xanchor='center', x=0.5))
+        mostrar(fig_tech)
+        st.caption('Valoración = Precio promedio real (Ingresos ÷ Ventas, por tecnología) × Demanda '
+                   'Total -- supuesto de modelo, no una cifra que CESIM publique: extrapola el precio '
+                   'realmente cobrado a la demanda que hoy queda insatisfecha.')
 
     st.divider()
     st.markdown(f'###### Mix de Demanda por Región — {ronda_snapshot}')
@@ -1983,6 +2082,68 @@ def seccion_operaciones():
                         f'<span class="uso"><span class="pt"></span>Usado</span>'
                         f'<span class="libre"><span class="pt"></span>Libre</span></div></div>',
                         unsafe_allow_html=True)
+
+        st.divider()
+        st.markdown('**Curva de Aprendizaje por Tecnología — Costo Unitario de Fabricación Propia**')
+        st.caption('Costo unitario de fabricación PROPIA (no incluye tercerizada) por combinación '
+                   'activa de país y tecnología, ronda a ronda -- el descenso de la línea refleja el '
+                   'aprendizaje acumulado de producción.')
+        # Adenda 31 (a pedido del equipo): histórico completo (no solo ronda_snapshot) de
+        # 'Informe de costos' -> Seccion='Costo de producción interna por unidad, USD' (mismo campo
+        # real que ya usa gap_analysis.costo_unitario_area para el desvío de Operaciones en Control
+        # de Gestión, acá sin cruzar contra Plan -- es 100% dato real, evolución propia del equipo en
+        # foco). 'Activa' = al menos un valor > 0 en algún punto del histórico (evita graficar una
+        # línea plana en 0 para una combinación país/tecnología donde el equipo nunca produjo).
+        costo_hist = df[(df['Estado'] == 'Informe de costos') &
+                         (df['Seccion'] == 'Costo de producción interna por unidad, USD') &
+                         (df['Subgrupo'].isin(['EE.UU.', 'China'])) &
+                         (df['Empresa'] == empresa_analisis)].copy()
+        costo_hist['Valor'] = num(costo_hist['Valor'])
+        costo_hist = costo_hist.dropna(subset=['Valor']).sort_values('Ronda_Orden')
+        combos_activos = [(area, tech) for (area, tech), g in costo_hist.groupby(['Subgrupo', 'Metrica']) if (g['Valor'] > 0).any()]
+        if not combos_activos:
+            st.info(f'Sin costo de fabricación propia registrado para {empresa_analisis} todavía.')
+        else:
+            color_combo = dict(zip(sorted(combos_activos), MUTED_SIN_MARRON))
+            fig_curva = go.Figure()
+            resumen_reduccion = []
+            for area, tech in sorted(combos_activos):
+                g = costo_hist[(costo_hist['Subgrupo'] == area) & (costo_hist['Metrica'] == tech)].sort_values('Ronda_Orden')
+                rondas, valores = g['Ronda'].tolist(), g['Valor'].tolist()
+                # Texto por punto (no un hovertemplate uniforme): la Ronda 0 necesita un formato SIN
+                # variación (es la base), y el resto necesita el % vs. el punto INMEDIATO anterior de
+                # ESTA misma serie -- ninguno de los dos se puede expresar con un solo hovertemplate
+                # fijo aplicado por igual a todos los puntos.
+                textos = []
+                for i, v in enumerate(valores):
+                    if i == 0:
+                        textos.append(f'{rondas[i]}<br>${v:,.0f} USD/u.')
+                    else:
+                        v_prev = valores[i - 1]
+                        var_pct = ((v - v_prev) / v_prev * 100) if v_prev else None
+                        r_prev_corto = rondas[i - 1].replace('Ronda ', 'R')
+                        if var_pct is None:
+                            textos.append(f'{rondas[i]}<br>${v:,.0f} USD/u.')
+                        else:
+                            textos.append(f'{rondas[i]}<br>${v:,.0f} USD/u. ({var_pct:+.1f}% vs. {r_prev_corto})')
+                fig_curva.add_trace(go.Scatter(x=rondas, y=valores, name=f'{area} — {tech}', mode='lines+markers',
+                                                line=dict(color=color_combo[(area, tech)], width=3),
+                                                marker=dict(size=6), text=textos, hovertemplate='%{text}<extra></extra>'))
+                if len(valores) >= 2 and valores[0]:
+                    # 'desde Ronda 0' es la base LITERAL para las plantas que ya producían en la Ronda
+                    # 0 (ej. Combustión); una tecnología incorporada después (ej. Híbrido, sin datos
+                    # hasta Ronda 1) no tiene punto en Ronda 0 -- se rotula con su propia ronda base
+                    # (rondas[0]) para no atribuirle una reducción "desde Ronda 0" que no existió.
+                    reduccion_acum = (valores[0] - valores[-1]) / valores[0] * 100
+                    resumen_reduccion.append(f'{area} {tech}: {reduccion_acum:+.1f}% desde {rondas[0]}')
+            fig_curva.update_layout(title=f'Curva de Aprendizaje — Costo Unitario de Fabricación Propia ({empresa_analisis})',
+                                     yaxis_title='USD/u.', xaxis_title=None,
+                                     legend=dict(orientation='h', yanchor='top', y=-0.2, xanchor='center', x=0.5))
+            mostrar(fig_curva)
+            if resumen_reduccion:
+                st.caption('Reducción acumulada de costo unitario hasta ' + ronda_snapshot + ': ' +
+                           ' · '.join(resumen_reduccion) + ' (negativo = costo más bajo, aprendizaje; positivo = costo más alto).')
+
         st.divider()
         st.markdown('**Producción: propia vs. contratada, y fábricas**')
         prod = df[(df['Estado'] == 'Detalles de fabricación') &
