@@ -151,6 +151,12 @@ def format_num(val, dec=1):
     try:
         val = float(val)
         dec = max(dec, 1)
+        # Nivel 'B' (miles de millones) agregado a pedido del equipo -- las Valorizaciones de mercado
+        # derivadas de Volumen x Precio (industria completa, USD) caen naturalmente en este rango una
+        # vez corregido el bug de escala x1000 (ver _industria_dinamica_mercado/_tech): sin este nivel,
+        # $74.8B se mostraba truncado como "74,790.4M" en vez de "74.8B". No afecta ningún valor que
+        # ya se mostrara en rango M/k -- solo agrega un piso nuevo arriba de 1000M.
+        if abs(val) >= 1_000_000_000: return f"{val/1_000_000_000:,.1f}B"
         if abs(val) >= 1_000_000: return f"{val/1_000_000:,.1f}M"
         if abs(val) >= 1_000: return f"{val/1_000:,.1f}k"
         return f"{val:,.{dec}f}"
@@ -633,18 +639,21 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
 # (no desde panel_comparativa_plan_real, que es genérico y no conoce estas métricas de grano fino
 # por mercado/tecnología/área) -- y solo tiene sentido con team=CADIZ (son cruces contra SU propia
 # proyección en CADIZ_Gestion_v2.xlsx). ---
-def fila_cg_demanda_estimada(df_all, ronda_snapshot, ronda_num, df_proy):
+def fila_cg_demanda_estimada(df_all, ronda_snapshot, ronda_num, df_proy, mercado_sel):
     """Adenda 30 (a pedido del equipo, Nivel 2 de Control de Gestión): desvío PURO de pronóstico de
     demanda -- Demanda Estimada por CADIZ (D1c·DEMANDA, al planificar) vs. Demanda Real (RDOS), por
     tecnología, ANTES del corte de Ventas efectivas (que ya depende de disponibilidad/capacidad, no
     solo del pronóstico -- eso se ve aparte más abajo, en el waterfall de Ingresos). Barras agrupadas
     (mismo lenguaje visual que fila3_mercado_cuota_objetivo, para no introducir un tercer estilo de
-    gráfico en la misma pantalla)."""
+    gráfico en la misma pantalla).
+    Adenda 33 (consolidación de selectores, a pedido del equipo): 'mercado_sel' ya NO se elige acá --
+    lo elige un único st.selectbox('Mercado', ...) al inicio del Nivel 2 en seccion_control_gestion(),
+    y se pasa como parámetro a esta función y a las otras dos filas del nivel (cuota, ingresos), para
+    que las tres lean siempre el mismo mercado sin selectores redundantes."""
     st.markdown('###### Desvío de Pronóstico — Demanda Estimada vs. Demanda Real')
     st.caption('Antes del corte de Ventas efectivas: acá se ve si CADIZ estimó bien cuánto le iba a '
                'demandar el mercado, más allá de si después pudo o no abastecer toda esa demanda '
                '(eso se ve en el desvío de Ingresos, más abajo).')
-    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_demanda_estimada_mercado')
     datos = demanda_estimada_vs_real(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
     if not datos:
         return st.info(f'Sin datos de demanda estimada/real en {mercado_sel} para {ronda_snapshot}.')
@@ -665,9 +674,10 @@ def fila_cg_demanda_estimada(df_all, ronda_snapshot, ronda_num, df_proy):
     fig.update_layout(yaxis_title='Unidades')
     mostrar(fig)
 
-def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
+def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy, mercado_sel):
+    """Adenda 33 (consolidación de selectores): 'mercado_sel' viene del único selector de Nivel 2 en
+    seccion_control_gestion() -- ver nota en fila_cg_demanda_estimada."""
     st.markdown('###### Análisis de Desvíos de Ingresos — Precio / Volumen / Mix')
-    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_resultados_mercado')
     datos = precio_volumen_mercado(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
     if not datos:
         st.info(f'CADIZ no tiene datos de precio/volumen (Plan o Real) en {mercado_sel} para {ronda_snapshot}.')
@@ -700,9 +710,10 @@ def fila3_resultados_ingresos(df_all, ronda_snapshot, ronda_num, df_proy):
                f'Proyectados. En moneda nativa de {mercado_sel} ({_MONEDA_MERCADO_GAP[mercado_sel]}) — no se '
                'convierte a USD para no asumir un tipo de cambio que el simulador no publica.')
 
-def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy):
+def fila3_mercado_cuota_objetivo(df_all, ronda_snapshot, ronda_num, df_proy, mercado_sel):
+    """Adenda 33 (consolidación de selectores): 'mercado_sel' viene del único selector de Nivel 2 en
+    seccion_control_gestion() -- ver nota en fila_cg_demanda_estimada."""
     st.markdown('###### Cuota de mercado — Proyectado vs. Real, por tecnología')
-    mercado_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_mercado_cuota')
     datos = cuota_mercado_objetivo_vs_real(df_all, df_proy, ronda_snapshot, ronda_num, mercado_sel, team=MY_COMPANY)
     if not datos:
         st.info(f'Sin datos de cuota objetivo/real en {mercado_sel} para {ronda_snapshot}.')
@@ -757,13 +768,16 @@ def _costo_fabricacion_ponderado(datos_area):
     gaps = [{'tech': f['tech'], 'gap': (f['real'] - f['plan']) * f['prod'] / prod_total} for f in filas]
     return {'plan_pond': plan_pond, 'real_pond': real_pond, 'gaps': gaps}
 
-def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy):
+def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy, area_sel):
+    """Adenda 33 (consolidación de selectores, a pedido del equipo): 'area_sel' ya NO se elige acá --
+    lo elige un único st.selectbox('Área de producción', ...) en la cabecera del Nivel 3 en
+    seccion_control_gestion(), y se pasa como parámetro (hoy Nivel 3 tiene una sola fila, pero se deja
+    así para no reintroducir un selector propio si se agrega otra métrica al nivel más adelante)."""
     st.markdown('###### Desvío en Costo Unitario de Fabricación (Proyectado vs. Real)')
     st.caption('Alcance: solo costo de FABRICACIÓN (propia + contratada), ponderado por producción real. '
                'Transporte/aranceles y promoción se reportan por mercado de destino (no por área de origen) '
                'y no están incluidos acá — por eso este desvío no reconcilia el 100% de la Contribución '
                'Marginal unitaria completa.')
-    area_sel = st.selectbox('Área de producción', _AREAS_GAP, key='sel_cg_operaciones_area')
     datos = costo_unitario_area(df_all, df_proy, ronda_snapshot, ronda_num, area_sel, team=MY_COMPANY)
     if not datos:
         return st.info(f'Sin datos de costo unitario de fabricación en {area_sel} para {ronda_snapshot}.')
@@ -1582,6 +1596,9 @@ def _seccion_resultado_resumen():
     else:
         st.info('Sin datos de cuota de mercado por país para esta ronda.')
     st.divider()
+    # Bug de escala (x1000 de "miles USD") corregido de forma CENTRALIZADA en
+    # cesim_parser._corregir_escala_monetaria() (Adenda 32) -- 'Valor' ya llega en USD absoluto acá,
+    # sin necesidad de ningún ajuste puntual en este gráfico.
     cap_sub = df[(df['Estado'] == 'Valuación - Global') & (df['Metrica'] == 'Capitalización de mercado, miles USD')].copy()
     # chart_evolucion() ya antepone "Evolución — " al titulo -- pasarle "Evolución de la ..." de nuevo
     # duplicaba la palabra ("Evolución — Evolución de..."). Solo el sustantivo acá.
@@ -1598,10 +1615,8 @@ def _seccion_resultado_resumen():
     # Beneficio Neto Acumulado: a diferencia del TSR, CESIM NO publica un acumulado de esta métrica
     # -- 'Beneficio de la ronda' es el resultado DE ESA ronda únicamente. La acumulación (suma
     # corrida Ronda 0 -> ronda en análisis, por equipo) es una transformación nuestra sobre un dato
-    # 100% real, no una proyección ni un supuesto de valor. Sin escalar x1000 pese a que el Estado
-    # dice "miles USD": se mantiene la misma convención que el resto del tablero nativo (que muestra
-    # el valor de cesim_parser tal cual, sin resolver esa etiqueta -- ver Adenda 27 en gap_analysis
-    # para el detalle de esa inconsistencia conocida y por qué acá no se toca).
+    # 100% real, no una proyección ni un supuesto de valor. El x1000 de "miles USD" ya lo aplica
+    # cesim_parser (Adenda 32, centralizado) -- 'Valor' llega en USD absoluto, solo falta acumularlo.
     bn_sub = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
                 (df['Metrica'] == 'Beneficio de la ronda')].copy()
     bn_sub['Valor'] = num(bn_sub['Valor'])
@@ -1658,6 +1673,9 @@ def _seccion_resultado_mercado_macro():
                  (df['Metrica'].isin(['de mercados', 'Ingresos por ventas']))].copy()
         val['Valor'] = num(val['Valor'])
         val_r = val.groupby(['Ronda', 'Ronda_Orden'], as_index=False)['Valor'].sum().rename(columns={'Valor': 'Valoracion'})
+        # Bug de escala (x1000 de "miles USD") corregido de forma CENTRALIZADA en
+        # cesim_parser._corregir_escala_monetaria() (Adenda 32) -- 'Valor' ya llega en USD absoluto,
+        # sin necesidad de ningún ajuste puntual acá.
         out = ven_r.merge(dem_r, on=['Ronda', 'Ronda_Orden'], how='outer').merge(val_r, on=['Ronda', 'Ronda_Orden'], how='outer')
         return out.sort_values('Ronda_Orden')
 
@@ -1680,10 +1698,11 @@ def _seccion_resultado_mercado_macro():
                                   mode='lines+markers', line=dict(color=COLOR_METRICA['riesgo'], width=2, dash='dot', **spline),
                                   marker=dict(size=5), yaxis='y1',
                                   hovertemplate='%{x} — Demanda Total: %{y:,.0f} mil u.<extra></extra>'))
+        texto_val = [f'{r} — Valoración: ${format_num(v)} USD' for r, v in zip(d['Ronda'], d['Valoracion'])]
         fig.add_trace(go.Scatter(x=d['Ronda'], y=d['Valoracion'], name='Valoración total de mercado, USD',
                                   mode='lines+markers', line=dict(color=COLOR_METRICA['dinero'], width=3, **spline),
-                                  marker=dict(size=6), yaxis='y2',
-                                  hovertemplate='%{x} — Valoración: %{y:,.0f} USD<extra></extra>'))
+                                  marker=dict(size=6), yaxis='y2', text=texto_val,
+                                  hovertemplate='%{text}<extra></extra>'))
         fig.update_layout(
             title=f'Dinámica de Mercado — {titulo_sufijo}',
             yaxis=dict(title='Miles de unidades', side='left', rangemode='tozero', showgrid=False),
@@ -1739,8 +1758,18 @@ def _seccion_resultado_mercado_macro():
         # Demanda Total (Ventas + insatisfecha) para estimar cuánto "valdría" capturar esa demanda al
         # precio promedio ya realizado. Asume que la demanda no atendida se hubiera vendido al mismo
         # precio promedio que la vendida -- una hipótesis razonable pero no un hecho observado.
-        out['PrecioPromedio'] = out['Ingresos'] / out['Ventas'].replace(0, pd.NA)
-        out['Valoracion'] = out['PrecioPromedio'] * out['DemandaTotal']
+        # Adenda 32 (escala centralizada en cesim_parser): 'Ingresos' (Estado "miles USD") ya llega
+        # absoluto -- pero 'Ventas'/'DemandaTotal' (Estado "miles unidades", NO tocado por esa
+        # corrección, que es solo monetaria) siguen en miles, a propósito, igual que en el resto de la
+        # app. Dividir Ingresos_absoluto / Ventas_miles da un precio 1000x MÁS GRANDE de lo real (el
+        # denominador está 1000x más chico) -- hay que volver a bajarlo /1000 para tener USD/u.
+        # absoluto real (verificado: así coincide en orden de magnitud con 'Precio de venta' nativo de
+        # CESIM, ej. ~$22.500/u. EE.UU. Combustión R2, no ~$22.500.000/u.).
+        out['PrecioPromedio'] = (out['Ingresos'] / out['Ventas'].replace(0, pd.NA)) / 1000.0
+        # Con PrecioPromedio ya absoluto y DemandaTotal todavía en miles, el producto queda en "miles
+        # de USD" -- ese x1000 sigue haciendo falta acá (es el mismo que antes, no lo introduce esta
+        # corrección: viene de multiplicar un precio absoluto por un volumen en miles).
+        out['Valoracion'] = out['PrecioPromedio'] * out['DemandaTotal'] * 1000
         return out.sort_values('Ronda_Orden')
 
     pais_tech_sel = st.selectbox('Mercado', ['Global'] + paises_macro, key='sel_mercado_tech_dinamica')
@@ -1765,10 +1794,11 @@ def _seccion_resultado_mercado_macro():
                                            mode='lines+markers', line=dict(color=color_t, width=3, **spline),
                                            marker=dict(size=6), yaxis='y1',
                                            hovertemplate=f'%{{x}} — {tech} Demanda: ' + '%{y:,.0f} mil u.<extra></extra>'))
+            texto_val_t = [f'{r} — {tech} Valoración: ${format_num(v)} USD' for r, v in zip(d_t['Ronda'], d_t['Valoracion'])]
             fig_tech.add_trace(go.Scatter(x=d_t['Ronda'], y=d_t['Valoracion'], name=f'{tech} — Valoración',
                                            mode='lines+markers', line=dict(color=color_t, width=2, dash='dash', **spline),
-                                           marker=dict(size=5), yaxis='y2',
-                                           hovertemplate=f'%{{x}} — {tech} Valoración: ' + '%{y:,.0f} USD<extra></extra>'))
+                                           marker=dict(size=5), yaxis='y2', text=texto_val_t,
+                                           hovertemplate='%{text}<extra></extra>'))
         fig_tech.update_layout(
             title=f'Dinámica de Mercado por Tecnología — {pais_tech_sel}',
             yaxis=dict(title='Miles de unidades', side='left', rangemode='tozero', showgrid=False),
@@ -1876,7 +1906,10 @@ def seccion_mercado():
         tv = share_tv.merge(margen_tot_tv, on='Empresa').merge(ventas_tv, on='Empresa').dropna()
         tv = tv[tv['VentasMiles'] > 0]
         if not tv.empty:
-            tv['MargenUnitario'] = tv['MargenTotal'] / tv['VentasMiles']  # miles USD / miles u. = USD/u.
+            # Adenda 32 (escala centralizada en cesim_parser): 'MargenTotal' (Estado "miles USD") ya
+            # llega absoluto; 'VentasMiles' (Estado "miles unidades", no monetario) sigue en miles --
+            # hay que llevarlo a unidades absolutas antes de dividir.
+            tv['MargenUnitario'] = tv['MargenTotal'] / (tv['VentasMiles'] * 1000.0)  # USD absoluto / u. absolutas
             fig_tv = px.scatter(tv, x='Share', y='MargenUnitario', color='Empresa', color_discrete_map=COLOR_MAP,
                                  text='Empresa', title=f'Margen Unitario vs. Share — {tech_sel}, {pais_sel}, {ronda_snapshot}')
             fig_tv.update_traces(textposition='top center', showlegend=False, marker=dict(size=14))
@@ -2247,7 +2280,12 @@ def seccion_operaciones():
         tech_ue = c4.selectbox('Tecnología — Margen Unitario', ['Combustión', 'Híbrido', 'Eléctrico', 'Hidrógeno'], key='sel_op_tech')
         margen = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_ue}') & (df['Seccion'] == tech_ue) & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
         mercado = df[(df['Estado'] == f'Informe de mercado, {pais_ue}') & (df['Seccion'] == tech_ue) & (df['Ronda'] == ronda_snapshot)]
+        # Adenda 32 (escala centralizada en cesim_parser): 'margen' (Estado "miles USD") ya llega
+        # absoluto -- 'unidades' (Estado "miles unidades", no monetario) sigue en miles, así que hay
+        # que llevarlo a absoluto ACÁ antes de dividir un $ absoluto por él (si no, el USD/u. de todo
+        # este bloque -- el Waterfall de Margen Unitario -- sale 1000x más grande de lo real).
         unidades = valor_fuzzy(mercado, '^Ventas', empresa=empresa_analisis)
+        unidades = unidades * 1000.0 if unidades else unidades
         def gm(metrica): return valor_de(margen, metrica) or 0.0
         if unidades and unidades > 0:
             p_venta = gm('Ingresos por ventas') / unidades
@@ -2287,6 +2325,7 @@ def seccion_operaciones():
                 mercado_prev = df[(df['Estado'] == f'Informe de mercado, {pais_ue}') & (df['Seccion'] == tech_ue) &
                                    (df['Ronda'] == ronda_prev_ue)]
                 unidades_prev = valor_fuzzy(mercado_prev, '^Ventas', empresa=empresa_analisis)
+                unidades_prev = unidades_prev * 1000.0 if unidades_prev else unidades_prev
                 if unidades_prev and unidades_prev > 0:
                     def gm_prev(metrica): return valor_de(margen_prev, metrica) or 0.0
                     p_venta_prev = gm_prev('Ingresos por ventas') / unidades_prev
@@ -2308,6 +2347,7 @@ def seccion_operaciones():
                 _margen_emp = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {pais_ue}') &
                                   (df['Seccion'] == tech_ue) & (df['Empresa'] == _emp) & (df['Ronda'] == ronda_snapshot)]
                 _unid_emp = valor_fuzzy(mercado, '^Ventas', empresa=_emp)
+                _unid_emp = _unid_emp * 1000.0 if _unid_emp else _unid_emp
                 if _unid_emp and _unid_emp > 0:
                     def _gme(metrica): return valor_de(_margen_emp, metrica) or 0.0
                     _p_venta_e = _gme('Ingresos por ventas') / _unid_emp
@@ -2350,23 +2390,28 @@ def seccion_operaciones():
 
         st.divider()
         st.markdown(f'**Punto de equilibrio — {empresa_analisis}, {ronda_snapshot}**')
-        cm_total_miles = 0.0
+        # Adenda 32 (escala centralizada en cesim_parser): 'Margen de contribución' (Estado "miles
+        # USD") y los 3 componentes de costos fijos (Estado "Cuenta de resultados, miles USD, Global")
+        # ya llegan absolutos -- solo 'Ventas, miles unidades' sigue en miles (es un Estado de
+        # unidades, no monetario, no lo toca esa corrección), así que sigue siendo el único x1000
+        # que hace falta acá.
+        cm_total = 0.0
         vol_total_miles = 0.0
         for mercado_be in ['EE.UU.', 'China', 'Europa']:
             margen_be = df[(df['Estado'] == f'Desglose de margen por tec, miles USD, {mercado_be}') &
                            (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot) &
                            (df['Metrica'] == 'Margen de contribución')].copy()
-            cm_total_miles += num(margen_be['Valor']).sum()
+            cm_total += num(margen_be['Valor']).sum()
             ventas_be = df[(df['Estado'] == f'Informe de mercado, {mercado_be}') & (df['Empresa'] == empresa_analisis) &
                           (df['Ronda'] == ronda_snapshot) & (df['Metrica'] == 'Ventas, miles unidades')].copy()
             vol_total_miles += num(ventas_be['Valor']).sum()
         pl_be = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Empresa'] == empresa_analisis) & (df['Ronda'] == ronda_snapshot)]
         def gbe(metrica): return valor_de(pl_be, metrica) or 0.0
-        costos_fijos_miles = gbe('Depreciación de Activos Fijos') + gbe('I+D') + gbe('Administración')
-        if vol_total_miles > 0 and cm_total_miles:
-            cm_unitaria = cm_total_miles / vol_total_miles  # miles USD / miles u. = USD/u. -- la escala se cancela
-            volumen_real = vol_total_miles * 1000.0
-            volumen_equilibrio = (costos_fijos_miles * 1000.0) / cm_unitaria if cm_unitaria else None
+        costos_fijos = gbe('Depreciación de Activos Fijos') + gbe('I+D') + gbe('Administración')
+        if vol_total_miles > 0 and cm_total:
+            volumen_real = vol_total_miles * 1000.0  # "miles unidades" -> unidades absolutas
+            cm_unitaria = cm_total / volumen_real  # USD absoluto / unidades absolutas = USD/u.
+            volumen_equilibrio = (costos_fijos / cm_unitaria) if cm_unitaria else None
             if volumen_equilibrio is not None and volumen_equilibrio > 0:
                 chart_bullet(f'Punto de Equilibrio — {empresa_analisis}, {ronda_snapshot}', volumen_equilibrio, volumen_real,
                              'unidades', nombre_fondo='Volumen de Equilibrio', nombre_frente='Volumen Real Vendido',
@@ -3024,18 +3069,34 @@ def seccion_control_gestion():
 
     st.divider()
     st.markdown('#### Nivel 2 — Desvío Comercial e Ingresos')
-    # Adenda 30 (a pedido del equipo): se agrega el desvío de pronóstico de demanda (Estimada vs.
-    # Real) COMO PRIMER gráfico del nivel -- es lo más upstream del embudo comercial (antes de que la
-    # demanda se traduzca en Ventas efectivas, sujeta a disponibilidad/capacidad).
-    fila_cg_demanda_estimada(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
+    # Adenda 33 (a pedido del equipo, reordenamiento narrativo + consolidación de selectores):
+    # el orden estricto de lectura pasa a ser Físico/Volumen -> Posicionamiento relativo -> Impacto
+    # financiero final, es decir: 1) Demanda Estimada vs. Real, 2) Cuota de mercado Proyectado vs.
+    # Real, 3) Análisis de Desvíos de Ingresos (Waterfall) -- antes el waterfall de Ingresos iba en
+    # el medio, cortando la lectura comercial entre la demanda y la cuota. Un único selector de
+    # Mercado al inicio del nivel alimenta los tres gráficos (antes cada uno tenía su propio
+    # st.selectbox('Mercado', ...) redundante, con la misma lista _MERCADOS_GAP).
+    # OJO (Categoría 3, decisión de modelización, no pedida explícitamente): el selector NO incluye
+    # "Global" -- _MERCADOS_GAP = ["EE.UU.", "China", "Europa"] son las 3 monedas nativas en las que
+    # CESIM reporta Precio de venta/Ingresos (USD/RMB/EUR, ver MONEDA_MERCADO en gap_analysis.py); el
+    # waterfall de Ingresos ya documentaba (ver su caption) que NO se consolida a una sola moneda para
+    # no asumir un tipo de cambio que el simulador no publica. Si se agrega "Global" al selector, ese
+    # tercer gráfico rompería o necesitaría una tasa de cambio inventada -- se avisa en vez de
+    # agregarlo como si fuera una regla confirmada.
+    mercado_sel_cg = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_cg_nivel2_mercado')
+    fila_cg_demanda_estimada(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg, mercado_sel_cg)
     st.divider()
-    fila3_resultados_ingresos(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
+    fila3_mercado_cuota_objetivo(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg, mercado_sel_cg)
     st.divider()
-    fila3_mercado_cuota_objetivo(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
+    fila3_resultados_ingresos(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg, mercado_sel_cg)
 
     st.divider()
     st.markdown('#### Nivel 3 — Desvío Fabril y de Costos')
-    fila3_operaciones_gap_fabricacion(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg)
+    # Adenda 33: único selector de Área de producción en la cabecera del nivel (antes vivía adentro
+    # de fila3_operaciones_gap_fabricacion); hoy el nivel tiene una sola fila, pero se deja acá para
+    # no reintroducir un selector propio si se agrega otra métrica de esta vista más adelante.
+    area_sel_cg = st.selectbox('Área de producción', _AREAS_GAP, key='sel_cg_nivel3_area')
+    fila3_operaciones_gap_fabricacion(df_all.copy(), ronda_snapshot, ronda_num_cg, df_proy_cg, area_sel_cg)
 # ---------------- Router ----------------
 st.title(seccion)
 if seccion == SECCIONES[0]: seccion_resultado()
