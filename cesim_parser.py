@@ -52,6 +52,16 @@ def detect_round(title: str):
     if m:
         n = int(m.group(1))
         return f'Práctica {n}', 'Práctica', n, n - N_PRACTICE_ROUNDS
+    # Bug real verificado (no un supuesto): el RDOS oficial de la Ronda 0 de CADIZ titula la hoja
+    # "Resultados, Ronda inicial 0" (confirmado contra el .xls real), no "Ronda 0". La regex genérica
+    # de abajo NO matchea por la palabra "inicial" interpuesta -> sin este caso especial, Ronda 0
+    # quedaba con Tipo_Ronda='Desconocido' y Ronda_Orden=None, y como app.py filtra Tipo_Ronda=='Oficial'
+    # y ordena por Ronda_Orden, Ronda 0 desaparecía SILENCIOSAMENTE de todo el tablero (incluidas
+    # evoluciones ya entregadas, ej. Capitalización de Mercado). Se resuelve ANTES de la regex genérica.
+    m = re.search(r'Ronda\s+inicial\s*(\d+)', title, re.IGNORECASE)
+    if m:
+        n = int(m.group(1))
+        return f'Ronda {n}', 'Oficial', n, n
     m = re.search(r'Ronda\s*(\d+)', title, re.IGNORECASE)
     if m:
         n = int(m.group(1))
