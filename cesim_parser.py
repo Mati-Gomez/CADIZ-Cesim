@@ -135,12 +135,69 @@ def parse_cesim_xls(path_or_buffer) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+# ----------------------------------------------------------------------------------------------
+# Corrección de escala monetaria (x1000 de "miles USD/RMB/EUR") -- CENTRALIZADA acá.
+#
+# Regla CESIM verificada (no un supuesto): el RDOS rotula "miles USD" (o "miles RMB"/"miles EUR")
+# en el nombre del Estado, de la Sección o de la Métrica -- según la hoja -- y el valor de la celda
+# es el crudo EN MILES, no el absoluto. Evidencia ya verificada de forma independiente (bottom-up,
+# 0,003% de diferencia): precio de venta x volumen vendido x tipo de cambio, sumado en las 3 áreas y
+# las 2 tecnologías activas de CADIZ (Ronda 2) = USD 73.716.619.198 contra "Ingresos por ventas"
+# Global publicado (73.714.297,44 "miles USD") x1000 = USD 73.714.297.440,62. Ver el detalle completo
+# (con el historial de idas y vueltas -- Adendas 23 a 27) en gap_analysis.py, docstring de
+# `_to_absoluto()`.
+#
+# Antes de esta corrección, el dataset que devuelve build_historico() traía el valor CRUDO tal cual
+# la celda, y cada consumidor tenía que acordarse de aplicar el x1000 por su cuenta -- lo que llevó a
+# que la corrección quedara DUPLICADA y DISPERSA (gap_analysis.py: `_to_absoluto()` para tipo="usd" y
+# tipo="unidades" de la Comparativa Plan vs. Real, y `flujo_caja_plan_real_global()` a mano para el
+# Flujo de Caja; app.py: parches puntuales en Capitalización de Mercado, Beneficio Neto Acumulado y
+# Dinámica de Mercado agregados en las últimas dos tandas) y a la vez INCOMPLETA (el resto del
+# tablero nativo -- Estado de Resultados, Balance, waterfall de EBITDA, Operaciones, RRHH -- seguía
+# mostrando el valor crudo sin corregir, la "escala híbrida" reportada por el equipo). Se centraliza
+# acá, en el ÚNICO lugar que arma el dataset real, para que CUALQUIER consumidor (app.py y
+# gap_analysis.py por igual) reciba directamente el valor en USD/unidades absolutas -- los parches
+# puntuales que compensaban el crudo se retiran en el mismo cambio (ver Informe de esta refactorización
+# para el detalle de qué se retiró y dónde).
+#
+# Excepción verificada (Categoría: dato real, confirmado por orden de magnitud, no un supuesto):
+# 'Costos totales mensuales por empleado, USD' (Informe de RRHH) vive DENTRO de la Sección "Desglose
+# de los costos, miles USD" -- junto a líneas que sí son agregados (Costos totales, Salarios y costos
+# laborales, etc.) -- pero es un costo POR EMPLEADO, ya absoluto (~USD 10.783/mes/empleado en los RDOS
+# reales de CADIZ; x1000 sería ~USD 10,78 millones/mes/empleado, no plausible). Auditado exhaustivamente
+# contra los RDOS reales de CADIZ R0-R3 (los 7 equipos): es el ÚNICO caso de una métrica por-unidad/
+# por-empleado anidada dentro de un Estado/Sección/Métrica rotulado "miles" -- no hay otros.
+_PATRON_ESCALA_MILES = re.compile(r'miles (?:USD|RMB|EUR)', re.IGNORECASE)
+_EXCEPCIONES_ESCALA_MONETARIA = {'Costos totales mensuales por empleado, USD'}
+
+
+def _corregir_escala_monetaria(df: pd.DataFrame) -> pd.DataFrame:
+    """Aplica el x1000 verificado (ver nota arriba) a toda fila cuyo Estado, Sección o Métrica
+    contenga literalmente "miles USD/RMB/EUR", excepto la única excepción confirmada. No toca
+    unidades ("miles unidades", ya se maneja aparte donde corresponde) ni valores no numéricos
+    (se dejan tal cual, ej. el placeholder '-' de una Valuación no calculada)."""
+    if df.empty:
+        return df
+    texto = (df['Estado'].astype(str) + ' ' + df['Seccion'].astype(str) + ' ' + df['Metrica'].astype(str))
+    necesita_escala = texto.str.contains(_PATRON_ESCALA_MILES, regex=True, na=False)
+    necesita_escala &= ~df['Metrica'].isin(_EXCEPCIONES_ESCALA_MONETARIA)
+    valores = pd.to_numeric(df.loc[necesita_escala, 'Valor'], errors='coerce')
+    idx_numericos = valores.dropna().index
+    df.loc[idx_numericos, 'Valor'] = valores.loc[idx_numericos] * 1000.0
+    return df
+# ----------------------------------------------------------------------------------------------
+
+
 def build_historico(file_paths) -> pd.DataFrame:
     """Parsea una lista de rutas .xls y devuelve el dataset historico consolidado,
     ordenado cronologicamente. Si dos archivos corresponden a la misma Ronda
     (ej. se resubio corregido), se queda con el ULTIMO archivo de esa ronda
     completo (no mezcla filas fila-por-fila entre ambos, evita perder datos
-    legitimos con nombres de metrica repetidos dentro de una misma seccion)."""
+    legitimos con nombres de metrica repetidos dentro de una misma seccion).
+
+    Aplica también la corrección de escala monetaria (x1000 de "miles USD/RMB/EUR", ver nota arriba
+    de _corregir_escala_monetaria) antes de devolver el dataset -- así TODO consumidor (app.py,
+    gap_analysis.py) recibe el valor absoluto ya corregido, sin tener que acordarse de escalarlo."""
     por_ronda = {}  # Ronda -> DataFrame (el ultimo archivo visto para esa ronda gana)
     for p in file_paths:
         frame = parse_cesim_xls(p)
@@ -154,4 +211,5 @@ def build_historico(file_paths) -> pd.DataFrame:
 
     df = pd.concat(por_ronda.values(), ignore_index=True)
     df = df.sort_values(['Ronda_Orden', 'Modulo', 'Estado', 'Seccion', 'Metrica', 'Empresa'])
+    df = _corregir_escala_monetaria(df)
     return df
