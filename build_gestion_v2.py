@@ -483,6 +483,33 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         else:
             S.apply_cell(ws, row, 7 + rn, value=default_new, kind="input", numfmt=numfmt, align=align, size=size, italic=italic)
 
+    def condicion_row(row, rn, key, numfmt=None, align=S.ALIGN_RIGHT):
+        """[Extensión de Fix 1 a Sección B · Condiciones de Ronda] Intenta rescatar, para una
+        CONDICIÓN DE RONDA (no una decisión D1-D8), el valor REAL que el usuario tipeó a mano
+        -- sobreescribiendo el arrastre/blanco por defecto -- en una ronda que YA ES HISTÓRICA.
+        Usa el mismo diccionario `decisiones_historicas` que decision_row(): leer_decisiones_
+        historicas() ya lo captura de forma genérica (no filtra por Tipo, cualquier celda con un
+        valor LITERAL -- no fórmula -- en una ronda histórica entra ahí), así que la única pieza
+        que faltaba era que Sección B la consultara.
+
+        Devuelve True y escribe la celda (estilo 'historico', gris, bloqueada) si encontró algo
+        para rescatar. Devuelve False si no hay nada que rescatar (bootstrap sin archivo previo,
+        ronda que todavía no es histórica, o la condición nunca se editó a mano porque no cambió
+        respecto del arrastre) -- en ese caso el call site debe aplicar su propio default (fórmula
+        de arrastre o blanco/input), exactamente como antes de este fix.
+
+        Bug real, corregido (reportado por el usuario): antes de este fix, build_inputs() SIEMPRE
+        escribía la fórmula de arrastre (o blanco) en las columnas de ronda >= 3 de la Sección B,
+        sin importar si el usuario había tipeado ahí, en su momento, el valor REAL publicado por
+        CESIM para una ronda que ya se jugó -- ese valor real quedaba perdido al regenerar el
+        archivo para la ronda siguiente. Mismo patrón de bug que decision_row() corrige para D1-D8."""
+        if rn in rondas_reales:
+            rescatado = (decisiones_historicas or {}).get(key, {}).get(rn)
+            if rescatado is not None:
+                S.apply_cell(ws, row, 7 + rn, value=rescatado, kind="historico", numfmt=numfmt, align=align, size=9)
+                return True
+        return False
+
     NA_PLAIN = {"kind": "plain"}
 
     # ---------------------------------------------------------------------------------
@@ -635,20 +662,26 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     for mercado in MERCADOS:
         row = put("B. Condiciones", "Crecimiento de mercado esperado (vs. ronda anterior)", mercado, "%", "CONDICIÓN DE RONDA",
                    "Fuente: 'Contexto - Ronda 2.pdf' (China publicada como rango 8-9%; se usa 8,5% como punto medio, documentado).")
+        key = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0, sin ronda anterior)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 2, value=growth_r2[mercado], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Tasa de impuesto corporativo (D7, condición) --
     tasa_hist = {"EE.UU.": {0: 0.22, 1: 0.25}, "China": {0: 0.25, 1: 0.28}, "Europa": {0: 0.21, 1: 0.23}}
     tasa_r2 = {"EE.UU.": 0.22, "China": 0.25, "Europa": 0.21}
     for pais in PAISES:
         row = put("B. Condiciones", "Tasa de impuesto corporativo", pais, "%", "CONDICIÓN DE RONDA", "DATO HISTÓRICO REAL R0/R1 (RDOS); R2 = Condición oficial ('Contexto - Ronda 2.pdf').")
+        key = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value=tasa_hist[pais][0], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 1, value=tasa_hist[pais][1], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=tasa_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- FX --
     fx_hist = {"China (RMB)": {1: 0.1620}, "Europa (EUR)": {1: 1.1460}}
@@ -656,59 +689,77 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     row_fx = {}
     for dim in ("China (RMB)", "Europa (EUR)"):
         row = put("B. Condiciones", "Tipo de cambio (USD por 1 unidad de moneda local)", dim, "USD/u.moneda", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_fx[dim] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=fx_hist[dim][1], kind="historico", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=fx_r2[dim], kind="input", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt='0.0000')
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt='0.0000'):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
 
     # -- Efectivo mínimo --
     row_efmin = put("B. Condiciones", "Efectivo mínimo de fin de ronda", "Todos los países (por país)", "USD", "CONDICIÓN DE RONDA",
                      "REGLA VERIFICADA (manual cap.11): USD 2.000.000/país en R1-R2. Fase 2: el motor de este workbook usa Balance/Caja POR PAÍS -- este valor se aplica directamente a cada país (ya no se poolea ×3, esa simplificación quedó reemplazada).")
+    key_efmin = last_key[0]
     S.apply_cell(ws, row_efmin, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     S.apply_cell(ws, row_efmin, 7 + 1, value=2_000_000.0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_efmin, 7 + 2, value=2_000_000.0, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_efmin, 2, numfmt=S.NUM_MONEY)
+    for rn in range(3, 13):
+        if not condicion_row(row_efmin, rn, key_efmin, numfmt=S.NUM_MONEY):
+            S.apply_cell(ws, row_efmin, 7 + rn, value=f"={col(rn-1)}{row_efmin}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # -- Tasas de interés --
     row_tlp = put("B. Condiciones", "Tasa de interés — deuda a largo plazo", "Casa matriz EE.UU.", "%/ronda", "CONDICIÓN DE RONDA")
+    key_tlp = last_key[0]
     S.apply_cell(ws, row_tlp, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     S.apply_cell(ws, row_tlp, 7 + 1, value=0.08, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_tlp, 7 + 2, value=0.05, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_tlp, 2, numfmt=S.NUM_PCT1)
+    for rn in range(3, 13):
+        if not condicion_row(row_tlp, rn, key_tlp, numfmt=S.NUM_PCT1):
+            S.apply_cell(ws, row_tlp, 7 + rn, value=f"={col(rn-1)}{row_tlp}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     tasa_cp_hist = {"EE.UU.": 0.15, "China": 0.10, "Europa": 0.085}
     tasa_cp_r2 = {"EE.UU.": 0.10, "China": 0.07, "Europa": 0.055}
     row_tcp = {}
     for pais in PAISES:
         row = put("B. Condiciones", "Tasa de interés — deuda a corto plazo", pais, "%/ronda", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_tcp[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=tasa_cp_hist[pais], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=tasa_cp_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     tasa_ef_hist = {"EE.UU.": 0.06, "China": 0.065, "Europa": 0.055}
     tasa_ef_r2 = {"EE.UU.": 0.04, "China": 0.055, "Europa": 0.03}
     row_tef = {}
     for pais in PAISES:
         row = put("B. Condiciones", "Tasa de interés sobre efectivo", pais, "%/ronda", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_tef[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=tasa_ef_hist[pais], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=tasa_ef_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de la característica --
     car_hist = {"EE.UU.": 700.0, "China": 650.0, "Europa": 750.0}
     row_car = {}
     for pais in PAISES:
         row = put("B. Condiciones", "Costo de la característica", pais, "USD/u.", "CONDICIÓN DE RONDA", "Verificado exacto contra RDOS R1 (desglose de margen por tecnología). Es un costo VARIABLE de OFRECER la característica (se carga al costo de venta por unidad vendida, manual cap. 8) -- distinto de generarla o adquirirla (ver las 2 filas siguientes).")
+        key = last_key[0]
         row_car[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=car_hist[pais], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=car_hist[pais], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PRICE)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de adquirir tecnología/característica nueva (Adenda 7 / hotfix README) -- CONDICIÓN
     # DE RONDA (parámetro que publica CESIM en "Parámetros" de "Estimaciones", no un supuesto propio),
@@ -723,6 +774,7 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row = put("B. Condiciones", "Costo de adquirir tecnología nueva", tech, "USD", "CONDICIÓN DE RONDA",
                    "No confirmado contra CESIM todavía (ver Parámetros de Estimaciones). Aplica solo si CADIZ "
                    "incorpora esta tecnología (Combustión/Híbrido ya están habilitadas).")
+        key = last_key[0]
         row_costo_tec_nueva[tech] = row
         if tech in TECH_ACTIVAS:
             for rn in RONDAS:
@@ -731,18 +783,23 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             S.apply_cell(ws, row, 7 + 0, value="n/a (no verificado)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             S.apply_cell(ws, row, 7 + 1, value="n/a (no verificado)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             S.apply_cell(ws, row, 7 + 2, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-            arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+            for rn in range(3, 13):
+                if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_costo_caract_nueva = {}
     for tech in TECNOLOGIAS:
         row = put("B. Condiciones", "Costo de generar/adquirir característica nueva", tech, "USD", "CONDICIÓN DE RONDA",
                    "No confirmado contra CESIM todavía (ver Parámetros de Estimaciones). Cubre tanto la ruta de I+D "
                    "propio como la de compra de licencia (ver D4).")
+        key = last_key[0]
         row_costo_caract_nueva[tech] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (no verificado)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value="n/a (no verificado)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 2, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # -- Administración: fijo / planta / % --
     admin_fijo_hist = {"EE.UU.": 35_000_000.0, "China": 71_000_000.0, "Europa": 20_000_000.0}
@@ -751,69 +808,93 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     for pais in PAISES:
         row = put("B. Condiciones", "Administración — componente fijo", pais, "USD", "CONDICIÓN DE RONDA",
                    "ALERTA (ver 04_CONTROL_MODELO): fórmula lineal fijo+planta×N°fábricas+%ingresos subestima fuerte el real R1 (~3,2x en EE.UU.) — el manual confirma economías de escala por fábrica no capturadas aquí.")
+        key = last_key[0]
         row_admin_fijo[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=admin_fijo_hist[pais], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=admin_fijo_r2[pais], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     admin_planta_hist = {"EE.UU.": 4_000_000.0, "China": 12_000_000.0}
     admin_planta_r2 = {"EE.UU.": 4_000_000.0, "China": 13_000_000.0}
     row_admin_planta = {}
     for area in AREAS:
         row = put("B. Condiciones", "Administración — componente por planta (aplicado linealmente, ver ALERTA)", area, "USD/fábrica", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_admin_planta[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=admin_planta_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=admin_planta_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_admin_pct = {}
     for pais in PAISES:
         row = put("B. Condiciones", "Administración — componente % sobre ingresos", pais, "%", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_admin_pct[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=0.0, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=0.0, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- RRHH: % sueldo bruto, otros costos, contratación, despido --
     row_sueldopct = put("B. Condiciones", "% Sueldo bruto sobre costo laboral total (RRHH)", "Global", "%", "CONDICIÓN DE RONDA", "Verificado exacto contra RDOS R1.")
+    key_sueldopct = last_key[0]
     S.apply_cell(ws, row_sueldopct, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     S.apply_cell(ws, row_sueldopct, 7 + 1, value=0.70, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_sueldopct, 7 + 2, value=0.70, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_sueldopct, 2, numfmt=S.NUM_PCT1)
+    for rn in range(3, 13):
+        if not condicion_row(row_sueldopct, rn, key_sueldopct, numfmt=S.NUM_PCT1):
+            S.apply_cell(ws, row_sueldopct, 7 + rn, value=f"={col(rn-1)}{row_sueldopct}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     row_otrosid = put("B. Condiciones", "Otros costos de I+D por empleado/mes", "Global", "USD/empleado/mes", "CONDICIÓN DE RONDA", "Calibrado contra RDOS R1 con 0,12% de diferencia (aceptado, no forzado).")
+    key_otrosid = last_key[0]
     S.apply_cell(ws, row_otrosid, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     S.apply_cell(ws, row_otrosid, 7 + 1, value=680.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_otrosid, 7 + 2, value=670.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_otrosid, 2, numfmt=S.NUM_PRICE)
+    for rn in range(3, 13):
+        if not condicion_row(row_otrosid, rn, key_otrosid, numfmt=S.NUM_PRICE):
+            S.apply_cell(ws, row_otrosid, 7 + rn, value=f"={col(rn-1)}{row_otrosid}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     row_contrat = put("B. Condiciones", "Costo de contratación por persona", "Global", "USD/persona", "CONDICIÓN DE RONDA")
+    key_contrat = last_key[0]
     S.apply_cell(ws, row_contrat, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
     S.apply_cell(ws, row_contrat, 7 + 1, value=4_100.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_contrat, 7 + 2, value=4_000.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_contrat, 2, numfmt=S.NUM_PRICE)
+    for rn in range(3, 13):
+        if not condicion_row(row_contrat, rn, key_contrat, numfmt=S.NUM_PRICE):
+            S.apply_cell(ws, row_contrat, 7 + rn, value=f"={col(rn-1)}{row_contrat}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     despido_hist = {"tramo 5%-20% de reducción": 18_600.0, "tramo 20%-50% de reducción": 23_600.0, "tramo >50% de reducción": 30_600.0}
     despido_r2 = {"tramo 5%-20% de reducción": 18_400.0, "tramo 20%-50% de reducción": 23_400.0, "tramo >50% de reducción": 30_400.0}
     row_despido = {}
     for tramo in despido_hist:
         row = put("B. Condiciones", "Costo de despido por persona", tramo, "USD/persona", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_despido[tramo] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=despido_hist[tramo], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=despido_r2[tramo], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PRICE)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Valor de referencia de la acción (proxy, PENDIENTE) --
     row_accion = put("B. Condiciones", "Valor de referencia de la acción (proxy para EPS/emisión-recompra)", "Casa matriz EE.UU.", "USD/acción", "NO DETERMINADO",
                       "[NO DETERMINADO] Manual cap.11: la emisión/recompra se valúa 'de acuerdo con la valuación del mercado al inicio de la ronda', no a un valor de libro. PROXY = último precio de mercado real conocido (cierre R1). No es una predicción del algoritmo real de CESIM.")
+    key_accion = last_key[0]
     S.apply_cell(ws, row_accion, 7 + 0, value=33.59236009933182, kind="historico", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_accion, 7 + 1, value=38.65179490691809, kind="historico", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
     S.apply_cell(ws, row_accion, 7 + 2, value=38.65179490691809, kind="input", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
-    arrastre_rows(row_accion, 2, numfmt='0.00')
+    for rn in range(3, 13):
+        if not condicion_row(row_accion, rn, key_accion, numfmt='0.00'):
+            S.apply_cell(ws, row_accion, 7 + rn, value=f"={col(rn-1)}{row_accion}", kind="calculo", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
 
     # -- Transporte / aranceles --
     PARES = [("EE.UU.", "China"), ("EE.UU.", "Europa"), ("China", "EE.UU."), ("China", "Europa")]
@@ -823,21 +904,27 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     for par in PARES:
         dim = f"{par[0]} → {par[1]}"
         row = put("B. Condiciones", "Costo de transporte por unidad", dim, "USD/u.", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_transp[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=transp_hist[par], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=transp_r2[par], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PRICE)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     row_arancel_esp = {}
     for par in PARES:
         dim = f"{par[0]} → {par[1]}"
         row = put("B. Condiciones", "Arancel específico por unidad", dim, "USD/u.", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_arancel_esp[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=0.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=0.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PRICE)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     arancel_adval_hist = {("EE.UU.", "China"): 0.30, ("EE.UU.", "Europa"): 0.20, ("China", "EE.UU."): 0.30, ("China", "Europa"): 0.20}
     arancel_adval_r2 = {("EE.UU.", "China"): 0.20, ("EE.UU.", "Europa"): 0.10, ("China", "EE.UU."): 0.025, ("China", "Europa"): 0.10}
@@ -846,11 +933,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         dim = f"{par[0]} → {par[1]}"
         row = put("B. Condiciones", "Arancel ad valorem (%)", dim, "%", "CONDICIÓN DE RONDA",
                    "[SIMPLIFICACIÓN, ver README] Base = precio de transferencia únicamente. El manual (cap. 9.1) define la base como precio de transferencia + costos de característica; no modelado por complejidad — carry-over documentado del motor anterior.")
+        key = last_key[0]
         row_arancel_adval[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=arancel_adval_hist[par], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=arancel_adval_r2[par], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_PCT1)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de inversión / precio de venta por fábrica --
     costo_fab_hist = {"EE.UU.": 1_207_500_000.0, "China": 1_057_500_000.0}
@@ -858,20 +948,26 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     row_costo_fab = {}
     for area in AREAS:
         row = put("B. Condiciones", "Costo de inversión por fábrica", area, "USD", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_costo_fab[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=costo_fab_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=costo_fab_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_precio_fab = {}
     for area in AREAS:
         row = put("B. Condiciones", "Precio de venta por fábrica (desinversión)", area, "USD", "CONDICIÓN DE RONDA")
+        key = last_key[0]
         row_precio_fab[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=costo_fab_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 2, value=costo_fab_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        arrastre_rows(row, 2, numfmt=S.NUM_MONEY)
+        for rn in range(3, 13):
+            if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo unitario de producción tercerizada (fuente única: COSTO_TERC_* a nivel módulo) --
     costo_terc_r0, costo_terc_r1, costo_terc_r2 = COSTO_TERC_R0, COSTO_TERC_R1, COSTO_TERC_R2
@@ -881,6 +977,7 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             dim = f"{area} / {tech}"
             row = put("B. Condiciones", "Costo unitario de producción tercerizada", dim, "USD/u.", "NO DETERMINADO / PENDIENTE DE CARGA",
                        "[NO DETERMINADO desde R2] El manual (cap. 5) confirma que este costo varía según el volumen fabricado y se revela recién en la pantalla de decisión — NO es una cifra publicada de antemano en Condiciones. No arrastra: completar manualmente antes de tercerizar. Ver ALERTA bloqueante en 04_CONTROL_MODELO.")
+            key = last_key[0]
             row_costo_terc[(area, tech)] = row
             v0 = costo_terc_r0.get(area, {}).get(tech)
             v1 = costo_terc_r1.get(area, {}).get(tech, v0)
@@ -889,7 +986,8 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             S.apply_cell(ws, row, 7 + 1, value=v1, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
             S.apply_cell(ws, row, 7 + 2, value=v2, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
             for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costos de gestión de inventario (fijo/variable, por país) y parámetros de costo de --
     # sostenibilidad (energía, agua, CO2). Adenda 29 (a pedido explícito del equipo): pasan de
@@ -901,13 +999,17 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     for pais in ["EE.UU.", "China"]:
         rowf = put("B. Condiciones", "Costos fijos de gestión de inventario", pais, "miles USD", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.2 (promedio inventario apertura+cierre). Confirmar monto contra pantalla CESIM antes de cargar.")
+        keyf = last_key[0]
         row_ginv_fijo[pais] = rowf
         rowv = put("B. Condiciones", "Costos variables de gestión de inventario", pais, "USD/unidad", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.2. Confirmar monto contra pantalla CESIM antes de cargar.")
+        keyv = last_key[0]
         row_ginv_var[pais] = rowv
         for rn in RONDAS:
-            S.apply_cell(ws, rowf, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-            S.apply_cell(ws, rowv, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+            if not condicion_row(rowf, rn, keyf, numfmt=S.NUM_MONEY):
+                S.apply_cell(ws, rowf, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+            if not condicion_row(rowv, rn, keyv, numfmt=S.NUM_PRICE):
+                S.apply_cell(ws, rowv, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # Tarifas de energía/agua/carbono, por país productor -- WIRED a Costos de Energía/Agua/Carbono
     # en build_engine_financiero. % de utilización de energía renovable se muda acá (Sección B,
@@ -918,20 +1020,28 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     for area in AREAS:
         row_costo_erenov[area] = put("B. Condiciones", "Costo de la energía renovable", area, "USD/kWh", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.1. Confirmar monto por país antes de cargar.")
+        key_erenov = last_key[0]
         row_costo_efosil[area] = put("B. Condiciones", "Costo de la energía fósil", area, "USD/kWh", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.1. Confirmar monto por país antes de cargar.")
+        key_efosil = last_key[0]
         row_costo_agua[area] = put("B. Condiciones", "Costo del agua", area, "USD/m3", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.1. Confirmar monto por país antes de cargar.")
+        key_agua = last_key[0]
         row_costo_carbono[area] = put("B. Condiciones", "Costo del Carbono", area, "USD/ton", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.1. Confirmar monto por país antes de cargar.")
+        key_carbono = last_key[0]
         row_pct_renov[area] = put("B. Condiciones", "% de utilización de energía renovable (vs. fósil)", area, "%", "CONDICIÓN DE RONDA",
                     "Manual cap. 5.1 ('puede establecer la proporción de su utilización de energía entre renovable y fósil'). "
                     "Confirmar mecánica/pantalla CESIM antes de cargar.")
-        for row in (row_costo_erenov[area], row_costo_efosil[area], row_costo_agua[area], row_costo_carbono[area]):
+        key_pct_renov = last_key[0]
+        for row, key in ((row_costo_erenov[area], key_erenov), (row_costo_efosil[area], key_efosil),
+                          (row_costo_agua[area], key_agua), (row_costo_carbono[area], key_carbono)):
             for rn in RONDAS:
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
+                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
         for rn in RONDAS:
-            S.apply_cell(ws, row_pct_renov[area], 7 + rn, value=None, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            if not condicion_row(row_pct_renov[area], rn, key_pct_renov, numfmt=S.NUM_PCT1):
+                S.apply_cell(ws, row_pct_renov[area], 7 + rn, value=None, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # Factores físicos de consumo (fabricación) por tecnología × país productor -- WIRED a Costos de
     # Energía/Agua/Carbono en build_engine_financiero.
@@ -941,13 +1051,18 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             dim = f"{area} / {tech}"
             row_consumo_kwh[(area, tech)] = put("B. Condiciones", "Consumo de energía (kWh por unidad producida)", dim, "kWh/u.", "CONDICIÓN DE RONDA",
                         "Manual cap. 5.1. No publicado por tecnología -- confirmar antes de cargar.")
+            key_kwh = last_key[0]
             row_consumo_m3[(area, tech)] = put("B. Condiciones", "Consumo de agua (m3 por unidad producida)", dim, "m3/u.", "CONDICIÓN DE RONDA",
                         "Manual cap. 5.1. No publicado por tecnología -- confirmar antes de cargar.")
+            key_m3 = last_key[0]
             row_emision_co2[(area, tech)] = put("B. Condiciones", "Emisión de CO2 (kg por unidad producida)", dim, "kg/u.", "CONDICIÓN DE RONDA",
                         "Manual cap. 5.1. No publicado por tecnología -- confirmar antes de cargar.")
-            for row in (row_consumo_kwh[(area, tech)], row_consumo_m3[(area, tech)], row_emision_co2[(area, tech)]):
+            key_co2 = last_key[0]
+            for row, key in ((row_consumo_kwh[(area, tech)], key_kwh), (row_consumo_m3[(area, tech)], key_m3),
+                              (row_emision_co2[(area, tech)], key_co2)):
                 for rn in RONDAS:
-                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt='#,##0.0000', align=S.ALIGN_RIGHT, size=9)
+                    if not condicion_row(row, rn, key, numfmt='#,##0.0000'):
+                        S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt='#,##0.0000', align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     cond = dict(fx=row_fx, efmin=row_efmin, tlp=row_tlp, tcp=row_tcp, tef=row_tef, car=row_car,
