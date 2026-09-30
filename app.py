@@ -805,24 +805,24 @@ def fila3_operaciones_gap_fabricacion(df_all, ronda_snapshot, ronda_num, df_proy
         orientation='v', measure=['absolute'] + ['relative'] * (len(etapas) - 2) + ['total'],
         x=[e[0] for e in etapas], y=[e[1] for e in etapas],
         text=_texto_cascada([v for _, v in etapas]), textposition='outside',
-        # Adenda 25 (a pedido del equipo): convención universal para TODOS los waterfalls de la
-        # app -- verde = lo que suma (increasing), rojo = lo que resta (decreasing), siempre, sin
-        # excepción por favorable/desfavorable. Antes acá era al revés (ámbar para el costo que
-        # SUBE, verde para el que BAJA) porque se leía como favorable/desfavorable para el costo
-        # -- pero eso rompía la consistencia con el resto de los waterfalls de la app, que es lo
-        # que el equipo pidió priorizar. OJO: como consecuencia, acá una "Desvío X" que aumenta el
-        # costo unitario (malo para CADIZ) se ve en VERDE (porque suma a la barra), y una que lo
-        # reduce (bueno) se ve en ROJO (porque resta) -- es la convención universal pedida, ya no
-        # favorable/desfavorable para esta métrica en particular.
-        increasing={'marker': {'color': COLOR_POSITIVE}}, decreasing={'marker': {'color': COLOR_NEGATIVE}},
+        # EXCEPCIÓN explícita a la convención universal de la Adenda 25 (a pedido del equipo,
+        # confirmado -- ver conversación): para ESTE waterfall puntual (y solo este) se vuelve a
+        # favorable/desfavorable para CADIZ, no "suma/resta" genérico. Motivo: acá lo que "suma"
+        # (increasing) es un desvío que AUMENTA el costo unitario de fabricación -- eso es malo
+        # para CADIZ, así que va en ROJO; lo que "resta" (decreasing) es un desvío que lo REDUCE --
+        # bueno para CADIZ, va en VERDE. El resto de los waterfalls de la app (Ingresos, Flujo de
+        # Caja, etc.) sigue con la convención universal verde=suma/rojo=resta sin cambios.
+        increasing={'marker': {'color': COLOR_NEGATIVE}}, decreasing={'marker': {'color': COLOR_POSITIVE}},
         totals={'marker': {'color': COLOR_CADIZ}}))  # total = "Costo Real" -- identidad CADIZ, no sentimiento
     fig.update_layout(title=f'Costo unitario de fabricación — {area_sel}, {ronda_snapshot}')
     mostrar(fig, ocultar_eje_valores='y')
     st.caption('Cada barra "Desvío {tecnología}" es cuánto empujó esa tecnología el costo unitario ponderado '
                'total, de Proyectado a Real (ponderado por su propia producción real) — no el costo de esa '
-               'tecnología en sí. Verde = suma al costo (lo aumenta); rojo = resta (lo reduce) — convención '
-               'universal de color de la app, no indica si es favorable o no para CADIZ. % entre paréntesis = '
-               'sobre el Costo Proyectado. Costo Proyectado + todos los desvíos = Costo Real, exacto.')
+               'tecnología en sí. Rojo = aumenta el costo (desfavorable para CADIZ); verde = lo reduce '
+               '(favorable) — única excepción a la convención de color del resto de la app (ver otros '
+               'waterfalls), porque acá "suma/resta" y "favorable/desfavorable" van en sentido contrario. '
+               '% entre paréntesis = sobre el Costo Proyectado. Costo Proyectado + todos los desvíos = Costo '
+               'Real, exacto.')
 
 def fila3_finanzas_flujo_caja(df_all, ronda_snapshot, ronda_num, df_proy):
     # Adenda 23 (a pedido del equipo): reemplaza las barras agrupadas (Proyectado vs. Real, un grupo
