@@ -392,7 +392,7 @@ def fix_digit_sheet_quoting(path, sheet_names=None):
 # ======================================================================================
 # 01_INPUTS
 # ======================================================================================
-def build_inputs(wb, rondas_reales=frozenset({0, 1})):
+def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None):
     ws = wb.create_sheet(INPUTS_SHEET)
     ws.sheet_view.showGridLines = False
     ncols = 6 + len(RONDAS)
@@ -412,10 +412,15 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     ws.freeze_panes = "G5"
     r = [header_row + 1]
     row_idx = {}
+    last_key = [None]  # última clave "bloque||variable||dimension" escrita por put() -- lo usa
+    # decision_row() más abajo para no tener que retipear bloque/variable/dimension en cada call
+    # site (evita errores de tipeo en la clave usada para rescatar decisiones históricas).
 
     def put(bloque, variable, dimension, unidad, tipo, nota=""):
         rr = r[0]
-        row_idx[f"{bloque}||{variable}||{dimension}"] = rr
+        key = f"{bloque}||{variable}||{dimension}"
+        row_idx[key] = rr
+        last_key[0] = key
         S.apply_cell(ws, rr, 1, value=bloque, kind="calculo", align=S.ALIGN_LEFT, bold=True, size=9)
         S.apply_cell(ws, rr, 2, value=variable, kind="calculo", align=S.ALIGN_LEFT_WRAP, size=9)
         S.apply_cell(ws, rr, 3, value=dimension, kind="calculo", align=S.ALIGN_LEFT, size=9)
@@ -452,6 +457,31 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
         for rn in range(from_round + 1, to_round + 1):
             f = f"={col(rn-1)}{row}"
             S.apply_cell(ws, row, 7 + rn, value=f, kind="calculo", numfmt=numfmt, align=S.ALIGN_RIGHT, size=9)
+
+    def decision_row(row, rn, key, default_new=None, numfmt=None, align=S.ALIGN_RIGHT, size=9, italic=False):
+        """[Fix 1, rescate/bloqueo de decisiones históricas] Escribe la celda de ronda `rn` de una
+        fila de DECISIÓN CADIZ, respetando la frontera dinámica REAL/PLAN (rondas_reales, Fase 4):
+        - Si `rn` YA es histórica (rn in rondas_reales, es decir ya tiene RDOS oficial cargado): se
+          restaura el valor REALMENTE decidido en su momento -- rescatado del
+          Cadiz_proyeccion_R{N}.xlsx anterior vía leer_decisiones_historicas() -- y la celda queda
+          con estilo 'historico' (gris, bloqueada visualmente, mismo tratamiento que R0/R1). Si no
+          hay nada rescatado para esa ronda (bootstrap sin archivo previo, o primera vez que esa
+          ronda se genera), cae a `default_new` como fallback -- típicamente el valor bootstrap
+          hardcodeado que ya existía para R2 antes de este fix.
+        - Si `rn` es la ronda a decidir ahora o una futura: la celda queda 'input' (azul, editable,
+          en blanco salvo `default_new`) -- comportamiento sin cambios respecto de antes del fix.
+        Antes de este fix, build_inputs() reescribía SIEMPRE en blanco/editable las columnas de
+        ronda >= 3 (y R2 con un literal hardcodeado fijo) sin importar si esa ronda ya había pasado
+        a ser histórica -- perdiendo la decisión real ya tomada. Eso rompía en silencio cualquier
+        fórmula de rezago que necesite leer hacia atrás una decisión de una ronda ya jugada (caso
+        confirmado: Inversión en fábrica D2, rezago +1/+2 en build_engine_produccion_part1) y
+        generaba una UX confusa (una ronda ya jugada se veía "para completar"). Ver informe del
+        fix para el detalle completo."""
+        if rn in rondas_reales:
+            rescatado = (decisiones_historicas or {}).get(key, {}).get(rn, default_new)
+            S.apply_cell(ws, row, 7 + rn, value=rescatado, kind="historico", numfmt=numfmt, align=align, size=size, italic=italic)
+        else:
+            S.apply_cell(ws, row, 7 + rn, value=default_new, kind="input", numfmt=numfmt, align=align, size=size, italic=italic)
 
     NA_PLAIN = {"kind": "plain"}
 
@@ -541,14 +571,19 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     for rn in RONDAS:
         S.apply_cell(ws, row_ronda, 7 + rn, value=rn, kind="calculo", align=S.ALIGN_CENTER, bold=True, size=9)
     row_escenario = put("A. Identificación", "Escenario", "-", "texto", "DECISIÓN CADIZ", "Nombre del escenario de decisión (p.ej. 'A'). n/a en rondas históricas.")
-    # CORRECCIÓN (mismo hotfix que Estado, ver comentario abajo): R2 pasa a estilo azul "input" igual
-    # que el resto de las rondas PLAN (R3-R12) -- el gris "histórico" quedaba reservado por el propio
-    # encabezado de esta hoja (fila 2) a "dato histórico real (Ronda 0/1, no editar)", y usarlo también
-    # en R2 sugería visualmente que R2 ya tenía RDOS reales cargados, lo cual es falso.
+    key_escenario = last_key[0]
+    # CORRECCIÓN histórica (previa a Fix 1): R2 pasaba a estilo azul "input" igual que el resto de
+    # las rondas PLAN (R3-R12) -- el gris "histórico" quedaba reservado a R0/R1 para no sugerir que
+    # R2 ya tenía RDOS reales. [Fix 1] Esa distinción queda superada por decision_row(): ahora
+    # "historico" (gris) significa, de forma consistente en TODO 01_INPUTS, "ronda ya jugada, valor
+    # restaurado -- no editar", no específicamente "tiene RDOS reales cargados" -- así que R2+
+    # también pasa a 'historico' apenas esa ronda entra en rondas_reales, igual que el resto de las
+    # decisiones D1-D8.
     esc_vals = {0: "n/a (histórico)", 1: "n/a (histórico)", 2: "A"}
-    for rn in RONDAS:
-        v = esc_vals.get(rn)
-        S.apply_cell(ws, row_escenario, 7 + rn, value=v, kind=("plain" if rn < 2 else "input"), align=S.ALIGN_CENTER, size=9, italic=(v is None or rn < 2))
+    S.apply_cell(ws, row_escenario, 7 + 0, value=esc_vals[0], kind="plain", align=S.ALIGN_CENTER, size=9, italic=True)
+    S.apply_cell(ws, row_escenario, 7 + 1, value=esc_vals[1], kind="plain", align=S.ALIGN_CENTER, size=9, italic=True)
+    for rn in range(2, 13):
+        decision_row(row_escenario, rn, key_escenario, default_new=esc_vals.get(rn), align=S.ALIGN_CENTER, size=9)
     row_estado = put("A. Identificación", "Estado", "-", "REAL/PLAN/SIM", "DECISIÓN CADIZ", "REAL = ronda ya jugada, con RDOS oficiales de CESIM cargados. PLAN = decisión cargada/enviada, aún sin RDOS oficiales confirmados. SIM = corrida de sensibilidad, no es el Plan oficial.")
     # CORRECCIÓN (hotfix integración web, confirmado con el usuario): la versión anterior de este
     # script marcaba Estado(R2)="REAL" para señalar que la DECISIÓN de R2 (Escenario A) ya estaba
@@ -978,12 +1013,12 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
                        "estimación de partida porque aún no hay RDOS de R2 publicado -- para R2 este valor es SUPUESTO, no dato real. "
                        "R3-R12: a cargar por el equipo con la mejor estimación disponible en cada ronda.")
             row_mix[(mercado, tech)] = row
+            key_mix = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             mix_r2 = MIX_INDUSTRIA_R1.get((mercado, tech), 0.0)
-            S.apply_cell(ws, row, 7 + 2, value=mix_r2, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            for rn in range(2, 13):
+                decision_row(row, rn, key_mix, default_new=(mix_r2 if rn == 2 else None), numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D1b · DEMANDA — Cuota de mercado objetivo SOBRE LA TECNOLOGÍA")
@@ -1008,12 +1043,12 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
                        "arriba para obtener la 'Cuota Resultante SOBRE EL TOTAL' que efectivamente se carga en CESIM). R2: retro-"
                        "calculado para no alterar la proyección ya decidida — ver nota de la sección.")
             row_cuota[(mercado, tech)] = row
+            key_cuota = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             v2 = cuota_tec_r2.get((mercado, tech), 0.0)
-            S.apply_cell(ws, row, 7 + 2, value=v2, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            for rn in range(2, 13):
+                decision_row(row, rn, key_cuota, default_new=(v2 if rn == 2 else None), numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     # -- Completa RONDA_ACTIVA (reservada en Sección A) ahora que existe row_cuota --
@@ -1062,12 +1097,13 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
             dim = f"{area} / {tech}"
             row = put("D2 · PRODUCCIÓN", "Producción propia", dim, "miles u.", "DECISIÓN CADIZ")
             row_prod_propia[(area, tech)] = row
+            key_pp = last_key[0]
             hv = prod_propia_hist[(area, tech)]
             S.apply_cell(ws, row, 7 + 0, value=hv[0], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
             S.apply_cell(ws, row, 7 + 1, value=hv[1], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-            S.apply_cell(ws, row, 7 + 2, value=prod_propia_r2[(area, tech)], kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+            v2_pp = prod_propia_r2[(area, tech)]
+            for rn in range(2, 13):
+                decision_row(row, rn, key_pp, default_new=(v2_pp if rn == 2 else None), numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
 
     prod_terc_hist = {
         ("EE.UU.", "Combustión"): {0: 250, 1: 480}, ("EE.UU.", "Híbrido"): {0: 0, 1: 200},
@@ -1084,23 +1120,32 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
             row = put("D2 · PRODUCCIÓN", "Producción tercerizada", dim, "miles u.", "DECISIÓN CADIZ",
                        "China/Combustión y China/Híbrido en R2 incluyen +35k/+15k de safety stock (decisión estratégica ya consolidada del equipo, ver histórico R2 del motor anterior).")
             row_prod_terc[(area, tech)] = row
+            key_pt = last_key[0]
             hv = prod_terc_hist[(area, tech)]
             S.apply_cell(ws, row, 7 + 0, value=hv[0], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
             S.apply_cell(ws, row, 7 + 1, value=hv[1], kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-            S.apply_cell(ws, row, 7 + 2, value=prod_terc_r2[(area, tech)], kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+            v2_pt = prod_terc_r2[(area, tech)]
+            for rn in range(2, 13):
+                decision_row(row, rn, key_pt, default_new=(v2_pt if rn == 2 else None), numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
 
     row_inv_fab = {}
     for area in AREAS:
         row = put("D2 · PRODUCCIÓN", "Inversión (+) / Desinversión (−) en fábrica", area, "u. de capacidad", "DECISIÓN CADIZ",
                    "Inversión: capacidad +2 rondas, pago +1 ronda. Desinversión: capacidad −1 ronda, cobro +1 ronda.")
         row_inv_fab[area] = row
+        key_inv_fab = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value=0, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
         S.apply_cell(ws, row, 7 + 1, value=0, kind="historico", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=0, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+        # [Fix 1 -- bug de rezago confirmado y validado por el usuario contra RDOS reales] Antes de
+        # este fix, R2 en adelante SIEMPRE quedaba "input" en blanco (o con el literal 0 hardcodeado
+        # para R2) sin importar si la ronda ya había pasado a ser histórica -- así, al generar p.ej.
+        # el shell de Ronda 4, la inversión en fábrica REALMENTE decidida en Ronda 3 (2 fábricas, dato
+        # del usuario) se perdía de 01_INPUTS, y build_engine_produccion_part1 (rezago +1 pago de
+        # caja / +2 capacidad, Sección A y D) leía 0 en su lugar -- el impacto de caja de la inversión
+        # nunca aparecía en Ronda 4. decision_row() restaura el valor real rescatado del archivo
+        # anterior para toda ronda ya histórica, dejando el rezago funcionando correctamente.
+        for rn in range(2, 13):
+            decision_row(row, rn, key_inv_fab, default_new=(0 if rn == 2 else None), numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D3 · RRHH (decisión única, GLOBAL — manual cap. 6; costo se reparte por N° de fábricas)")
@@ -1109,11 +1154,12 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     for var, unidad in [("Cantidad de personal de I+D", "personas"), ("Salario mensual", "USD"), ("Presupuesto mensual de capacitación", "USD")]:
         row = put("D3 · RRHH", var, "Global", unidad, "DECISIÓN CADIZ")
         row_d3[var] = row
+        key_d3 = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (RDOS no publica headcount por ronda)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value="n/a (RDOS no publica headcount por ronda)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 2, value=d3_r2[var], kind="input", numfmt=S.NUM_MONEY if unidad == "USD" else S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY if unidad == "USD" else S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+        numfmt_d3 = S.NUM_MONEY if unidad == "USD" else S.NUM_UNITS
+        for rn in range(2, 13):
+            decision_row(row, rn, key_d3, default_new=(d3_r2[var] if rn == 2 else None), numfmt=numfmt_d3, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D4 · I+D / TECNOLOGÍA")
@@ -1123,18 +1169,18 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     for tech in TECNOLOGIAS:
         row = put("D4 · I+D / TECNOLOGÍA", "Jornadas propias asignadas a desarrollo", tech, "jornadas", "DECISIÓN CADIZ", "1 ronda de rezago hasta estar disponible (manual cap. 7) — no modelado como gatillo de desbloqueo en este workbook de gestión (ver README).")
         row_jornadas[tech] = row
+        key_jorn = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 2, value=jornadas_r2[tech], kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(2, 13):
+            decision_row(row, rn, key_jorn, default_new=(jornadas_r2[tech] if rn == 2 else None), numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
         row2 = put("D4 · I+D / TECNOLOGÍA", "Compra de licencia (USD)", tech, "USD", "DECISIÓN CADIZ")
         row_licencia[tech] = row2
+        key_lic = last_key[0]
         S.apply_cell(ws, row2, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row2, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row2, 7 + 2, value=0, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row2, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(2, 13):
+            decision_row(row2, rn, key_lic, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # CORRECCIÓN (Adenda 9, reemplaza el enfoque de Adenda 6/7 -- feedback explícito del usuario: "sigue
     # mostrando el total, no el diferencial nuevo que se va a desarrollar... me va a multiplicar por el
@@ -1208,9 +1254,10 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
         row_adq = put("D4 · I+D / TECNOLOGÍA", "Características adquiridas externamente (compra de licencia) esta ronda", tech, "cantidad", "DECISIÓN CADIZ",
                       "De las 'Características nuevas generadas esta ronda' (fila de arriba), cuántas se adquirieron EXTERNAMENTE (vía licencia) -- el resto se asume generado con jornadas propias (sin costo incremental, ya cubierto por el RRHH fijo de D3). Se cruza con 'Costo de generar/adquirir característica nueva' (Sección B) en la fila de abajo. Dato manual del equipo -- el modelo no puede inferir esta separación por sí solo.")
         row_adq_ext[tech] = row_adq
+        key_adq = last_key[0]
         S.apply_cell(ws, row_adq, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         for rn in range(1, 13):
-            S.apply_cell(ws, row_adq, 7 + rn, value=None, kind="input", numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
+            decision_row(row_adq, rn, key_adq, default_new=None, numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
 
         row_cc = put("D4 · I+D / TECNOLOGÍA", "Costo estimado de generar/adquirir características nuevas (referencia)", tech, "USD", "CÁLCULO",
                       "= 'Características adquiridas externamente' (fila de arriba) × 'Costo de generar/adquirir característica nueva' (Sección B, condición de ronda publicada por CESIM). SOLO cuenta la porción adquirida externamente -- la porción generada con jornadas propias no tiene costo incremental acá (manual cap. 7: son vías sustitutas; jornadas ya se paga vía RRHH fijo de D3). Iteración post-auditoría R2->R3 (a pedido del equipo, 'tiene que poder impactar'): a partir de acá SÍ se suma a los Costos y gastos del P&L (_ENGINE_FINANCIERO, fila 'I+D — Características adquiridas externamente'), prorrateada por N° de fábricas igual que 'I+D — Licencias' -- pero en una línea APARTE y ADITIVA, no reemplaza ni se mezcla con 'Compra de licencia (USD)' (el equipo confirmó que son dos costos reales y distintos: la licencia es mucho más cara que una característica individual).")
@@ -1267,21 +1314,26 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
             dim = f"{mercado} / {tech}"
             row_p = put("D5 · MARKETING", "Precio de venta", dim, MONEDA_MERCADO[mercado], "DECISIÓN CADIZ")
             row_precio[(mercado, tech)] = row_p
+            key_p = last_key[0]
             row_pr = put("D5 · MARKETING", "Presupuesto de promoción", dim, "USD", "DECISIÓN CADIZ")
             row_promo[(mercado, tech)] = row_pr
+            key_pr = last_key[0]
             row_e = put("D5 · MARKETING", "Enfoque de estrategia de marketing", dim, "categoría", "DECISIÓN CADIZ")
             row_enfoque[(mercado, tech)] = row_e
+            key_e = last_key[0]
             row_c = put("D5 · MARKETING", "Características ofrecidas (de las disponibles, tope 10)", dim, "cantidad", "DECISIÓN CADIZ",
                         "De las características DISPONIBLES de esta tecnología (stock global, Sección D4), cuántas se ofrecen en ESTE mercado -- manual cap. 8, tope 10. No puede superar el stock disponible de D4 para esa tecnología. Es la cantidad que ya usaba (correctamente) la fórmula de 'Costos de la característica' del P&L -- ver iref más abajo.")
             row_caract[(mercado, tech)] = row_c
+            key_c = last_key[0]
             dv_enfoque.add(f"{col(0)}{row_e}:{col(12)}{row_e}")
-            for rr, valmap, numfmt in ((row_p, precio_r2, S.NUM_PRICE), (row_pr, promo_r2, S.NUM_MONEY), (row_e, enfoque_r2, None), (row_c, caract_of_r2, S.NUM_UNITS)):
+            for rr, key_rr, valmap, numfmt in ((row_p, key_p, precio_r2, S.NUM_PRICE), (row_pr, key_pr, promo_r2, S.NUM_MONEY),
+                                                (row_e, key_e, enfoque_r2, None), (row_c, key_c, caract_of_r2, S.NUM_UNITS)):
                 S.apply_cell(ws, rr, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
                 S.apply_cell(ws, rr, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
                 v2 = valmap.get((mercado, tech))
-                S.apply_cell(ws, rr, 7 + 2, value=v2, kind="input", numfmt=numfmt, align=(S.ALIGN_CENTER if numfmt is None else S.ALIGN_RIGHT), size=9)
-                for rn in range(3, 13):
-                    S.apply_cell(ws, rr, 7 + rn, value=None, kind="input", numfmt=numfmt, align=(S.ALIGN_CENTER if numfmt is None else S.ALIGN_RIGHT), size=9)
+                align_rr = S.ALIGN_CENTER if numfmt is None else S.ALIGN_RIGHT
+                for rn in range(2, 13):
+                    decision_row(rr, rn, key_rr, default_new=(v2 if rn == 2 else None), numfmt=numfmt, align=align_rr, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D6 · LOGÍSTICA — Orden de prioridad de entrega (1=primero, 3=último; ranking completo y sin empates por área/tecnología)")
@@ -1307,13 +1359,13 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
                 dim = f"Área {area} / {tech} → mercado {mercado}"
                 row = put("D6 · LOGÍSTICA", "Orden de prioridad de entrega (1=primero, 3=último)", dim, "ranking", "DECISIÓN CADIZ")
                 row_ranking[(area, tech, mercado)] = row
+                key_rank = last_key[0]
                 dv_rank.add(f"{col(0)}{row}:{col(12)}{row}")
                 S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
                 S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
                 v2 = ranking_r2.get((area, tech, mercado))
-                S.apply_cell(ws, row, 7 + 2, value=v2, kind="input", align=S.ALIGN_CENTER, size=9)
-                for rn in range(3, 13):
-                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", align=S.ALIGN_CENTER, size=9)
+                for rn in range(2, 13):
+                    decision_row(row, rn, key_rank, default_new=(v2 if rn == 2 else None), align=S.ALIGN_CENTER, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D7 · IMPUESTOS / TRANSFER PRICING — Multiplicador de precio de transferencia")
@@ -1323,11 +1375,11 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
         row = put("D7 · IMPUESTOS", "Multiplicador de precio de transferencia", dim, "x costo directo (1.0-2.0)", "DECISIÓN CADIZ",
                    "Rango [1,2] (manual cap. 10). Recomendación del profesor: no planificar, ajustar jugando.")
         row_mult_tp[par] = row
+        key_tp = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 2, value=1.0, kind="input", numfmt=S.NUM_X, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_X, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(2, 13):
+            decision_row(row, rn, key_tp, default_new=(1.0 if rn == 2 else None), numfmt=S.NUM_X, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D8 · FINANZAS (montos ABSOLUTOS en USD — la deuda de corto plazo NO es un input: es automática, ver 04_CONTROL_MODELO)")
@@ -1341,15 +1393,15 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
     for var in d8_simple_r2:
         row = put("D8 · FINANZAS", var, "Casa matriz EE.UU.", "USD", "DECISIÓN CADIZ")
         row_d8[var] = row
+        key_d8 = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         hv1 = {"Dividendos pagados a accionistas (monto)": 2_000_000_000}.get(var)
         if hv1 is not None:
             S.apply_cell(ws, row, 7 + 1, value=hv1, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
         else:
             S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 2, value=d8_simple_r2[var], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(2, 13):
+            decision_row(row, rn, key_d8, default_new=(d8_simple_r2[var] if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_transf = {}
     for origen in PAISES:
@@ -1359,22 +1411,22 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1})):
             dim = f"{origen} → {destino}"
             row = put("D8 · FINANZAS", "Transferencia de fondos entre países (préstamo interno)", dim, "USD", "DECISIÓN CADIZ", "Sin costo/interés (definición cerrada del equipo).")
             row_transf[(origen, destino)] = row
+            key_transf = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
             S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            S.apply_cell(ws, row, 7 + 2, value=0, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
-                S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+            for rn in range(2, 13):
+                decision_row(row, rn, key_transf, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_div_filial = {}
     for filial in ("China", "Europa"):
         row = put("D8 · FINANZAS", "Dividendos pagados a casa matriz (filial)", filial, "USD", "NO DETERMINADO",
                    "[AMBIGÜEDAD NO RESUELTA] No confirmado si es una decisión separada de la transferencia de fondos o el mismo mecanismo clasificado distinto por CESIM. Default 0 hasta confirmar.")
         row_div_filial[filial] = row
+        key_divfil = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
         S.apply_cell(ws, row, 7 + 1, value=0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=0, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
-            S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(2, 13):
+            decision_row(row, rn, key_divfil, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     ws.auto_filter.ref = f"A{header_row}:F{r[0]-1}"
@@ -3761,19 +3813,28 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
 
     # -------------------------------------------------------------------------------------------
     # Cambio 2 (v1.2): generalización de la sección PLAN/SIM CADIZ de R2 (único caso hardcodeado
-    # en v1.1) a un LOOP genérico R2-R12, guardado por el mismo indicador RONDA_ACTIVA que ya usan
-    # 02_ESTADOS_PROYECTADOS/03_RATIOS/04_CONTROL_MODELO desde v1.1. Para una ronda rn con
-    # RONDA_ACTIVA(rn)=FALSO no se escribe NINGUNA fila (ni vacía ni con placeholder): el loop
-    # directamente hace `continue`. R0/R1 (histórico REAL) no pasan por este bloque -- ya fueron
-    # migradas más arriba, sin cambios.
+    # en v1.1) a un LOOP genérico R2-R12. R0/R1 (histórico REAL) no pasan por este bloque -- ya
+    # fueron migradas más arriba, sin cambios.
     #
-    # RONDA_ACTIVA no puede leerse como fórmula ya evaluada en este punto (openpyxl no calcula
-    # fórmulas -- recién se recalculan con recalc.py, al final): _ronda_activa_buildtime() replica
-    # en Python la MISMA condición que la fórmula de 01_INPUTS!'RONDA_ACTIVA (calculado)'
-    # (Estado ∈ {PLAN,SIM,REAL} Y Cuota de mercado objetivo SOBRE LA TECNOLOGÍA EE.UU./Combustión cargada),
-    # leyendo los valores literales que build_inputs() ya escribió en esas celdas. No es una
-    # fórmula nueva ni un criterio distinto -- es el mismo criterio, evaluado en Python porque acá
-    # hace falta decidir en tiempo de construcción si la fila se escribe o no.
+    # [Fix 2 -- bug real, corregido, reportado por el usuario] ANTES: una ronda rn se escribía
+    # (filas físicas en la hoja) solo si _ronda_activa_buildtime(rn) era VERDADERO -- una foto de
+    # RONDA_ACTIVA tomada en Python, en el momento en que se GENERA el shell, ANTES de que el
+    # usuario cargue ninguna decisión. Para la ronda que se está por decidir (n_next), esa foto es
+    # SIEMPRE falsa (recién se genera el archivo, todavía no hay decisiones tipeadas) -- así que
+    # DATA_EXPORT quedaba sin ninguna fila para la ronda en curso, ni vacía ni con fórmula, PARA
+    # SIEMPRE (ni siquiera recalculando con LibreOffice después de cargar las decisiones, porque la
+    # fila nunca llegó a existir en la hoja). Esto es distinto de 02_ESTADOS_PROYECTADOS/03_RATIOS/
+    # 04_CONTROL_MODELO, que SIEMPRE escriben la fila con una fórmula IF(RONDA_ACTIVA,...) VIVA --
+    # por eso esas sí se actualizaban solas al recalcular, y DATA_EXPORT no.
+    # AHORA: la fila SIEMPRE se escribe (con fórmulas vivas) para la ronda que se está decidiendo
+    # esta corrida (rn == n_next_hist) -- las columnas "status" y "value" de plan_row() quedan
+    # envueltas en IF(RONDA_ACTIVA(rn), ..., "") (mismo patrón que 03_RATIOS/04_CONTROL_MODELO), así
+    # que antes de cargar decisiones muestran blanco (sin errores en cascada) y, apenas el usuario
+    # completa 01_INPUTS y se recalcula (LibreOffice o el propio Excel), se completan solas -- sin
+    # necesidad de regenerar el shell de nuevo. Para una ronda MÁS futura todavía (rn > n_next_hist,
+    # que no es la que se está decidiendo esta corrida) se mantiene el comportamiento anterior
+    # (evidencia real de decisiones ya tipeadas de antemano, _ronda_activa_buildtime) para no
+    # ensuciar el archivo con filas de rondas que ni siquiera empezaron a planificarse.
     # -------------------------------------------------------------------------------------------
     estado_row = inputs_idx["A. Identificación||Estado||-"]
     escenario_row = inputs_idx["A. Identificación||Escenario||-"]
@@ -3787,6 +3848,7 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
 
     ws_in = wb[INPUTS_SHEET]
     plan_start = r  # si ninguna ronda R2-R12 está activa, no se escribe nada y r no avanza -> 0 filas
+    n_next_hist = (max(rdos_files) + 1) if rdos_files else 2  # la ronda que se está decidiendo ESTA corrida
 
     for rn in range(2, 13):
         if rn in rdos_files:
@@ -3798,9 +3860,13 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
             # (misma clave ronda/CADIZ/Global/métrica) con fórmulas PLAN en vez del valor REAL ya
             # migrado. Se salta explícitamente.
             continue
-        if not _ronda_activa_buildtime(rn):
+        if rn > n_next_hist and not _ronda_activa_buildtime(rn):
+            # Ronda más futura todavía (ni siquiera es la que se está decidiendo esta corrida) y sin
+            # evidencia de decisiones ya tipeadas de antemano -- no tiene sentido escribirle filas
+            # PLAN todavía (se escribirán cuando sí sea su turno de generarse).
             continue
         estado_ref = f"'{INPUTS_SHEET}'!{col(rn)}{estado_row}"
+        activa_ref = iref(inputs_idx, "A. Identificación", "RONDA_ACTIVA (calculado)", "-", rn)
         estado_val = ws_in.cell(row=estado_row, column=7 + rn).value
         esc_val = ws_in.cell(row=escenario_row, column=7 + rn).value
         esc_label = esc_val if esc_val not in (None, "") else "(sin escenario)"
@@ -3812,11 +3878,15 @@ def build_historico_equipos(wb, rdos_files, glob, ratios_rows, prod_out, mkt_out
             nonlocal r
             S.apply_cell(ws, r, 1, value=rn, kind="plain", align=S.ALIGN_CENTER, size=8)
             S.apply_cell(ws, r, 2, value="CADIZ", kind="plain", align=S.ALIGN_CENTER, size=8)
-            S.apply_cell(ws, r, 3, value=f"={estado_ref}", kind="link", align=S.ALIGN_CENTER, size=8, bold=True)
+            # [Fix 2] status/value envueltos en IF(RONDA_ACTIVA(rn),...,"") -- fórmula VIVA, se
+            # recalcula sola apenas 01_INPUTS tenga las decisiones cargadas (no requiere regenerar
+            # el shell). Antes de cargar decisiones, RONDA_ACTIVA(rn) es FALSO y ambas celdas quedan
+            # en blanco (no en error), igual que ya hacían 03_RATIOS/04_CONTROL_MODELO.
+            S.apply_cell(ws, r, 3, value=f'=IF({activa_ref},{estado_ref},"")', kind="link", align=S.ALIGN_CENTER, size=8, bold=True)
             S.apply_cell(ws, r, 4, value=region, kind="plain", align=S.ALIGN_CENTER, size=8)
             S.apply_cell(ws, r, 5, value=tech, kind="plain", align=S.ALIGN_CENTER, size=8)
             S.apply_cell(ws, r, 6, value=metrica, kind="plain", align=S.ALIGN_LEFT, size=8)
-            S.apply_cell(ws, r, 7, value=f"={ref}", kind="link", numfmt='#,##0.####', align=S.ALIGN_RIGHT, size=8)
+            S.apply_cell(ws, r, 7, value=f'=IF({activa_ref},{ref},"")', kind="link", numfmt='#,##0.####', align=S.ALIGN_RIGHT, size=8)
             S.apply_cell(ws, r, 8, value=unidad, kind="plain", align=S.ALIGN_CENTER, size=8)
             r += 1
 
@@ -4238,6 +4308,55 @@ def leer_decisiones_previas(path_excel_anterior, desde_ronda):
     return overrides
 
 
+def leer_decisiones_historicas(path_excel_anterior, rondas_reales):
+    """[Fix 1] Complemento "hacia atrás" de leer_decisiones_previas() (que rescata columnas >=
+    desde_ronda, "hacia adelante" -- decisiones futuras ya cargadas). Lee el 01_INPUTS de un
+    Cadiz_proyeccion_R{N}.xlsx ANTERIOR (mismo archivo, mismo modo data_only=False, mismo criterio
+    de "valor literal, no fórmula de arrastre") y devuelve {(bloque||variable||dimension): {ronda:
+    valor}} para las columnas de ronda que YA SON HISTÓRICAS en esta corrida (rn in rondas_reales --
+    típicamente {0,1,...,n_real}, con RDOS oficial ya cargado). decision_row() (en build_inputs())
+    usa este diccionario para restaurar la decisión REALMENTE tomada en una ronda que acaba de pasar
+    a ser histórica, en vez de dejarla en blanco/editable como hacía build_inputs() antes de este fix.
+
+    Bug real, corregido (reportado por el usuario, confirmado y validado contra RDOS reales): sin
+    este rescate, al generar el shell de una ronda nueva (p.ej. Ronda 4), la inversión en fábrica
+    REALMENTE decidida en la ronda anterior (p.ej. 2 fábricas en Ronda 3) se perdía de 01_INPUTS --
+    build_inputs() la reescribía en blanco porque nunca se preservaba hacia atrás. Como
+    build_engine_produccion_part1 lee esa celda de 01_INPUTS para calcular el rezago +1 (pago de
+    caja) y +2 (capacidad que entra en operación) de la inversión, el impacto de caja de una
+    inversión real desaparecía silenciosamente del modelo. Devuelve {} si el archivo no existe
+    (bootstrap, nada que restaurar)."""
+    if not path_excel_anterior or not os.path.exists(path_excel_anterior):
+        return {}
+    wb = openpyxl.load_workbook(path_excel_anterior, data_only=False)
+    if INPUTS_SHEET not in wb.sheetnames:
+        return {}
+    ws = wb[INPUTS_SHEET]
+    historicas = {}
+    for row in ws.iter_rows(min_row=5, max_row=ws.max_row):
+        bloque, variable, dimension = row[0].value, row[1].value, row[2].value
+        if not variable:
+            continue
+        key = f"{bloque}||{variable}||{dimension}"
+        if key in _INPUTS_KEYS_FORZADAS:
+            continue
+        vals = {}
+        for rn in sorted(rondas_reales):
+            col_idx = 7 + rn
+            if col_idx - 1 >= len(row):
+                continue
+            v = row[col_idx - 1].value
+            if v is None:
+                continue
+            if isinstance(v, str) and v.startswith("="):
+                continue  # fórmula (arrastre u otra) -- no se rescata como "valor decidido"
+            vals[rn] = v
+        if vals:
+            historicas[key] = vals
+    wb.close()
+    return historicas
+
+
 _ARRASTRE_FORMULA_RE = __import__("re").compile(r"^=[A-Za-z]{1,3}(\d+)$")
 
 
@@ -4372,11 +4491,15 @@ def _recalcular_con_libreoffice(path_xlsx, timeout=120):
 # rondas ya jugadas que se quieran migrar como histórico REAL (R0, R1, R2, R3, ...). Reemplaza a
 # main(), que queda como wrapper de línea de comandos para pruebas locales (ver más abajo).
 # ======================================================================================
-def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, plan_congelado=None):
+def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, plan_congelado=None, decisiones_historicas=None):
     """overrides: dict de leer_decisiones_previas() -- decisiones/condiciones literales rescatadas
     del Cadiz_proyeccion_R{N}.xlsx anterior, para no tener que volver a tipear todo cada ronda.
     plan_congelado: lista de extraer_plan_congelado() -- foto de las filas CADIZ de la última ronda
-    real, tal como estaban proyectadas ANTES de tener el RDOS real, para el dashboard Plan vs. Real."""
+    real, tal como estaban proyectadas ANTES de tener el RDOS real, para el dashboard Plan vs. Real.
+    decisiones_historicas: dict de leer_decisiones_historicas() -- [Fix 1] decisiones REALMENTE
+    tomadas en rondas que ya son históricas (rn in rondas_reales), para restaurarlas y bloquearlas
+    ('historico') en 01_INPUTS en vez de dejarlas en blanco/editable -- ver decision_row() en
+    build_inputs()."""
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -4389,7 +4512,7 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
     rondas_reales = frozenset(rdos_files.keys())
     n_next = (max(rondas_reales) + 1) if rondas_reales else 0
 
-    ws_in, ridx_in, ids, cond, dec = build_inputs(wb, rondas_reales=rondas_reales)
+    ws_in, ridx_in, ids, cond, dec = build_inputs(wb, rondas_reales=rondas_reales, decisiones_historicas=decisiones_historicas)
     n_overrides_aplicados = n_overrides_sin_match = 0
     if overrides:
         # Rescate de decisiones (spec del usuario: "no quiero tener que modificar las rondas futuras
@@ -4487,13 +4610,18 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
     print(f"Filas históricas migradas: {n_hist} | Filas PLAN/SIM CADIZ (rondas activas R2-R12): {n_plan} | Filas DATA_EXPORT: {n_export}")
     if overrides:
         print(f"Rescate de decisiones: {n_overrides_aplicados} valores aplicados, {n_overrides_sin_match} claves sin match en 01_INPUTS")
+    if decisiones_historicas:
+        n_hist_keys = len(decisiones_historicas)
+        n_hist_vals = sum(len(v) for v in decisiones_historicas.values())
+        print(f"[Fix 1] Rescate de decisiones históricas: {n_hist_vals} valores restaurados y bloqueados ('historico') en {n_hist_keys} filas de 01_INPUTS")
     if plan_congelado:
         print(f"Plan Congelado: {n_congeladas} filas inyectadas en DATA_EXPORT")
     print(f"Recálculo LibreOffice: {'OK' if recalc_info['ok'] else 'NO -- ' + str(recalc_info['mensaje'])}")
     info = dict(recalc_info)
     info.update(rondas_reales=sorted(rondas_reales), ronda_a_decidir=n_next,
                 overrides_aplicados=n_overrides_aplicados, overrides_sin_match=n_overrides_sin_match,
-                plan_congelado_filas=n_congeladas)
+                plan_congelado_filas=n_congeladas,
+                decisiones_historicas_restauradas=sum(len(v) for v in decisiones_historicas.values()) if decisiones_historicas else 0)
     return buf, info
 
 
@@ -4549,12 +4677,18 @@ def generar_excel_desde_repo(dir_oficial="data/raw/practicas/oficial", dir_decis
     path_anterior = os.path.join(dir_decisiones, f"Cadiz_proyeccion_R{n_real}.xlsx")
     path_previo = path_mismo_next if os.path.exists(path_mismo_next) else (path_anterior if os.path.exists(path_anterior) else None)
 
-    overrides, plan_congelado = {}, None
+    overrides, plan_congelado, decisiones_historicas = {}, None, {}
     if path_previo:
         overrides = leer_decisiones_previas(path_previo, desde_ronda=n_next)
         plan_congelado = extraer_plan_congelado(path_previo, ronda_actual_a_decidir=n_next)
+        # [Fix 1] Rescata las decisiones REALMENTE tomadas en las rondas que ya son históricas
+        # (0..n_real) desde el mismo archivo anterior usado arriba -- ambos candidatos de
+        # path_previo ya las traen consigo (recursivamente heredadas de su propio archivo anterior,
+        # más lo recién decidido en la ronda que acaba de cerrarse), así que sirve el mismo archivo.
+        decisiones_historicas = leer_decisiones_historicas(path_previo, rondas_reales=frozenset(rdos_files.keys()))
 
-    buf, info = generar_excel(rdos_files, recalcular=recalcular, overrides=overrides, plan_congelado=plan_congelado)
+    buf, info = generar_excel(rdos_files, recalcular=recalcular, overrides=overrides, plan_congelado=plan_congelado,
+                               decisiones_historicas=decisiones_historicas)
     info.update(nombre_salida=nombre_salida, archivo_previo_usado=path_previo,
                 rdos_detectados={rn: os.path.basename(p) for rn, p in sorted(rdos_files.items())})
     return buf, nombre_salida, info
