@@ -392,7 +392,7 @@ def fix_digit_sheet_quoting(path, sheet_names=None):
 # ======================================================================================
 # 01_INPUTS
 # ======================================================================================
-def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None):
+def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None, rdos_files=None, ronda_plan_hasta=None):
     ws = wb.create_sheet(INPUTS_SHEET)
     ws.sheet_view.showGridLines = False
     ncols = 6 + len(RONDAS)
@@ -634,8 +634,17 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     # desde el último Cadiz_proyeccion_R{N}.xlsx sin perder lo ya planificado a futuro.
     n_next_estado = (max(rondas_reales) + 1) if rondas_reales else 0
     estado_vals = {rn: "REAL" for rn in rondas_reales}
-    if n_next_estado <= 12:
-        estado_vals[n_next_estado] = "PLAN"
+    # [Extensión Ronda 1, a pedido del usuario] Caso nuevo: proyectar VARIAS rondas PLAN a la vez (no
+    # solo "la próxima a decidir") -- p.ej. bootstrap desde Ronda 1 con decisiones reales ya cargadas
+    # para R2-R5 (vía overrides). Sin esto, Estado(rn) quedaba en blanco para toda ronda > n_next, y
+    # como RONDA_ACTIVA exige Estado ∈ {PLAN,SIM,REAL}, 02_ESTADOS_PROYECTADOS/03_RATIOS/
+    # 04_CONTROL_MODELO mostraban esas rondas completamente vacías aunque 01_INPUTS tuviera todas las
+    # decisiones cargadas -- confirmado por el usuario (captura de 02_ESTADOS_PROYECTADOS en blanco
+    # desde R2). `ronda_plan_hasta` (opcional, default None = comportamiento sin cambios, una sola
+    # ronda PLAN) marca como "PLAN" todo el rango [n_next_estado, ronda_plan_hasta].
+    limite_plan = max(n_next_estado, ronda_plan_hasta) if ronda_plan_hasta else n_next_estado
+    for rn in range(n_next_estado, min(limite_plan, 12) + 1):
+        estado_vals[rn] = "PLAN"
     for rn in RONDAS:
         v = estado_vals.get(rn)
         S.apply_cell(ws, row_estado, 7 + rn, value=v, kind=("historico" if rn in rondas_reales else "input"), align=S.ALIGN_CENTER, size=9, bold=True)
@@ -664,11 +673,30 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
                    "Fuente: 'Contexto - Ronda 2.pdf' (China publicada como rango 8-9%; se usa 8,5% como punto medio, documentado).")
         key = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0, sin ronda anterior)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 2, value=growth_r2[mercado], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1 -- SUPUESTO PROPIO, NO una condición CESIM verificada] A diferencia del
+        # resto de las condiciones de esta sección, acá NO existe un valor real/publicado para la
+        # transición Ronda 0->1 (nunca se verificó contra CESIM, por eso quedaba "n/a"). Dejarlo como
+        # texto rompe la fórmula de _ENGINE_MERCADO (Tamaño de mercado = anterior × (1+este %)) en
+        # cuanto R1 deja de ser histórica -- 01_INPUTS!H20 pasaba a texto y toda la cadena de mercado
+        # de R1 en adelante daba #VALUE!. Default = 0% (sin crecimiento asumido), EDITABLE y marcado
+        # explícitamente como supuesto propio no verificado -- no se inventa un % de crecimiento real.
+        key_growth_comment = ("[SUPUESTO PROPIO, NO VERIFICADO] No hay condición publicada por CESIM para "
+                               "la transición Ronda 0->Ronda 1 (a diferencia de R2, documentada en 'Contexto "
+                               "- Ronda 2.pdf'). Default 0% = no se asume crecimiento; editar si se consigue "
+                               "mejor información. Necesario para que la proyección de Ronda 1 tenga un "
+                               "Tamaño de mercado numérico (antes era texto 'n/a', válido solo porque R1 era "
+                               "siempre histórica).")
+        defaults_growth = {1: 0.0, 2: growth_r2[mercado]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults_growth:
+                    c = S.apply_cell(ws, row, 7 + rn, value=defaults_growth[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                    if rn == 1:
+                        cm = Comment(key_growth_comment, "CADIZ Gestión")
+                        cm.width, cm.height = 320, 150
+                        c.comment = cm
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Tasa de impuesto corporativo (D7, condición) --
     tasa_hist = {"EE.UU.": {0: 0.22, 1: 0.25}, "China": {0: 0.25, 1: 0.28}, "Europa": {0: 0.21, 1: 0.23}}
@@ -677,11 +705,18 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row = put("B. Condiciones", "Tasa de impuesto corporativo", pais, "%", "CONDICIÓN DE RONDA", "DATO HISTÓRICO REAL R0/R1 (RDOS); R2 = Condición oficial ('Contexto - Ronda 2.pdf').")
         key = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value=tasa_hist[pais][0], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 1, value=tasa_hist[pais][1], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=tasa_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1 a Sección B, a pedido del usuario] R1 y R2 dejan de ser literales fijos
+        # fuera del mecanismo de rescate -- pasan por condicion_row() igual que R3+: si la ronda YA es
+        # histórica (rondas_reales la incluye y hay un valor rescatado de la corrida anterior) se
+        # restaura y bloquea; si todavía no, usa el mismo valor conocido/publicado que siempre tuvo
+        # como default editable (no se inventa ningún número nuevo).
+        defaults = {1: tasa_hist[pais][1], 2: tasa_r2[pais]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- FX --
     fx_hist = {"China (RMB)": {1: 0.1620}, "Europa (EUR)": {1: 1.1460}}
@@ -692,32 +727,41 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_fx[dim] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=fx_hist[dim][1], kind="historico", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=fx_r2[dim], kind="input", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: fx_hist[dim][1], 2: fx_r2[dim]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt='0.0000'):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt='0.0000', align=S.ALIGN_RIGHT, size=9)
 
     # -- Efectivo mínimo --
     row_efmin = put("B. Condiciones", "Efectivo mínimo de fin de ronda", "Todos los países (por país)", "USD", "CONDICIÓN DE RONDA",
                      "REGLA VERIFICADA (manual cap.11): USD 2.000.000/país en R1-R2. Fase 2: el motor de este workbook usa Balance/Caja POR PAÍS -- este valor se aplica directamente a cada país (ya no se poolea ×3, esa simplificación quedó reemplazada).")
     key_efmin = last_key[0]
     S.apply_cell(ws, row_efmin, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-    S.apply_cell(ws, row_efmin, 7 + 1, value=2_000_000.0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_efmin, 7 + 2, value=2_000_000.0, kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_efmin = {1: 2_000_000.0, 2: 2_000_000.0}
+    for rn in range(1, 13):
         if not condicion_row(row_efmin, rn, key_efmin, numfmt=S.NUM_MONEY):
-            S.apply_cell(ws, row_efmin, 7 + rn, value=f"={col(rn-1)}{row_efmin}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_efmin:
+                S.apply_cell(ws, row_efmin, 7 + rn, value=defaults_efmin[rn], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_efmin, 7 + rn, value=f"={col(rn-1)}{row_efmin}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # -- Tasas de interés --
     row_tlp = put("B. Condiciones", "Tasa de interés — deuda a largo plazo", "Casa matriz EE.UU.", "%/ronda", "CONDICIÓN DE RONDA")
     key_tlp = last_key[0]
     S.apply_cell(ws, row_tlp, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-    S.apply_cell(ws, row_tlp, 7 + 1, value=0.08, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_tlp, 7 + 2, value=0.05, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_tlp = {1: 0.08, 2: 0.05}
+    for rn in range(1, 13):
         if not condicion_row(row_tlp, rn, key_tlp, numfmt=S.NUM_PCT1):
-            S.apply_cell(ws, row_tlp, 7 + rn, value=f"={col(rn-1)}{row_tlp}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_tlp:
+                S.apply_cell(ws, row_tlp, 7 + rn, value=defaults_tlp[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_tlp, 7 + rn, value=f"={col(rn-1)}{row_tlp}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     tasa_cp_hist = {"EE.UU.": 0.15, "China": 0.10, "Europa": 0.085}
     tasa_cp_r2 = {"EE.UU.": 0.10, "China": 0.07, "Europa": 0.055}
@@ -727,11 +771,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_tcp[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=tasa_cp_hist[pais], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=tasa_cp_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: tasa_cp_hist[pais], 2: tasa_cp_r2[pais]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     tasa_ef_hist = {"EE.UU.": 0.06, "China": 0.065, "Europa": 0.055}
     tasa_ef_r2 = {"EE.UU.": 0.04, "China": 0.055, "Europa": 0.03}
@@ -741,11 +788,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_tef[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=tasa_ef_hist[pais], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=tasa_ef_r2[pais], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: tasa_ef_hist[pais], 2: tasa_ef_r2[pais]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de la característica --
     car_hist = {"EE.UU.": 700.0, "China": 650.0, "Europa": 750.0}
@@ -755,11 +805,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_car[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=car_hist[pais], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=car_hist[pais], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: car_hist[pais], 2: car_hist[pais]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de adquirir tecnología/característica nueva (Adenda 7 / hotfix README) -- CONDICIÓN
     # DE RONDA (parámetro que publica CESIM en "Parámetros" de "Estimaciones", no un supuesto propio),
@@ -811,11 +864,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_admin_fijo[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=admin_fijo_hist[pais], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=admin_fijo_r2[pais], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: admin_fijo_hist[pais], 2: admin_fijo_r2[pais]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     admin_planta_hist = {"EE.UU.": 4_000_000.0, "China": 12_000_000.0}
     admin_planta_r2 = {"EE.UU.": 4_000_000.0, "China": 13_000_000.0}
@@ -825,11 +881,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_admin_planta[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=admin_planta_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=admin_planta_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: admin_planta_hist[area], 2: admin_planta_r2[area]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_admin_pct = {}
     for pais in PAISES:
@@ -837,39 +896,51 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_admin_pct[pais] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=0.0, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=0.0, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: 0.0, 2: 0.0}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- RRHH: % sueldo bruto, otros costos, contratación, despido --
     row_sueldopct = put("B. Condiciones", "% Sueldo bruto sobre costo laboral total (RRHH)", "Global", "%", "CONDICIÓN DE RONDA", "Verificado exacto contra RDOS R1.")
     key_sueldopct = last_key[0]
     S.apply_cell(ws, row_sueldopct, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-    S.apply_cell(ws, row_sueldopct, 7 + 1, value=0.70, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_sueldopct, 7 + 2, value=0.70, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_sueldopct = {1: 0.70, 2: 0.70}
+    for rn in range(1, 13):
         if not condicion_row(row_sueldopct, rn, key_sueldopct, numfmt=S.NUM_PCT1):
-            S.apply_cell(ws, row_sueldopct, 7 + rn, value=f"={col(rn-1)}{row_sueldopct}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_sueldopct:
+                S.apply_cell(ws, row_sueldopct, 7 + rn, value=defaults_sueldopct[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_sueldopct, 7 + rn, value=f"={col(rn-1)}{row_sueldopct}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     row_otrosid = put("B. Condiciones", "Otros costos de I+D por empleado/mes", "Global", "USD/empleado/mes", "CONDICIÓN DE RONDA", "Calibrado contra RDOS R1 con 0,12% de diferencia (aceptado, no forzado).")
     key_otrosid = last_key[0]
     S.apply_cell(ws, row_otrosid, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-    S.apply_cell(ws, row_otrosid, 7 + 1, value=680.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_otrosid, 7 + 2, value=670.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_otrosid = {1: 680.0, 2: 670.0}
+    for rn in range(1, 13):
         if not condicion_row(row_otrosid, rn, key_otrosid, numfmt=S.NUM_PRICE):
-            S.apply_cell(ws, row_otrosid, 7 + rn, value=f"={col(rn-1)}{row_otrosid}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_otrosid:
+                S.apply_cell(ws, row_otrosid, 7 + rn, value=defaults_otrosid[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_otrosid, 7 + rn, value=f"={col(rn-1)}{row_otrosid}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     row_contrat = put("B. Condiciones", "Costo de contratación por persona", "Global", "USD/persona", "CONDICIÓN DE RONDA")
     key_contrat = last_key[0]
     S.apply_cell(ws, row_contrat, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-    S.apply_cell(ws, row_contrat, 7 + 1, value=4_100.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_contrat, 7 + 2, value=4_000.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_contrat = {1: 4_100.0, 2: 4_000.0}
+    for rn in range(1, 13):
         if not condicion_row(row_contrat, rn, key_contrat, numfmt=S.NUM_PRICE):
-            S.apply_cell(ws, row_contrat, 7 + rn, value=f"={col(rn-1)}{row_contrat}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_contrat:
+                S.apply_cell(ws, row_contrat, 7 + rn, value=defaults_contrat[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_contrat, 7 + rn, value=f"={col(rn-1)}{row_contrat}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     despido_hist = {"tramo 5%-20% de reducción": 18_600.0, "tramo 20%-50% de reducción": 23_600.0, "tramo >50% de reducción": 30_600.0}
     despido_r2 = {"tramo 5%-20% de reducción": 18_400.0, "tramo 20%-50% de reducción": 23_400.0, "tramo >50% de reducción": 30_400.0}
@@ -879,22 +950,28 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_despido[tramo] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=despido_hist[tramo], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=despido_r2[tramo], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: despido_hist[tramo], 2: despido_r2[tramo]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Valor de referencia de la acción (proxy, PENDIENTE) --
     row_accion = put("B. Condiciones", "Valor de referencia de la acción (proxy para EPS/emisión-recompra)", "Casa matriz EE.UU.", "USD/acción", "NO DETERMINADO",
                       "[NO DETERMINADO] Manual cap.11: la emisión/recompra se valúa 'de acuerdo con la valuación del mercado al inicio de la ronda', no a un valor de libro. PROXY = último precio de mercado real conocido (cierre R1). No es una predicción del algoritmo real de CESIM.")
     key_accion = last_key[0]
     S.apply_cell(ws, row_accion, 7 + 0, value=33.59236009933182, kind="historico", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_accion, 7 + 1, value=38.65179490691809, kind="historico", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
-    S.apply_cell(ws, row_accion, 7 + 2, value=38.65179490691809, kind="input", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
-    for rn in range(3, 13):
+    # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+    defaults_accion = {1: 38.65179490691809, 2: 38.65179490691809}
+    for rn in range(1, 13):
         if not condicion_row(row_accion, rn, key_accion, numfmt='0.00'):
-            S.apply_cell(ws, row_accion, 7 + rn, value=f"={col(rn-1)}{row_accion}", kind="calculo", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
+            if rn in defaults_accion:
+                S.apply_cell(ws, row_accion, 7 + rn, value=defaults_accion[rn], kind="input", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row_accion, 7 + rn, value=f"={col(rn-1)}{row_accion}", kind="calculo", numfmt='0.00', align=S.ALIGN_RIGHT, size=9)
 
     # -- Transporte / aranceles --
     PARES = [("EE.UU.", "China"), ("EE.UU.", "Europa"), ("China", "EE.UU."), ("China", "Europa")]
@@ -907,11 +984,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_transp[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=transp_hist[par], kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=transp_r2[par], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: transp_hist[par], 2: transp_r2[par]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     row_arancel_esp = {}
     for par in PARES:
@@ -920,11 +1000,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_arancel_esp[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=0.0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=0.0, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: 0.0, 2: 0.0}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     arancel_adval_hist = {("EE.UU.", "China"): 0.30, ("EE.UU.", "Europa"): 0.20, ("China", "EE.UU."): 0.30, ("China", "Europa"): 0.20}
     arancel_adval_r2 = {("EE.UU.", "China"): 0.20, ("EE.UU.", "Europa"): 0.10, ("China", "EE.UU."): 0.025, ("China", "Europa"): 0.10}
@@ -936,11 +1019,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_arancel_adval[par] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=arancel_adval_hist[par], kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=arancel_adval_r2[par], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: arancel_adval_hist[par], 2: arancel_adval_r2[par]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_PCT1):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo de inversión / precio de venta por fábrica --
     costo_fab_hist = {"EE.UU.": 1_207_500_000.0, "China": 1_057_500_000.0}
@@ -951,11 +1037,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_costo_fab[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=costo_fab_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=costo_fab_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: costo_fab_hist[area], 2: costo_fab_r2[area]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_precio_fab = {}
     for area in AREAS:
@@ -963,11 +1052,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         key = last_key[0]
         row_precio_fab[area] = row
         S.apply_cell(ws, row, 7 + 0, value="n/a (Ronda 0)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=costo_fab_hist[area], kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        S.apply_cell(ws, row, 7 + 2, value=costo_fab_r2[area], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(3, 13):
+        # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio.
+        defaults = {1: costo_fab_hist[area], 2: costo_fab_r2[area]}
+        for rn in range(1, 13):
             if not condicion_row(row, rn, key, numfmt=S.NUM_MONEY):
-                S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                if rn in defaults:
+                    S.apply_cell(ws, row, 7 + rn, value=defaults[rn], kind="input", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+                else:
+                    S.apply_cell(ws, row, 7 + rn, value=f"={col(rn-1)}{row}", kind="calculo", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costo unitario de producción tercerizada (fuente única: COSTO_TERC_* a nivel módulo) --
     costo_terc_r0, costo_terc_r1, costo_terc_r2 = COSTO_TERC_R0, COSTO_TERC_R1, COSTO_TERC_R2
@@ -983,11 +1075,13 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             v1 = costo_terc_r1.get(area, {}).get(tech, v0)
             v2 = costo_terc_r2.get(area, {}).get(tech)
             S.apply_cell(ws, row, 7 + 0, value=v0, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-            S.apply_cell(ws, row, 7 + 1, value=v1, kind="historico", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-            S.apply_cell(ws, row, 7 + 2, value=v2, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
-            for rn in range(3, 13):
+            # [Extensión Ronda 1] ver nota en "Tasa de impuesto corporativo" arriba -- mismo criterio;
+            # acá el fallback cuando no hay nada para rescatar siempre fue blanco/editable (None), no
+            # arrastre, así que R1/R2 usan v1/v2 como default en vez de una fórmula de arrastre.
+            defaults = {1: v1, 2: v2}
+            for rn in range(1, 13):
                 if not condicion_row(row, rn, key, numfmt=S.NUM_PRICE):
-                    S.apply_cell(ws, row, 7 + rn, value=None, kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
+                    S.apply_cell(ws, row, 7 + rn, value=defaults.get(rn), kind="input", numfmt=S.NUM_PRICE, align=S.ALIGN_RIGHT, size=9)
 
     # -- Costos de gestión de inventario (fijo/variable, por país) y parámetros de costo de --
     # sostenibilidad (energía, agua, CO2). Adenda 29 (a pedido explícito del equipo): pasan de
@@ -1104,6 +1198,25 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
     # de material de cátedra/profesor, no del manual CESIM, y decidió no incorporarlo por ahora al no
     # contar con su definición/fórmula concreta -- queda pendiente, no debe inferirse ni inventarse.
     # ---------------------------------------------------------------------------------
+    # [Extensión Ronda 1, a pedido del usuario] Para que Ronda 1 sea proyectable (no histórico fijo),
+    # _ENGINE_MERCADO necesita un número en D1c (Cuota Resultante SOBRE EL TOTAL) para R1 -- antes
+    # era texto "n/a" porque R1 siempre fue histórica fija y _ENGINE_MERCADO ni leía este bloque para
+    # esa ronda. Se reconstruye con el MISMO método ya usado para Tamaño de mercado/Demanda (dato
+    # histórico real derivado del RDOS, extract_mercado_real() -- NO es un supuesto nuevo):
+    #   Cuota Resultante SOBRE EL TOTAL (D1c) real de R1 = Demanda real de CADIZ en esa tecnología
+    #   (RDOS R1) / Tamaño de mercado total real de esa área (RDOS R1) -- exactamente lo que D1c
+    #   representa por definición (Mix de Industria × Cuota sobre la Tecnología = participación de
+    #   CADIZ sobre el total). Si Ronda 1 no está entre los RDOS provistos (bootstrap sin ese
+    #   archivo), cae a "n/d" explícito -- no se inventa un número.
+    _tam_real_bi, _dem_real_bi = extract_mercado_real(rdos_files or {})
+
+    def _cuota_resultante_real_r1(mercado, tech):
+        t = _tam_real_bi.get(mercado, {}).get(1)
+        d = _dem_real_bi.get((mercado, tech), {}).get(1)
+        if t is None or not t or d is None:
+            return None
+        return d / t
+
     section("SECCIÓN C.D1a · DEMANDA — Mix de Industria (TAM) [SUPUESTO PROPIO — no es un input directo publicado por CESIM]")
     # Mix de Industria R1: DATO HISTÓRICO REAL, derivado de 'Informes de mercado' RDOS Ronda 1
     # (demanda de las 7 empresas por tecnología, sumada, sobre el tamaño total de mercado de esa
@@ -1130,10 +1243,17 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             row_mix[(mercado, tech)] = row
             key_mix = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            mix_r2 = MIX_INDUSTRIA_R1.get((mercado, tech), 0.0)
+            mix_r1 = MIX_INDUSTRIA_R1.get((mercado, tech), 0.0)
+            # [Extensión Ronda 1] ver nota al inicio de D1a-c -- dato histórico real, ya estaba en el
+            # diccionario de arriba; antes solo se usaba como estimación de partida para R2, ahora
+            # también se muestra tal cual (bloqueado) en su propia ronda R1 en vez de "n/a".
+            if 1 in rondas_reales:
+                rescatado_mix1 = (decisiones_historicas or {}).get(key_mix, {}).get(1, mix_r1)
+                S.apply_cell(ws, row, 7 + 1, value=rescatado_mix1, kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row, 7 + 1, value=mix_r1, kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
             for rn in range(2, 13):
-                decision_row(row, rn, key_mix, default_new=(mix_r2 if rn == 2 else None), numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+                decision_row(row, rn, key_mix, default_new=(mix_r1 if rn == 2 else None), numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     section("SECCIÓN C.D1b · DEMANDA — Cuota de mercado objetivo SOBRE LA TECNOLOGÍA")
@@ -1160,9 +1280,12 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             row_cuota[(mercado, tech)] = row
             key_cuota = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+            # [Extensión Ronda 1] Informativo únicamente -- _ENGINE_MERCADO para R1 lee directamente
+            # la "Cuota Resultante SOBRE EL TOTAL" (D1c, dato real derivado de RDOS, ver esa sección),
+            # no este desglose Mix×Cuota. Queda editable sin default por si el equipo igual quiere
+            # documentar aquí su objetivo por tecnología.
             v2 = cuota_tec_r2.get((mercado, tech), 0.0)
-            for rn in range(2, 13):
+            for rn in range(1, 13):
                 decision_row(row, rn, key_cuota, default_new=(v2 if rn == 2 else None), numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
@@ -1188,8 +1311,22 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
                        "hardcodeada). R2: reproduce EXACTO el valor ya decidido para la ronda (Estado=PLAN, cerrada) por construcción "
                        "de los dos bloques de arriba.")
             row_cuota_resultante[(mercado, tech)] = row
+            key_resultante_r1 = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+            # [Extensión Ronda 1, ver nota al inicio de D1a-c] Si R1 ya es histórica (caso normal,
+            # rondas_reales la incluye): se intenta rescatar primero del archivo anterior (igual que
+            # cualquier otra fila histórica); si no hay nada rescatado, se cae al valor REAL derivado
+            # de RDOS -- NO a la fórmula Mix×Cuota (D1b queda "n/a", no se reconstruye una decisión que
+            # nunca se tomó en este formato). Si R1 todavía NO es histórica (se está proyectando desde
+            # R1 en adelante): mismo valor real de RDOS, pero editable (kind="input"), para que el
+            # equipo lo ajuste con su propia proyección si lo prefiere -- D1b sigue en "n/a": esta
+            # extensión es de Condiciones/datos reales, no de Decisiones (D1-D8 quedan fuera de alcance).
+            v_real_r1 = _cuota_resultante_real_r1(mercado, tech)
+            if 1 in rondas_reales:
+                rescatado_r1 = (decisiones_historicas or {}).get(key_resultante_r1, {}).get(1, v_real_r1)
+                S.apply_cell(ws, row, 7 + 1, value=(rescatado_r1 if rescatado_r1 is not None else "n/d (sin RDOS R1)"), kind="historico", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
+            else:
+                S.apply_cell(ws, row, 7 + 1, value=(v_real_r1 if v_real_r1 is not None else None), kind="input", numfmt=S.NUM_PCT1, align=S.ALIGN_RIGHT, size=9)
             for rn in range(2, 13):
                 mix_cell = f"{col(rn)}{row_mix[(mercado, tech)]}"
                 tec_cell = f"{col(rn)}{row_cuota[(mercado, tech)]}"
@@ -1286,15 +1423,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row_jornadas[tech] = row
         key_jorn = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        for rn in range(2, 13):
+        # [Extensión Ronda 1] ver nota en D5 Marketing arriba -- sin dato real de R1, default blanco.
+        for rn in range(1, 13):
             decision_row(row, rn, key_jorn, default_new=(jornadas_r2[tech] if rn == 2 else None), numfmt=S.NUM_UNITS, align=S.ALIGN_RIGHT, size=9)
         row2 = put("D4 · I+D / TECNOLOGÍA", "Compra de licencia (USD)", tech, "USD", "DECISIÓN CADIZ")
         row_licencia[tech] = row2
         key_lic = last_key[0]
         S.apply_cell(ws, row2, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row2, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        for rn in range(2, 13):
+        for rn in range(1, 13):
             decision_row(row2, rn, key_lic, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     # CORRECCIÓN (Adenda 9, reemplaza el enfoque de Adenda 6/7 -- feedback explícito del usuario: "sigue
@@ -1444,10 +1580,14 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             for rr, key_rr, valmap, numfmt in ((row_p, key_p, precio_r2, S.NUM_PRICE), (row_pr, key_pr, promo_r2, S.NUM_MONEY),
                                                 (row_e, key_e, enfoque_r2, None), (row_c, key_c, caract_of_r2, S.NUM_UNITS)):
                 S.apply_cell(ws, rr, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-                S.apply_cell(ws, rr, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+                # [Extensión Ronda 1, a pedido del usuario] R1 deja de ser "n/a" fijo y pasa a ser una
+                # celda editable (sin default -- no hay un valor de marketing real conocido para R1,
+                # el equipo lo carga a mano) para poder proyectar desde Ronda 1 en adelante. Si R1 ya
+                # es histórica (normal, rondas futuras) y hay algo rescatable del archivo anterior, se
+                # restaura igual que cualquier otra decisión histórica.
                 v2 = valmap.get((mercado, tech))
                 align_rr = S.ALIGN_CENTER if numfmt is None else S.ALIGN_RIGHT
-                for rn in range(2, 13):
+                for rn in range(1, 13):
                     decision_row(rr, rn, key_rr, default_new=(v2 if rn == 2 else None), numfmt=numfmt, align=align_rr, size=9)
     r[0] += 1
 
@@ -1477,9 +1617,9 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
                 key_rank = last_key[0]
                 dv_rank.add(f"{col(0)}{row}:{col(12)}{row}")
                 S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-                S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+                # [Extensión Ronda 1] ver nota en D5 Marketing arriba -- mismo criterio.
                 v2 = ranking_r2.get((area, tech, mercado))
-                for rn in range(2, 13):
+                for rn in range(1, 13):
                     decision_row(row, rn, key_rank, default_new=(v2 if rn == 2 else None), align=S.ALIGN_CENTER, size=9)
     r[0] += 1
 
@@ -1492,8 +1632,8 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row_mult_tp[par] = row
         key_tp = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        for rn in range(2, 13):
+        # [Extensión Ronda 1] ver nota en D5 Marketing arriba -- mismo criterio.
+        for rn in range(1, 13):
             decision_row(row, rn, key_tp, default_new=(1.0 if rn == 2 else None), numfmt=S.NUM_X, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
@@ -1510,13 +1650,13 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row_d8[var] = row
         key_d8 = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
+        # [Extensión Ronda 1] ver nota en D5 Marketing arriba. Para "Dividendos pagados a accionistas"
+        # ya había un valor real conocido de R1 (hv1) -- se usa como default editable si R1 todavía no
+        # es histórica; para el resto (sin dato real de R1) el default queda en blanco.
         hv1 = {"Dividendos pagados a accionistas (monto)": 2_000_000_000}.get(var)
-        if hv1 is not None:
-            S.apply_cell(ws, row, 7 + 1, value=hv1, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        else:
-            S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        for rn in range(2, 13):
-            decision_row(row, rn, key_d8, default_new=(d8_simple_r2[var] if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+        for rn in range(1, 13):
+            default_new = (hv1 if rn == 1 else (d8_simple_r2[var] if rn == 2 else None))
+            decision_row(row, rn, key_d8, default_new=default_new, numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_transf = {}
     for origen in PAISES:
@@ -1528,9 +1668,9 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
             row_transf[(origen, destino)] = row
             key_transf = last_key[0]
             S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            S.apply_cell(ws, row, 7 + 1, value="n/a (no cargado retroactivamente)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-            for rn in range(2, 13):
-                decision_row(row, rn, key_transf, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+            # [Extensión Ronda 1] ver nota en D5 Marketing arriba -- sin dato real de R1, default 0.
+            for rn in range(1, 13):
+                decision_row(row, rn, key_transf, default_new=(0 if rn in (1, 2) else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
 
     row_div_filial = {}
     for filial in ("China", "Europa"):
@@ -1539,9 +1679,9 @@ def build_inputs(wb, rondas_reales=frozenset({0, 1}), decisiones_historicas=None
         row_div_filial[filial] = row
         key_divfil = last_key[0]
         S.apply_cell(ws, row, 7 + 0, value="n/a (ronda ya jugada)", kind="plain", align=S.ALIGN_CENTER, size=8, italic=True)
-        S.apply_cell(ws, row, 7 + 1, value=0, kind="historico", numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
-        for rn in range(2, 13):
-            decision_row(row, rn, key_divfil, default_new=(0 if rn == 2 else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
+        # [Extensión Ronda 1] ver nota en D5 Marketing arriba -- dato real conocido de R1 (0).
+        for rn in range(1, 13):
+            decision_row(row, rn, key_divfil, default_new=(0 if rn in (1, 2) else None), numfmt=S.NUM_MONEY, align=S.ALIGN_RIGHT, size=9)
     r[0] += 1
 
     ws.auto_filter.ref = f"A{header_row}:F{r[0]-1}"
@@ -4606,7 +4746,7 @@ def _recalcular_con_libreoffice(path_xlsx, timeout=120):
 # rondas ya jugadas que se quieran migrar como histórico REAL (R0, R1, R2, R3, ...). Reemplaza a
 # main(), que queda como wrapper de línea de comandos para pruebas locales (ver más abajo).
 # ======================================================================================
-def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, plan_congelado=None, decisiones_historicas=None):
+def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, plan_congelado=None, decisiones_historicas=None, rdos_files_referencia=None, ronda_plan_hasta=None):
     """overrides: dict de leer_decisiones_previas() -- decisiones/condiciones literales rescatadas
     del Cadiz_proyeccion_R{N}.xlsx anterior, para no tener que volver a tipear todo cada ronda.
     plan_congelado: lista de extraer_plan_congelado() -- foto de las filas CADIZ de la última ronda
@@ -4614,7 +4754,19 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
     decisiones_historicas: dict de leer_decisiones_historicas() -- [Fix 1] decisiones REALMENTE
     tomadas en rondas que ya son históricas (rn in rondas_reales), para restaurarlas y bloquearlas
     ('historico') en 01_INPUTS en vez de dejarlas en blanco/editable -- ver decision_row() en
-    build_inputs()."""
+    build_inputs().
+    rdos_files_referencia: [Extensión Ronda 1] opcional -- RDOS adicionales a los de `rdos_files`,
+    usados SOLO como referencia de dato histórico real (hoy: Cuota Resultante SOBRE EL TOTAL de D1c
+    en Ronda 1, ver build_inputs) sin que esa ronda pase a ser 'histórica' (rondas_reales sigue
+    definido ÚNICAMENTE por `rdos_files`). Caso de uso: proyectar desde Ronda 1 en adelante
+    (rdos_files={0}) mostrando igual, como default editable, la Cuota real que surge del RDOS de
+    Ronda 1 (rdos_files_referencia={0,1}) -- sin bloquear esa ronda como históricamente cerrada.
+    ronda_plan_hasta: [Extensión Ronda 1] opcional -- marca Estado="PLAN" (no solo la ronda n_next)
+    para TODO el rango [n_next, ronda_plan_hasta], habilitando RONDA_ACTIVA y por lo tanto
+    02_ESTADOS_PROYECTADOS/03_RATIOS/04_CONTROL_MODELO para varias rondas PLAN simultáneas -- caso de
+    uso: bootstrap desde Ronda 1 con decisiones reales ya cargadas (vía `overrides`) hasta, por
+    ejemplo, Ronda 5. Sin esto, 01_INPUTS tiene las decisiones pero el resto del libro las ignora
+    porque Estado(rn) queda en blanco para toda ronda más allá de la inmediata siguiente."""
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -4627,7 +4779,7 @@ def generar_excel(rdos_files, out_buffer=None, recalcular=True, overrides=None, 
     rondas_reales = frozenset(rdos_files.keys())
     n_next = (max(rondas_reales) + 1) if rondas_reales else 0
 
-    ws_in, ridx_in, ids, cond, dec = build_inputs(wb, rondas_reales=rondas_reales, decisiones_historicas=decisiones_historicas)
+    ws_in, ridx_in, ids, cond, dec = build_inputs(wb, rondas_reales=rondas_reales, decisiones_historicas=decisiones_historicas, rdos_files=(rdos_files_referencia or rdos_files), ronda_plan_hasta=ronda_plan_hasta)
     n_overrides_aplicados = n_overrides_sin_match = 0
     if overrides:
         # Rescate de decisiones (spec del usuario: "no quiero tener que modificar las rondas futuras
