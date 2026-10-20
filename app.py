@@ -1,3 +1,4 @@
+import colorsys
 import glob
 import hashlib
 import os
@@ -94,6 +95,27 @@ def _hex_a_rgba(hex_color, alpha):
         return f'rgba(140,151,166,{alpha})'
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f'rgba({r},{g},{b},{alpha})'
+def _ramp_secuencial(hex_color, n, claro=0.88):
+    """Genera `n` tonos de UN SOLO hue, de claro a oscuro (regla de la skill de dataviz: "Sequential
+    = one hue, light->dark") -- interpola en HLS desde un tinte muy claro del mismo matiz hasta el
+    color pedido (el escalón más oscuro/saturado de la rampa). Se usa para dimensiones ORDENADAS
+    (ej. año) en vez de una paleta categórica de colores distintos -- escala sola a cualquier
+    cantidad de escalones sin quedarse sin colores."""
+    h = (hex_color or '').lstrip('#')
+    if len(h) != 6 or n <= 0:
+        return [hex_color] * max(n, 1)
+    r, g, b = int(h[0:2], 16) / 255, int(h[2:4], 16) / 255, int(h[4:6], 16) / 255
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    if n == 1:
+        return [hex_color]
+    out = []
+    for i in range(n):
+        t = i / (n - 1)
+        l_i = claro + (light - claro) * t
+        s_i = (sat * 0.45) + (sat * 0.55) * t
+        r2, g2, b2 = colorsys.hls_to_rgb(hue, l_i, s_i)
+        out.append('#{:02x}{:02x}{:02x}'.format(round(r2 * 255), round(g2 * 255), round(b2 * 255)))
+    return out
 CHART_HEIGHT = 260      # alto del área de ploteo de referencia
 ALTURA_TARJETA = 370    # alto FIJO de toda tarjeta de gráfico, con o sin leyenda abajo:
                         # es lo que garantiza que dos gráficos en columnas queden parejos
@@ -2771,33 +2793,54 @@ def seccion_finanzas():
             empresas_orden = totales_emp.index.tolist()
             rondas_presentes = div_pagados[['Ronda', 'Ronda_Orden']].drop_duplicates().sort_values('Ronda_Orden')
             nombres_ronda = rondas_presentes['Ronda'].tolist()
-            # Año = dimensión ORDENADA (no categórica) -- se usa un único hue azul claro->oscuro
-            # (regla de la skill de dataviz: "Sequential = one hue, light->dark"), no colores
-            # categóricos como la referencia, para que escale sola a las 12 rondas del juego (la
-            # referencia solo tenía 5 y ya usaba un color distinto para cada una).
             n_r = len(nombres_ronda)
-            tonos_ronda = px.colors.sample_colorscale('Blues', [0.35 + 0.55 * i / max(n_r - 1, 1) for i in range(n_r)])
-            color_por_ronda = dict(zip(nombres_ronda, tonos_ronda))
+            # Fix de legibilidad + identidad (a pedido del equipo, viendo cómo quedó en la web: "las
+            # etiquetas... tiene que poder verse todo en un primer vistazo", "con CADIZ mantengamos
+            # ese tono lila para diferenciarnos"). Dos ajustes:
+            #  1) CADIZ usa su propia rampa (lila, _ramp_secuencial(COLOR_CADIZ, ...)) y el resto de
+            #     los equipos comparten la rampa azul neutra -- mismo criterio de identidad que
+            #     COLOR_MAP ya usa en el resto del tablero (CADIZ = lila, rivales = familia neutra),
+            #     aplicado acá sobre CADA escalón de año en vez de un solo color por empresa, para no
+            #     perder la lectura de "qué año es cada segmento" (sigue siendo claro->oscuro).
+            #  2) Etiqueta de texto SOLO en los segmentos grandes (>= 5% del total de la empresa con
+            #     más dividendos acumulados) -- la skill de dataviz pide "etiquetas directas
+            #     selectivas, nunca un número en cada punto"; los segmentos chicos (ej. Año 1 de un
+            #     equipo que recién empezó a pagar) quedan sin texto inline pero siguen visibles al
+            #     pasar el mouse (hover).
+            ramp_cadiz = _ramp_secuencial(COLOR_CADIZ, n_r)
+            ramp_rival = _ramp_secuencial(COLOR_METRICA['dinero'], n_r)
+            tonos_por_ronda_empresa = {}
+            for emp in empresas_orden:
+                ramp = ramp_cadiz if emp == MY_COMPANY else ramp_rival
+                for i, r_nombre in enumerate(nombres_ronda):
+                    tonos_por_ronda_empresa[(emp, r_nombre)] = ramp[i]
+            umbral_label = totales_emp.max() * 0.05
             fig_divp = go.Figure()
             for r_nombre in nombres_ronda:
                 d_r = div_pagados[div_pagados['Ronda'] == r_nombre].set_index('Empresa').reindex(empresas_orden)
-                fig_divp.add_trace(go.Bar(x=empresas_orden, y=d_r['Valor'], name=r_nombre,
-                                           marker_color=color_por_ronda[r_nombre],
-                                           text=d_r['Valor'].apply(lambda v: format_num(v) if pd.notna(v) and v > 0 else ''),
-                                           textposition='inside'))
+                fig_divp.add_trace(go.Bar(
+                    x=empresas_orden, y=d_r['Valor'], name=r_nombre,
+                    marker_color=[tonos_por_ronda_empresa[(emp, r_nombre)] for emp in empresas_orden],
+                    text=d_r['Valor'].apply(lambda v: format_num(v) if pd.notna(v) and v >= umbral_label else ''),
+                    textposition='inside', textfont=dict(size=11),
+                    customdata=d_r['Valor'].apply(lambda v: format_num(v) if pd.notna(v) else 'sin dato'),
+                    hovertemplate=f'<b>%{{x}}</b><br>{r_nombre}: %{{customdata}}<extra></extra>'))
             fig_divp.update_layout(barmode='stack', title='Dividendos Pagados Acumulados por Empresa',
                                     yaxis_title='USD', xaxis=dict(categoryorder='array', categoryarray=empresas_orden),
                                     legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
             color_total = BRAND_LIGHT if es_modo_oscuro() else BRAND_DARK
             for emp in empresas_orden:
-                fig_divp.add_annotation(x=emp, y=totales_emp[emp], text=format_num(totales_emp[emp]),
-                                         showarrow=False, yshift=14, font=dict(size=12, color=color_total))
-            mostrar(fig_divp, margen_b=90)
+                fig_divp.add_annotation(x=emp, y=totales_emp[emp], text=f'<b>{format_num(totales_emp[emp])}</b>',
+                                         showarrow=False, yshift=14,
+                                         font=dict(size=13, color=COLOR_CADIZ if emp == MY_COMPANY else color_total))
+            mostrar(fig_divp, margen_b=90, altura=420)
             st.caption('Monto real pagado a la casa matriz en concepto de dividendos (RDOS de CESIM), apilado '
                        'por año dentro de cada empresa -- ordenadas de mayor a menor dividendo acumulado '
-                       '(Año 0 no se incluye: ningún equipo paga dividendos ese año). Para cruzarlo contra el '
-                       'retorno total al accionista de cada equipo, ver "Retorno Total Acumulado del '
-                       'Accionista (TSR)" en Resultados.')
+                       '(Año 0 no se incluye: ningún equipo paga dividendos ese año). CADIZ en tono lila para '
+                       'diferenciarse; los segmentos chicos no muestran número para no saturar la lectura, '
+                       'pero el valor exacto aparece al pasar el mouse. Para cruzarlo contra el retorno total '
+                       'al accionista de cada equipo, ver "Retorno Total Acumulado del Accionista (TSR)" en '
+                       'Resultados.')
 
         # ---- Bloque 3: Riesgo Competitivo ----
         # Adenda 37 (a pedido del equipo, inspirado en un gráfico de referencia de un profesor:
@@ -2831,13 +2874,23 @@ def seccion_finanzas():
             dfcap['Total'] = dfcap['GananciasPrev'] + dfcap['Beneficio']
             dfcap = dfcap.sort_values('Total', ascending=False)
             etq_prev = ronda_prev_cap or 'la ronda anterior'
+            # Fix de legibilidad + identidad (mismo pedido que en "Retorno al Accionista"): CADIZ en
+            # lila para diferenciarse del resto (identidad), y etiqueta de texto solo en segmentos
+            # que superan un umbral -- acá un umbral ABSOLUTO (5% del mayor total entre las 7
+            # empresas), no relativo a cada barra, para que un segmento de tamaño parecido se trate
+            # igual en todos lados del gráfico.
+            umbral_cap = dfcap['Total'].abs().max() * 0.05
+            def _etq_cap(v):
+                return format_num(v) if pd.notna(v) and abs(v) >= umbral_cap else ''
             fig_cap = go.Figure()
             fig_cap.add_trace(go.Bar(x=dfcap['Empresa'], y=dfcap['GananciasPrev'], name=f'Ganancias Acumuladas (cierre {etq_prev})',
-                                      marker_color=COLOR_METRICA['dinero'],
-                                      text=dfcap['GananciasPrev'].apply(format_num), textposition='inside'))
+                                      marker_color=[COLOR_CADIZ if e == MY_COMPANY else COLOR_METRICA['dinero'] for e in dfcap['Empresa']],
+                                      text=dfcap['GananciasPrev'].apply(_etq_cap), textposition='inside', textfont=dict(size=11),
+                                      hovertemplate=f'<b>%{{x}}</b><br>Ganancias Acumuladas (cierre {etq_prev}): %{{y:,.0f}}<extra></extra>'))
             fig_cap.add_trace(go.Bar(x=dfcap['Empresa'], y=dfcap['Beneficio'], name=f'Beneficio de {ronda_snapshot}',
                                       marker_color=[COLOR_METRICA['eficiencia'] if v >= 0 else COLOR_METRICA['critico'] for v in dfcap['Beneficio']],
-                                      text=dfcap['Beneficio'].apply(format_num), textposition='inside'))
+                                      text=dfcap['Beneficio'].apply(_etq_cap), textposition='inside', textfont=dict(size=11),
+                                      hovertemplate=f'<b>%{{x}}</b><br>Beneficio de {ronda_snapshot}: %{{y:,.0f}}<extra></extra>'))
             # Fix (a pedido del equipo, viendo la referencia que mandó): línea conectada en vez de
             # rombos sueltos -- se lee mejor la caída/suba de equipo a equipo (mismo orden del eje X
             # que las barras, de mayor a menor capacidad teórica).
@@ -2845,16 +2898,17 @@ def seccion_finanzas():
                                           mode='lines+markers',
                                           line=dict(color=COLOR_METRICA['riesgo'], width=2.5),
                                           marker=dict(symbol='circle', size=10, color=COLOR_METRICA['riesgo'],
-                                                       line=dict(width=1.5, color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT))))
+                                                       line=dict(width=1.5, color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT)),
+                                          hovertemplate='<b>%{x}</b><br>Efectivo real disponible: %{y:,.0f}<extra></extra>'))
             fig_cap.update_layout(barmode='relative', title=f'Capacidad de pago de dividendos — {ronda_snapshot}',
                                    yaxis_title='USD',
                                    legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
-            mostrar(fig_cap, margen_b=90)
-            st.caption(f'Azul + verde/rojo = techo teórico de lo repartible (Ganancias Acumuladas al cierre de '
-                       f'{etq_prev} + Beneficio de {ronda_snapshot}, antes de cualquier dividendo de esta ronda). '
-                       'Rombo = Efectivo real disponible. Un equipo con barra alta y rombo bajo tiene "ganancias '
-                       'de papel" sin respaldo en caja -- poco probable que pague mucho la próxima ronda; barra '
-                       'y rombo parejos es la señal de que sí podría.')
+            mostrar(fig_cap, margen_b=90, altura=420)
+            st.caption(f'Barra (azul, lila para CADIZ) + verde/rojo = techo teórico de lo repartible (Ganancias '
+                       f'Acumuladas al cierre de {etq_prev} + Beneficio de {ronda_snapshot}, antes de cualquier '
+                       'dividendo de esta ronda). Línea = Efectivo real disponible. Un equipo con barra alta y '
+                       'línea baja tiene "ganancias de papel" sin respaldo en caja -- poco probable que pague '
+                       'mucho la próxima ronda; barra y línea parejas es la señal de que sí podría.')
         st.write('')
 
         # ---- Bloque 4: Estructura Financiera ----
