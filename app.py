@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import os
 import re
 import numpy as np
@@ -107,8 +108,29 @@ def get_pais(estado: str) -> str:
     if 'China' in estado: return 'China'
     if 'Europa' in estado: return 'Europa'
     return 'General'
+_CESIM_PARSER_PATH = os.path.join(BASE_DIR, 'cesim_parser.py')
+def _parser_version() -> str:
+    """Firma de versión de `cesim_parser.py` para el caché de `cargar_historico`.
+
+    Bug real, corregido (encontrado por el equipo en despliegue -- la web mostraba datos "Ronda N"
+    viejos después de subir el rename "Ronda"->"Año", aunque el código ya estaba actualizado):
+    `st.cache_data` solo hashea el bytecode de la función decorada (`cargar_historico`) más sus
+    argumentos -- NO hashea el de los módulos que esa función llama (acá, `cesim_parser.py`, donde
+    vive la lógica real de parseo). Un cambio en `cesim_parser.py` que no toque también el cuerpo de
+    `cargar_historico` no invalidaba el caché por sí solo, y el dashboard podía quedar sirviendo
+    datos parseados con la lógica VIEJA aunque el código desplegado fuera el nuevo (el slider y el
+    resto de la UI sí mostraban "Año N" porque `rondas_timeline` es una lista fija, no depende del
+    caché -- pero cualquier cruce contra los datos reales, que sí dependía del caché, no encontraba
+    nada). Fix: se incluye un hash del contenido de `cesim_parser.py` como parte de la firma de
+    caché -- cualquier cambio futuro en ese archivo invalida el caché automáticamente, sin depender
+    de acordarse de hacer un reboot completo de la app."""
+    try:
+        with open(_CESIM_PARSER_PATH, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return 'unknown'
 @st.cache_data(show_spinner='Procesando rondas...')
-def cargar_historico(files_signature: tuple) -> pd.DataFrame:
+def cargar_historico(files_signature: tuple, parser_version: str) -> pd.DataFrame:
     data = build_historico(list(files_signature))
     data['Pais'] = data['Estado'].apply(get_pais)
     return data
@@ -118,7 +140,7 @@ def get_data(tipo_ronda) -> pd.DataFrame:
     if not xls_files:
         st.warning(f'No se encontraron archivos .xls en {DATA_DIR} ni en subcarpetas.')
         st.stop()
-    df_raw = cargar_historico(tuple(xls_files))
+    df_raw = cargar_historico(tuple(xls_files), _parser_version())
     return df_raw[df_raw['Tipo_Ronda'] == tipo_ronda].copy()
 @st.cache_data(show_spinner='Leyendo proyección de CADIZ...')
 def _cargar_proyeccion_cached(path: str, mtime: float):
