@@ -126,17 +126,40 @@ def _cargar_proyeccion_cached(path: str, mtime: float):
     # reemplaza CADIZ_Gestion_v2.xlsx en el repo (mismo nombre de archivo), así Streamlit invalida
     # el caché y relee el Excel en vez de servir una versión vieja. Devuelve un DataFrame o None.
     return load_proyeccion(path)
-def get_proyeccion():
-    """Ronda N.N (Fase 4): la proyección de CADIZ ya NO se lee de un archivo fijo en la raíz del
-    repo ('CADIZ_Gestion_v2.xlsx', que había que reemplazar a mano con ese mismo nombre) -- se
-    autodetecta el 'Cadiz_proyeccion_R{N}.xlsx' de N más alto en data/decisiones/ (el mismo que arma
-    y descarga el botón 'Generar Excel de gestión' de la sidebar): ese archivo ya trae todo el
-    histórico REAL migrado + la proyección PLAN de la ronda en curso + los planes congelados de
-    rondas previas, así que ninguna otra fuente hace falta. Si todavía no se commiteó ningún
-    Cadiz_proyeccion_R{N}.xlsx (repo recién migrado a esta arquitectura), se cae al viejo
-    CADIZ_Gestion_v2.xlsx en la raíz por compatibilidad -- si tampoco existe, no hay proyección
-    para mostrar (la app debe poder arrancar igual)."""
-    path = descubrir_ultima_proyeccion(DIR_DECISIONES)
+def get_proyeccion(ronda_num=None):
+    """Ronda N.N+1 (bug real, corregido -- a pedido de Mati, confirmado contra el repo real): cada
+    Cadiz_proyeccion_R{N}.xlsx es AUTOSUFICIENTE para comparar la ronda N contra SU PROPIO plan --
+    trae su propia fila status='PLAN', round=N para CADIZ (ver gap_analysis._valor_proyeccion, que
+    filtra por round==ronda_num SIN filtrar por status). El lado 'Real' de la comparación nunca sale
+    de este archivo -- sale siempre de df_all/df (parseado directo de los RDOS vía cesim_parser) --
+    así que para comparar una ronda YA JUGADA no hace falta el archivo "más reciente" ni que la
+    cadena de Plan Congelado (extraer_plan_congelado/inyectar_plan_congelado) haya arrastrado bien
+    esa ronda hasta hoy: alcanza con abrir el archivo CON ESE MISMO NÚMERO de ronda.
+
+    Bug real, corregido: antes esta función usaba SIEMPRE descubrir_ultima_proyeccion() (el N más
+    alto commiteado en data/decisiones/), asumiendo que ese único archivo traía el Plan de TODAS las
+    rondas anteriores todavía congelado. Verificado contra el repo real: esa cadena se rompió en
+    alguna corrida intermedia -- Cadiz_proyeccion_R6.xlsx (el commiteado) NO trae el Plan congelado
+    de las Rondas 2, 4 y 5, que Cadiz_proyeccion_R4.xlsx/R5.xlsx SÍ tenían en su momento (confirmado
+    leyendo la hoja DATA_EXPORT de cada archivo: R4.xlsx trae round=2 con status PLAN+REAL, R5.xlsx
+    trae round=2 y round=4 con PLAN+REAL, R6.xlsx no trae ningún PLAN de rondas 0-5). Como Control de
+    Gestión siempre leía el último archivo commiteado, Ronda 3/4/5 mostraban "sin datos" en vez del
+    desvío Plan vs. Real, aunque esas rondas SÍ tuvieran su propio Cadiz_proyeccion_R{N}.xlsx cargado
+    en el repo. Ahora cada ronda lee DIRECTAMENTE su propio archivo -- no depende de que ninguna
+    corrida posterior lo haya "arrastrado" bien.
+
+    ronda_num=None (o sin archivo con ese número exacto -- ej. una ronda que todavía no tiene su
+    propio Cadiz_proyeccion_R{N}.xlsx generado) cae al comportamiento viejo: el N más alto
+    commiteado en data/decisiones/, y si tampoco hay ninguno, al viejo CADIZ_Gestion_v2.xlsx en la
+    raíz por compatibilidad -- si nada de eso existe, no hay proyección para mostrar (la app debe
+    poder arrancar igual)."""
+    path = None
+    if ronda_num is not None:
+        candidato = os.path.join(DIR_DECISIONES, f"Cadiz_proyeccion_R{ronda_num}.xlsx")
+        if os.path.exists(candidato):
+            path = candidato
+    if path is None:
+        path = descubrir_ultima_proyeccion(DIR_DECISIONES)
     if path is None and os.path.exists(DEFAULT_PROYECCION_EXCEL):
         path = DEFAULT_PROYECCION_EXCEL
     if path is None:
@@ -550,13 +573,13 @@ def panel_comparativa_plan_real(df_todas_rondas, ronda_snapshot, crosswalk=None,
         activo = st.toggle('📊 Comparativa Plan vs. Real', key=f'cg_toggle_{key_suffix}')
         if not activo:
             return
-    df_proy = get_proyeccion()
+    ronda_num = ronda_a_num(ronda_snapshot)
+    df_proy = get_proyeccion(ronda_num)
     if df_proy is None:
         st.info('Todavía no hay ningún `Cadiz_proyeccion_R{N}.xlsx` en `data/decisiones/` (o no se '
                 'pudo leer la hoja `DATA_EXPORT`) — generalo con el botón "Generar Excel de gestión" '
                 'de la sidebar y commiteá el resultado en esa carpeta para ver la Comparativa Plan vs. Real.')
         return
-    ronda_num = ronda_a_num(ronda_snapshot)
     claves_no_publicadas = {k for k, spec in crosswalk.items() if spec.get('real_no_publicado')}
     gaps_todos = calcular_gaps(df_todas_rondas, df_proy, ronda_nombre=ronda_snapshot, ronda_num=ronda_num, crosswalk=crosswalk)
     gaps = {k: v for k, v in gaps_todos.items() if k not in claves_no_publicadas}
@@ -1300,7 +1323,7 @@ if df_all.empty or ronda_snapshot not in df_all['Ronda'].unique():
     # de Gestión (lo único que SÍ hay para ofrecer) en la sección Finanzas. Fuera de Finanzas, o si
     # no hay proyección tampoco, se mantiene el aviso original sin cambios.
     ronda_num_bypass = ronda_a_num(ronda_snapshot)
-    df_proy_bypass = get_proyeccion() if ronda_num_bypass is not None else None
+    df_proy_bypass = get_proyeccion(ronda_num_bypass) if ronda_num_bypass is not None else None
     hay_proyeccion_cadiz = (df_proy_bypass is not None and not df_proy_bypass[
         (df_proy_bypass['round'] == ronda_num_bypass) & (df_proy_bypass['team'] == MY_COMPANY)].empty)
     # Adenda 29: 'Control de Gestión' (nueva sección, home actual de Plan vs. Real) usa el mismo
@@ -1596,14 +1619,10 @@ def _seccion_resultado_resumen():
     else:
         st.info('Sin datos de cuota de mercado por país para esta ronda.')
     st.divider()
-    # Bug de escala (x1000 de "miles USD") corregido de forma CENTRALIZADA en
-    # cesim_parser._corregir_escala_monetaria() (Adenda 32) -- 'Valor' ya llega en USD absoluto acá,
-    # sin necesidad de ningún ajuste puntual en este gráfico.
-    cap_sub = df[(df['Estado'] == 'Valuación - Global') & (df['Metrica'] == 'Capitalización de mercado, miles USD')].copy()
-    # chart_evolucion() ya antepone "Evolución — " al titulo -- pasarle "Evolución de la ..." de nuevo
-    # duplicaba la palabra ("Evolución — Evolución de..."). Solo el sustantivo acá.
-    chart_evolucion(cap_sub, 'Capitalización de Mercado (USD)')
-
+    # Adenda 34 (a pedido del equipo, "sacar gráficos de líneas, dejar solo la evolución del retorno
+    # acumulado"): se sacan de ACÁ los gráficos de evolución de "Capitalización de Mercado" y
+    # "Beneficio Neto Acumulado" (el segundo se traslada a Finanzas, ver seccion_finanzas() --
+    # "evolución del beneficio neto" que pidió el equipo ahí). Queda solo el de abajo.
     # Adenda 31 (a pedido del equipo, "Evolución vs. Año 0"): TSR es un dato REAL que CESIM ya
     # publica acumulado (no hay que sumarlo nosotros) -- Estado='Ratios e indicadores financieros
     # clave', Metrica='Retorno total acumulado del accionista (p.a.), %'. chart_evolucion() sirve
@@ -1611,18 +1630,6 @@ def _seccion_resultado_resumen():
     tsr_sub = df[(df['Estado'] == 'Ratios e indicadores financieros clave') &
                  (df['Metrica'] == 'Retorno total acumulado del accionista (p.a.), %')].copy()
     chart_evolucion(tsr_sub, 'Retorno Total Acumulado del Accionista (TSR), %')
-
-    # Beneficio Neto Acumulado: a diferencia del TSR, CESIM NO publica un acumulado de esta métrica
-    # -- 'Beneficio de la ronda' es el resultado DE ESA ronda únicamente. La acumulación (suma
-    # corrida Ronda 0 -> ronda en análisis, por equipo) es una transformación nuestra sobre un dato
-    # 100% real, no una proyección ni un supuesto de valor. El x1000 de "miles USD" ya lo aplica
-    # cesim_parser (Adenda 32, centralizado) -- 'Valor' llega en USD absoluto, solo falta acumularlo.
-    bn_sub = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
-                (df['Metrica'] == 'Beneficio de la ronda')].copy()
-    bn_sub['Valor'] = num(bn_sub['Valor'])
-    bn_sub = bn_sub.dropna(subset=['Valor']).sort_values('Ronda_Orden')
-    bn_sub['Valor'] = bn_sub.groupby('Empresa')['Valor'].cumsum()
-    chart_evolucion(bn_sub, 'Beneficio Neto Acumulado (USD, desde Ronda 0)')
 
 def _seccion_resultado_mercado_macro():
     """Adenda 29/30 (a pedido del equipo): vista de mercado AGREGADA -- a diferencia del resto del
@@ -2682,6 +2689,47 @@ def seccion_finanzas():
             chart_evolucion(precio_sub, 'Precio de la Acción (USD)')
         st.write('')
 
+        # ---- Gráfico 3 (nuevo, Adenda 34, a pedido del equipo) + Gráfico 4 (nuevo, Adenda 34) ----
+        col_g3, col_g4 = st.columns(2)
+        with col_g3:
+            # Beneficio Neto Acumulado: se traslada ACÁ desde Resultados (Adenda 34, "sacar gráficos
+            # de líneas de Resultados... agregar evolución del beneficio neto en Finanzas") -- misma
+            # lógica, sin cambios: CESIM NO publica un acumulado de 'Beneficio de la ronda' (es el
+            # resultado DE ESA ronda únicamente), así que se acumula ronda a ronda por equipo. Dato
+            # 100% real acumulado por nosotros, no una proyección ni un supuesto de valor. El x1000
+            # de "miles USD" ya lo aplica cesim_parser (Adenda 32, centralizado).
+            bn_sub = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') &
+                        (df['Metrica'] == 'Beneficio de la ronda')].copy()
+            bn_sub['Valor'] = num(bn_sub['Valor'])
+            bn_sub = bn_sub.dropna(subset=['Valor']).sort_values('Ronda_Orden')
+            bn_sub['Valor'] = bn_sub.groupby('Empresa')['Valor'].cumsum()
+            chart_evolucion(bn_sub, 'Beneficio Neto Acumulado (USD, desde Ronda 0)')
+        with col_g4:
+            # Decisión de modelización propia (Categoría 3, a flagear -- no especificada en detalle
+            # por el equipo): "Dividendos vs. Retorno por empresa" se arma con 'Rendimiento de los
+            # dividendos, %' (Ratios e indicadores financieros clave -- dividend yield, ya en %) en
+            # vez del monto absoluto de 'Dividendos' (Flujo de efectivo de casa matriz, en USD) --
+            # así las dos barras quedan en la MISMA unidad (%) y son comparables en un solo gráfico
+            # junto al Retorno Total Acumulado del Accionista (TSR, %). Si lo que se quería ver era
+            # el monto de dividendos pagados en USD (no el yield), avisar para cambiarlo.
+            div_vals = {e: valor_de(ratios_ronda, 'Rendimiento de los dividendos, %', e) for e in COMPANIES}
+            ret_vals = {e: valor_de(ratios_ronda, 'Retorno total acumulado del accionista (p.a.), %', e) for e in COMPANIES}
+            filas_dr = [{'Empresa': e, 'Rendimiento de dividendos, %': div_vals.get(e), 'Retorno acumulado, %': ret_vals.get(e)} for e in COMPANIES]
+            dfdr = pd.DataFrame(filas_dr).dropna(subset=['Rendimiento de dividendos, %', 'Retorno acumulado, %'], how='all')
+            if not dfdr.empty:
+                dfdr_long = dfdr.melt(id_vars='Empresa', value_vars=['Rendimiento de dividendos, %', 'Retorno acumulado, %'],
+                                       var_name='Indicador', value_name='Pct').dropna(subset=['Pct'])
+                fig_dr = px.bar(dfdr_long, x='Empresa', y='Pct', color='Indicador', barmode='group',
+                                 color_discrete_map={'Rendimiento de dividendos, %': MUTED_PALETTE[0], 'Retorno acumulado, %': COLOR_CADIZ},
+                                 text=dfdr_long['Pct'].apply(lambda v: f'{v:,.1f}%'),
+                                 title=f'Dividendos vs. Retorno por empresa — {ronda_snapshot}')
+                fig_dr.update_traces(textposition='outside', cliponaxis=False)
+                fig_dr.update_layout(yaxis_title='%')
+                mostrar(fig_dr)
+            else:
+                st.info('Sin datos de rendimiento de dividendos/retorno para esta ronda.')
+        st.write('')
+
         # ---- Estructura del Balance (reposicionada -- antes vivía en la pestaña "Largo Plazo") ----
         st.markdown('**Estructura del Balance: Activo vs. Pasivo + Patrimonio Neto**')
 
@@ -2786,6 +2834,31 @@ def seccion_finanzas():
             kpi_doble_delta(None, 'Deuda LP (USD)', format_num(deuda_lp_vals.get(empresa_analisis)),
                              d_ronda=d_deuda_lp_ronda, ronda_prev_nombre=ronda_prev_fin, favorable_ronda=(d_deuda_lp_ronda < 0) if d_deuda_lp_ronda is not None else None,
                              d_industria=d_deuda_lp_ind, favorable_industria=(d_deuda_lp_ind < 0) if d_deuda_lp_ind is not None else None)
+
+        # ---- KPI ROA y ROS (nuevo, Adenda 34, a pedido del equipo) ----
+        # ROA ya se calculaba más arriba (datos_lp['ROA'], vía _roa()) pero solo se veía adentro del
+        # gráfico "Rango de Industria" -- acá se agrega como tarjeta propia, mismo criterio que
+        # WACC/ROCE/Deuda LP de arriba. ROS ('Rentabilidad de las ventas (ROS)') ya se calculaba para
+        # el Gráfico 1 (ros_vals) -- mismo caso, se agrega como tarjeta propia además de seguir
+        # alimentando ese gráfico.
+        d_roa_ronda = None
+        if ronda_prev_lp:
+            pl_ronda_prev_roa = df[(df['Estado'] == 'Cuenta de resultados, miles USD, Global') & (df['Ronda'] == ronda_prev_lp)]
+            bal_ronda_prev_roa = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_prev_lp)]
+            ben_prev_roa = valor_de(pl_ronda_prev_roa, 'Beneficio de la ronda', empresa_analisis)
+            act_prev_roa = valor_de(bal_ronda_prev_roa, 'Activos Totales', empresa_analisis)
+            roa_prev, roa_act = ((ben_prev_roa / act_prev_roa * 100) if act_prev_roa else None), datos_lp['ROA'].get(empresa_analisis)
+            if roa_prev not in (None, 0) and roa_act is not None and pd.notna(roa_prev) and pd.notna(roa_act):
+                d_roa_ronda = (roa_act - roa_prev) / abs(roa_prev) * 100
+        d_ros_ronda, _ = delta_vs_ronda_anterior('Ratios e indicadores financieros clave', 'Rentabilidad de las ventas (ROS)')
+        d_roa_ind, d_ros_ind = delta_raw(datos_lp['ROA']), delta_raw(ros_vals)
+        col_roa, col_ros = st.columns(2)
+        with col_roa:
+            kpi_doble_delta(None, 'ROA', f"{datos_lp['ROA'].get(empresa_analisis):,.1f}%" if pd.notna(datos_lp['ROA'].get(empresa_analisis)) else '—',
+                             d_ronda=d_roa_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=d_roa_ind)
+        with col_ros:
+            kpi_doble_delta(None, 'ROS', f"{ros_vals.get(empresa_analisis):,.1f}%" if pd.notna(ros_vals.get(empresa_analisis)) else '—',
+                             d_ronda=d_ros_ronda, ronda_prev_nombre=ronda_prev_fin, d_industria=d_ros_ind)
 
         # ---- Spread de Creación de Valor + Composición de Estructura de Capital (Adenda 26, a ----
         # ---- pedido del equipo: "debajo o cerca de los kpis de wacc, roce y deuda lp") ---------
@@ -2916,7 +2989,10 @@ def seccion_rrhh_sostenibilidad():
         rrhh = df_all[(df_all['Estado'] == 'Informe de RRHH') & (df_all['Empresa'] == empresa_analisis)].copy()
         rrhh['Valor'] = num(rrhh['Valor'])
 
-        col_a, col_b = st.columns(2)
+        # Adenda 34 (a pedido del equipo): se sacan los gráficos "Rotación vs. Contrataciones netas"
+        # e "Inversión en I+D: costo vs. dotación" -- quedan solo "Salario y rotación" y
+        # "Capacitación e impacto", ahora en una grilla de 2 columnas (antes eran 2 filas de 2).
+        col_a, col_d = st.columns(2)
         with col_a:
             st.subheader('Salario y rotación')
             salario = rrhh[rrhh['Metrica'] == 'Salario mensual, USD'].sort_values('Ronda_Orden')
@@ -2927,27 +3003,6 @@ def seccion_rrhh_sostenibilidad():
                 chart_dos_metricas_apiladas('Evolución: Salario vs Rotación',
                                              salario['Ronda'], salario['Valor'], 'Salario (USD)', COLOR_METRICA['dinero'], 'line',
                                              rotacion['Ronda'], rotacion['Valor'], 'Rotación (%)', COLOR_METRICA['riesgo'], 'line')
-        with col_b:
-            st.subheader('Rotación y contrataciones')
-            contrat = rrhh[rrhh['Metrica'] == 'Contrataciones + / despidos -'].sort_values('Ronda_Orden')
-            if not salario.empty and not contrat.empty and not rotacion.empty:
-                chart_dos_metricas_apiladas('Rotación vs. Contrataciones netas',
-                                             contrat['Ronda'], contrat['Valor'], 'Contrataciones netas (personas)', COLOR_METRICA['personas'], 'bar',
-                                             rotacion['Ronda'], rotacion['Valor'], 'Rotación (%)', COLOR_METRICA['riesgo'], 'line')
-                st.caption('Cuántas contrataciones netas hizo falta hacer, en la misma ronda en que se dio la rotación.')
-
-        st.divider()
-        col_c, col_d = st.columns(2)
-        with col_c:
-            st.subheader('Inversión en I+D')
-            idn = rrhh[rrhh['Metrica'] == 'Número de personal de I+D, esta ronda'].sort_values('Ronda_Orden')
-            idc = rrhh[rrhh['Metrica'] == 'Otros costos variables de I + D'].sort_values('Ronda_Orden')
-            if not idn.empty and not idc.empty:
-                chart_dos_metricas_apiladas('Inversión en I+D: costo vs. dotación',
-                                             idc['Ronda'], idc['Valor'], 'Costo variable I+D (USD)', COLOR_METRICA['dinero'], 'bar',
-                                             idn['Ronda'], idn['Valor'], 'Personal I+D (headcount)', COLOR_METRICA['personas'], 'line')
-            else:
-                st.info('Sin datos de I+D para este equipo.')
         with col_d:
             st.subheader('Capacitación e impacto')
             capac = rrhh[rrhh['Metrica'] == 'Presupuesto mensual para capacitación, USD'].sort_values('Ronda_Orden')
@@ -2963,6 +3018,43 @@ def seccion_rrhh_sostenibilidad():
                 st.info('Sin datos de capacitación para este equipo.')
 
     with bloque_sost:
+        # ---- Certificación ESG + Evolución del ESG (nuevo, Adenda 34, a pedido del equipo) ----
+        st.subheader('Certificación de sostenibilidad')
+        st.caption(f'Nivel de certificación alcanzado por cada equipo, {ronda_snapshot} — dato categórico '
+                   'que publica CESIM ("Sin certificación" / "Bronce" / "Plata" / "Oro"), no un score numérico.')
+        cert_sub = df[(df['Estado'] == 'Informe ESG') & (df['Metrica'] == 'Certificaciones de sostenibilidad') &
+                      (df['Ronda'] == ronda_snapshot)][['Empresa', 'Valor']].dropna()
+        if not cert_sub.empty:
+            # Mismo patrón visual que los "chips" de Estrategia de marketing (seccion_mercado) --
+            # color por NIVEL de certificación (orden fijo, no por orden de aparición), y el equipo en
+            # foco destacado con el borde lila de identidad (clase 'destacado', ya definida en el CSS
+            # de la app).
+            niveles_cert = ['Sin certificación', 'Bronce', 'Plata', 'Oro']
+            colores_cert = dict(zip(niveles_cert, [MUTED_PALETTE[0], '#A6702E', '#8C97A6', '#C9922E']))
+            cert_sub = cert_sub.copy()
+            cert_sub['_orden'] = cert_sub['Valor'].apply(lambda v: niveles_cert.index(v) if v in niveles_cert else -1)
+            cert_sub = cert_sub.sort_values(['_orden', 'Empresa'], ascending=[False, True])
+            chips_cert = []
+            for _, fila in cert_sub.iterrows():
+                color = colores_cert.get(fila['Valor'], MUTED_PALETTE[0])
+                clase = 'chip-estrategia destacado' if fila['Empresa'] == MY_COMPANY else 'chip-estrategia'
+                chips_cert.append(f'<span class="{clase}" style="background-color:{color}">'
+                                   f'{fila["Empresa"]} · {fila["Valor"]}</span>')
+            st.markdown(' '.join(chips_cert), unsafe_allow_html=True)
+        else:
+            st.info(f'Sin datos de certificación de sostenibilidad para {ronda_snapshot}.')
+
+        st.divider()
+        st.subheader('Evolución del ESG')
+        # 'Reputación ESG' (Subgrupo='Puntuación final') es el score agregado que publica CESIM en una
+        # escala absoluta (~2,5-3,7 en los RDOS reales de CADIZ) -- NO es la suma de los % de impacto
+        # en la demanda que se ven más abajo (ver nota de la Adenda 22, un poco más abajo en este
+        # mismo bloque) -- por eso va en su propio chart_evolucion(), no mezclado con el heatmap/balance.
+        esg_evol_sub = df[(df['Estado'] == 'Informe ESG') & (df['Seccion'] == 'Impactos en la demanda') &
+                          (df['Subgrupo'] == 'Puntuación final') & (df['Metrica'] == 'Reputación ESG')].copy()
+        chart_evolucion(esg_evol_sub, 'Reputación ESG (score)')
+
+        st.divider()
         st.subheader('Impacto ambiental')
         c1, c2 = st.columns(2)
         pais_esg = c1.selectbox('País', ['EE.UU.', 'China'], key='pais_esg_rrhh')
@@ -3056,8 +3148,8 @@ def seccion_control_gestion():
         st.caption('Control de Gestión es sobre la proyección propia de CADIZ en el modelo de gestión — '
                    'cambiá "Equipo en foco" a CADIZ en la barra lateral para verlo.')
         return
-    df_proy_cg = get_proyeccion()
     ronda_num_cg = ronda_a_num(ronda_snapshot)
+    df_proy_cg = get_proyeccion(ronda_num_cg)
 
     st.markdown('#### Nivel 1 — Impacto Financiero Macro')
     # mostrar_metricas=False + mostrar_extras=False: SOLO el panel de barras horizontales
