@@ -2754,29 +2754,50 @@ def seccion_finanzas():
         # duplicarlo no suma.
         st.write('')
         st.subheader('Retorno al Accionista')
+        # Fix (a pedido del equipo, viendo la referencia que mandó): el eje X tiene que ser la
+        # EMPRESA (ordenada de mayor a menor dividendo acumulado, mismo criterio que la referencia),
+        # no el año -- el año pasa a ser el segmento apilado DENTRO de cada barra de empresa. Año 0
+        # se excluye a pedido del equipo (y porque, verificado, los 7 equipos pagan $0 en Año 0 -- es
+        # la ronda inicial, antes de cualquier decisión de dividendos).
         div_pagados = df[(df['Estado'] == 'Flujo de efectivo de casa matriz, miles USD') &
                           (df['Metrica'] == 'Dividendos')].copy()
         div_pagados['Valor'] = num(div_pagados['Valor']).abs()
-        div_pagados = div_pagados.dropna(subset=['Valor']).sort_values('Ronda_Orden')
+        div_pagados = div_pagados.dropna(subset=['Valor'])
+        div_pagados = div_pagados[div_pagados['Ronda_Orden'] > 0]
         if div_pagados.empty:
-            st.info('Sin datos de dividendos pagados para este entorno.')
+            st.info('Sin datos de dividendos pagados (fuera de Año 0) para este entorno.')
         else:
+            totales_emp = div_pagados.groupby('Empresa')['Valor'].sum().sort_values(ascending=False)
+            empresas_orden = totales_emp.index.tolist()
+            rondas_presentes = div_pagados[['Ronda', 'Ronda_Orden']].drop_duplicates().sort_values('Ronda_Orden')
+            nombres_ronda = rondas_presentes['Ronda'].tolist()
+            # Año = dimensión ORDENADA (no categórica) -- se usa un único hue azul claro->oscuro
+            # (regla de la skill de dataviz: "Sequential = one hue, light->dark"), no colores
+            # categóricos como la referencia, para que escale sola a las 12 rondas del juego (la
+            # referencia solo tenía 5 y ya usaba un color distinto para cada una).
+            n_r = len(nombres_ronda)
+            tonos_ronda = px.colors.sample_colorscale('Blues', [0.35 + 0.55 * i / max(n_r - 1, 1) for i in range(n_r)])
+            color_por_ronda = dict(zip(nombres_ronda, tonos_ronda))
             fig_divp = go.Figure()
-            for emp in COMPANIES:
-                d_e = div_pagados[div_pagados['Empresa'] == emp]
-                if d_e.empty or d_e['Valor'].sum() == 0:
-                    continue
-                fig_divp.add_trace(go.Bar(x=d_e['Ronda'], y=d_e['Valor'], name=emp,
-                                           marker_color=COLOR_MAP.get(emp, MUTED_PALETTE[0]),
-                                           text=d_e['Valor'].apply(format_num), textposition='inside'))
-            fig_divp.update_layout(barmode='stack', title='Dividendos pagados por empresa, por año',
-                                    yaxis_title='USD',
+            for r_nombre in nombres_ronda:
+                d_r = div_pagados[div_pagados['Ronda'] == r_nombre].set_index('Empresa').reindex(empresas_orden)
+                fig_divp.add_trace(go.Bar(x=empresas_orden, y=d_r['Valor'], name=r_nombre,
+                                           marker_color=color_por_ronda[r_nombre],
+                                           text=d_r['Valor'].apply(lambda v: format_num(v) if pd.notna(v) and v > 0 else ''),
+                                           textposition='inside'))
+            fig_divp.update_layout(barmode='stack', title='Dividendos Pagados Acumulados por Empresa',
+                                    yaxis_title='USD', xaxis=dict(categoryorder='array', categoryarray=empresas_orden),
                                     legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
+            color_total = BRAND_LIGHT if es_modo_oscuro() else BRAND_DARK
+            for emp in empresas_orden:
+                fig_divp.add_annotation(x=emp, y=totales_emp[emp], text=format_num(totales_emp[emp]),
+                                         showarrow=False, yshift=14, font=dict(size=12, color=color_total))
             mostrar(fig_divp, margen_b=90)
             st.caption('Monto real pagado a la casa matriz en concepto de dividendos (RDOS de CESIM), apilado '
-                       'por empresa, año a año. Para cruzarlo contra el retorno total al accionista de cada '
-                       'equipo en el mismo período, ver "Retorno Total Acumulado del Accionista (TSR)" en '
-                       'Resultados.')
+                       'por año dentro de cada empresa -- ordenadas de mayor a menor dividendo acumulado '
+                       '(Año 0 no se incluye: ningún equipo paga dividendos ese año). Para cruzarlo contra el '
+                       'retorno total al accionista de cada equipo, ver "Retorno Total Acumulado del '
+                       'Accionista (TSR)" en Resultados.')
 
         # ---- Bloque 3: Riesgo Competitivo ----
         # Adenda 37 (a pedido del equipo, inspirado en un gráfico de referencia de un profesor:
@@ -2817,10 +2838,14 @@ def seccion_finanzas():
             fig_cap.add_trace(go.Bar(x=dfcap['Empresa'], y=dfcap['Beneficio'], name=f'Beneficio de {ronda_snapshot}',
                                       marker_color=[COLOR_METRICA['eficiencia'] if v >= 0 else COLOR_METRICA['critico'] for v in dfcap['Beneficio']],
                                       text=dfcap['Beneficio'].apply(format_num), textposition='inside'))
+            # Fix (a pedido del equipo, viendo la referencia que mandó): línea conectada en vez de
+            # rombos sueltos -- se lee mejor la caída/suba de equipo a equipo (mismo orden del eje X
+            # que las barras, de mayor a menor capacidad teórica).
             fig_cap.add_trace(go.Scatter(x=dfcap['Empresa'], y=dfcap['Efectivo'], name='Efectivo real disponible',
-                                          mode='markers', marker=dict(symbol='diamond', size=13,
-                                                                       color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT,
-                                                                       line=dict(width=2, color=COLOR_CADIZ))))
+                                          mode='lines+markers',
+                                          line=dict(color=COLOR_METRICA['riesgo'], width=2.5),
+                                          marker=dict(symbol='circle', size=10, color=COLOR_METRICA['riesgo'],
+                                                       line=dict(width=1.5, color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT))))
             fig_cap.update_layout(barmode='relative', title=f'Capacidad de pago de dividendos — {ronda_snapshot}',
                                    yaxis_title='USD',
                                    legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
