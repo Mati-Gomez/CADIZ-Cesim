@@ -61,11 +61,18 @@ def detect_round(title: str):
     m = re.search(r'Ronda\s+inicial\s*(\d+)', title, re.IGNORECASE)
     if m:
         n = int(m.group(1))
-        return f'Ronda {n}', 'Oficial', n, n
+        # Rebranding a pedido del equipo (ver Informe de ajustes del Tablero): la etiqueta que
+        # se MUESTRA cambia de "Ronda N" a "Año N" en TODO el tablero. El valor que cambia es
+        # el STRING DE SALIDA de detect_round() -- este es el único lugar donde se genera --, no
+        # el nombre de la columna 'Ronda' del DataFrame (sigue llamándose 'Ronda' internamente,
+        # es solo un identificador de columna, nunca se le muestra al usuario) ni las regex de
+        # ENTRADA de arriba (matchean el título real que exporta CESIM, que sigue diciendo
+        # "Ronda..." -- eso es dato de origen de CESIM, no texto de nuestra UI).
+        return f'Año {n}', 'Oficial', n, n
     m = re.search(r'Ronda\s*(\d+)', title, re.IGNORECASE)
     if m:
         n = int(m.group(1))
-        return f'Ronda {n}', 'Oficial', n, n
+        return f'Año {n}', 'Oficial', n, n
     return title, 'Desconocido', None, None
 
 

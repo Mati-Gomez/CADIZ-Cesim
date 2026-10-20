@@ -26,7 +26,7 @@ import pandas as pd
 from export_proyeccion import read_dataframe, DEFAULT_EXCEL
 from metric_crosswalk import CROSSWALK_FINANZAS, CROSSWALK_MERCADO, CROSSWALK_OPERACIONES, CROSSWALK_RESULTADOS
 
-_RONDA_OFICIAL_RE = re.compile(r"^Ronda\s+(\d+)$")
+_RONDA_OFICIAL_RE = re.compile(r"^Año\s+(\d+)$")  # Rebranding "Ronda N" -> "Año N" (ver cesim_parser.detect_round)
 
 # Mismo archivo que lee export_proyeccion.py -- vive en la raíz del repo, al lado de app.py. El
 # usuario lo reemplaza (mismo nombre) cada vez que hay una versión nueva del modelo de gestión.
