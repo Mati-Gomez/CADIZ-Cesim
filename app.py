@@ -2625,6 +2625,13 @@ def seccion_finanzas():
     # st.tabs(...) de la Adenda 26 por un contenedor simple para no dejar una tira de UNA sola
     # pestaña (sin cambiar la indentación del cuerpo de abajo).
     with st.container():
+        # Adenda 37 (a pedido del equipo: reorganizar Finanzas en bloques con "hilo conductor" propio,
+        # mismo espíritu narrativo que ya usa Control de Gestión con sus Niveles, pero con subtítulos
+        # simples en vez de "Nivel N" -- a pedido explícito del equipo, "más simple"). 4 bloques:
+        # Desempeño y Valoración (como ya existía) / Retorno al Accionista (nuevo) / Riesgo
+        # Competitivo (nuevo) / Estructura Financiera (como ya existía, desde "Estructura del Balance"
+        # en adelante).
+        st.subheader('Desempeño y Valoración')
         # ---- KPIs principales: Precio Acción / Capitalización / EPS ----
         precio_vals = {e: valor_de(ratios_ronda, 'Precio de la acción al final de la ronda, USD', e) for e in COMPANIES}
         cap_vals = {e: valor_de(val_ronda, 'Capitalización de mercado, miles USD', e) for e in COMPANIES}
@@ -2734,44 +2741,99 @@ def seccion_finanzas():
         bn_sub['Valor'] = bn_sub.groupby('Empresa')['Valor'].cumsum()
         chart_evolucion(bn_sub, 'Beneficio Neto Acumulado (USD, desde Año 0)', altura=420)
 
-        # Rediseño "Dividendos vs. Retorno por empresa" (a pedido del equipo: "si mostramos el
-        # retorno con puntos ... para ver si impacta repartir mas dividendos o no"). Antes eran 2
-        # barras agrupadas (mismo criterio que el resto de la app para comparar 2 series en la misma
-        # unidad) -- ahora el Retorno pasa a PUNTOS superpuestos sobre las barras de Dividendos, en
-        # el MISMO eje (ambas ya vienen en %, no hace falta un segundo eje -- la skill de dataviz de
-        # este tablero evita doble eje Y por norma): así se lee directo si el equipo con más
-        # dividendos (barra alta) es también el de más retorno (punto alto) o no -- la pregunta que
-        # pedían poder responder de un vistazo.
-        # Sigue siendo Categoría 3 (decisión de modelización, a flagear): se usa 'Rendimiento de los
-        # dividendos, %' (dividend yield que SÍ publica CESIM) y no un monto en USD, porque CESIM NO
-        # publica un monto absoluto de dividendos pagados (verificado: no existe esa fila en ningún
-        # RDOS de este repo) -- solo el yield %, que es lo que permite esta comparación en una sola
-        # unidad sin inventar un supuesto de conversión.
-        div_vals = {e: valor_de(ratios_ronda, 'Rendimiento de los dividendos, %', e) for e in COMPANIES}
-        ret_vals = {e: valor_de(ratios_ronda, 'Retorno total acumulado del accionista (p.a.), %', e) for e in COMPANIES}
-        filas_dr = [{'Empresa': e, 'Dividendos': div_vals.get(e), 'Retorno': ret_vals.get(e)} for e in COMPANIES]
-        dfdr = pd.DataFrame(filas_dr).dropna(subset=['Dividendos', 'Retorno'], how='all')
-        dfdr = dfdr.sort_values('Dividendos', ascending=False, na_position='last')
-        if not dfdr.empty:
-            fig_dr = go.Figure()
-            fig_dr.add_trace(go.Bar(x=dfdr['Empresa'], y=dfdr['Dividendos'], name='Rendimiento de dividendos, %',
-                                     marker_color=[COLOR_MAP.get(e, MUTED_PALETTE[0]) for e in dfdr['Empresa']],
-                                     text=dfdr['Dividendos'].apply(lambda v: f'{v:,.1f}%' if pd.notna(v) else ''),
-                                     textposition='outside', opacity=0.75))
-            fig_dr.add_trace(go.Scatter(x=dfdr['Empresa'], y=dfdr['Retorno'], name='Retorno acumulado, %',
-                                         mode='markers', marker=dict(symbol='diamond', size=13, color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT,
-                                                                      line=dict(width=2, color=COLOR_CADIZ))))
-            fig_dr.update_layout(title=f'Dividendos vs. Retorno por empresa — {ronda_snapshot}', yaxis_title='%',
-                                  legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
-            mostrar(fig_dr, margen_b=90)
-            st.caption('Barras = rendimiento de dividendos, %, ordenado de mayor a menor. Rombo = retorno total '
-                       'acumulado del accionista, %, mismo eje -- un equipo con barra alta y rombo bajo (o al revés) '
-                       'es evidencia de que repartir más dividendos no viene acompañado de mejor retorno para el '
-                       'accionista (y viceversa).')
+        # ---- Bloque 2: Retorno al Accionista ----
+        # Adenda 37 (a pedido del equipo, reemplaza el combo de una sola ronda de arriba -- "quizás
+        # sea mejor mostrar con barras apiladas los dividendos pagados ronda a ronda"). CORRECCIÓN a
+        # un informe anterior: ahí se había dicho (sin verificar lo suficiente) que CESIM NO publica
+        # un monto absoluto de dividendos pagados -- es falso, verificado contra el RDOS real de este
+        # repo: 'Flujo de efectivo de casa matriz, miles USD' -> Actividades Financieras ->
+        # 'Dividendos' SÍ trae el monto real en USD pagado por cada una de las 7 empresas, cada año
+        # (signo negativo = salida de caja; se muestra en valor absoluto, como "monto pagado"). No se
+        # repite acá el Retorno acumulado (%) como evolución -- el equipo señaló que ya está en
+        # Resultados ('Retorno Total Acumulado del Accionista (TSR), %', chart_evolucion) y
+        # duplicarlo no suma.
+        st.write('')
+        st.subheader('Retorno al Accionista')
+        div_pagados = df[(df['Estado'] == 'Flujo de efectivo de casa matriz, miles USD') &
+                          (df['Metrica'] == 'Dividendos')].copy()
+        div_pagados['Valor'] = num(div_pagados['Valor']).abs()
+        div_pagados = div_pagados.dropna(subset=['Valor']).sort_values('Ronda_Orden')
+        if div_pagados.empty:
+            st.info('Sin datos de dividendos pagados para este entorno.')
         else:
-            st.info('Sin datos de rendimiento de dividendos/retorno para este año.')
+            fig_divp = go.Figure()
+            for emp in COMPANIES:
+                d_e = div_pagados[div_pagados['Empresa'] == emp]
+                if d_e.empty or d_e['Valor'].sum() == 0:
+                    continue
+                fig_divp.add_trace(go.Bar(x=d_e['Ronda'], y=d_e['Valor'], name=emp,
+                                           marker_color=COLOR_MAP.get(emp, MUTED_PALETTE[0]),
+                                           text=d_e['Valor'].apply(format_num), textposition='inside'))
+            fig_divp.update_layout(barmode='stack', title='Dividendos pagados por empresa, por año',
+                                    yaxis_title='USD',
+                                    legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
+            mostrar(fig_divp, margen_b=90)
+            st.caption('Monto real pagado a la casa matriz en concepto de dividendos (RDOS de CESIM), apilado '
+                       'por empresa, año a año. Para cruzarlo contra el retorno total al accionista de cada '
+                       'equipo en el mismo período, ver "Retorno Total Acumulado del Accionista (TSR)" en '
+                       'Resultados.')
+
+        # ---- Bloque 3: Riesgo Competitivo ----
+        # Adenda 37 (a pedido del equipo, inspirado en un gráfico de referencia de un profesor:
+        # "Capacidad de Distribución de Dividendos", Ganancias Acumuladas + Beneficio de la ronda vs.
+        # Caja Real). Objetivo: anticipar qué equipos tienen margen para un dividendo grande en la
+        # PRÓXIMA ronda. Verificado 100% con datos reales de la Hoja de Balance y la Cuenta de
+        # Resultados (Global), las 7 empresas: 'Ganancias acumuladas' se toma al CIERRE DE LA RONDA
+        # ANTERIOR (antes de sumar el beneficio de esta ronda, para no mezclar el stock ya cerrado con
+        # el flujo de este año) + 'Beneficio de la ronda' (el de esta ronda, puede ser negativo) dan
+        # el techo TEÓRICO de lo repartible; 'Efectivo y equivalentes de efectivo' (el real, de esta
+        # ronda) es lo que de verdad hay en caja. La brecha entre ambos es capital de trabajo, deuda o
+        # inversión que no está disponible para repartir aunque "en el papel" sobre.
+        st.write('')
+        st.subheader('Riesgo Competitivo')
+        ronda_prev_cap = ronda_anterior_de(ronda_snapshot)
+        ganancias_prev_vals = {}
+        if ronda_prev_cap:
+            bal_prev_cap = df[(df['Estado'] == 'Hoja de Balance, miles USD, Global') & (df['Ronda'] == ronda_prev_cap)]
+            ganancias_prev_vals = {e: valor_de(bal_prev_cap, 'Ganancias acumuladas', e) for e in COMPANIES}
+        efectivo_vals = {e: valor_de(bal_ronda, 'Efectivo y equivalentes de efectivo', e) for e in COMPANIES}
+        filas_cap = []
+        for e in COMPANIES:
+            ga, bn, ef = ganancias_prev_vals.get(e), beneficio_neto_vals.get(e), efectivo_vals.get(e)
+            if ga is None and bn is None:
+                continue
+            filas_cap.append({'Empresa': e, 'GananciasPrev': ga or 0.0, 'Beneficio': bn or 0.0, 'Efectivo': ef})
+        dfcap = pd.DataFrame(filas_cap)
+        if dfcap.empty:
+            st.info('Sin datos de Balance/Resultados suficientes para estimar capacidad de pago en este año.')
+        else:
+            dfcap['Total'] = dfcap['GananciasPrev'] + dfcap['Beneficio']
+            dfcap = dfcap.sort_values('Total', ascending=False)
+            etq_prev = ronda_prev_cap or 'la ronda anterior'
+            fig_cap = go.Figure()
+            fig_cap.add_trace(go.Bar(x=dfcap['Empresa'], y=dfcap['GananciasPrev'], name=f'Ganancias Acumuladas (cierre {etq_prev})',
+                                      marker_color=COLOR_METRICA['dinero'],
+                                      text=dfcap['GananciasPrev'].apply(format_num), textposition='inside'))
+            fig_cap.add_trace(go.Bar(x=dfcap['Empresa'], y=dfcap['Beneficio'], name=f'Beneficio de {ronda_snapshot}',
+                                      marker_color=[COLOR_METRICA['eficiencia'] if v >= 0 else COLOR_METRICA['critico'] for v in dfcap['Beneficio']],
+                                      text=dfcap['Beneficio'].apply(format_num), textposition='inside'))
+            fig_cap.add_trace(go.Scatter(x=dfcap['Empresa'], y=dfcap['Efectivo'], name='Efectivo real disponible',
+                                          mode='markers', marker=dict(symbol='diamond', size=13,
+                                                                       color=BRAND_DARK if not es_modo_oscuro() else BRAND_LIGHT,
+                                                                       line=dict(width=2, color=COLOR_CADIZ))))
+            fig_cap.update_layout(barmode='relative', title=f'Capacidad de pago de dividendos — {ronda_snapshot}',
+                                   yaxis_title='USD',
+                                   legend=dict(orientation='h', yanchor='top', y=-0.18, xanchor='center', x=0.5))
+            mostrar(fig_cap, margen_b=90)
+            st.caption(f'Azul + verde/rojo = techo teórico de lo repartible (Ganancias Acumuladas al cierre de '
+                       f'{etq_prev} + Beneficio de {ronda_snapshot}, antes de cualquier dividendo de esta ronda). '
+                       'Rombo = Efectivo real disponible. Un equipo con barra alta y rombo bajo tiene "ganancias '
+                       'de papel" sin respaldo en caja -- poco probable que pague mucho la próxima ronda; barra '
+                       'y rombo parejos es la señal de que sí podría.')
         st.write('')
 
+        # ---- Bloque 4: Estructura Financiera ----
+        st.subheader('Estructura Financiera')
         # ---- Estructura del Balance (reposicionada -- antes vivía en la pestaña "Largo Plazo") ----
         st.markdown('**Estructura del Balance: Activo vs. Pasivo + Patrimonio Neto**')
 
@@ -3085,48 +3147,6 @@ def seccion_rrhh_sostenibilidad():
                            'Lo que hay que mirar es la pendiente del multiplicador en los años siguientes a un aumento de presupuesto.')
             else:
                 st.info('Sin datos de capacitación para este equipo.')
-
-        st.divider()
-        # Adenda 36 (a pedido del equipo: "podríamos mostrar las caracteristicas y tecnologias
-        # disponibles ronda a ronda, algo así o no?"). Dato 100% real de CESIM -- 'Informe de
-        # mercado, {país}' / Seccion=tecnología / Metrica='Cantidad de características ofrecidas' --
-        # verificado contra los RDOS de este repo (R1-R6): existe una fila por cada tecnología en la
-        # que el equipo YA ESTÁ (fila vacía = CESIM reserva el lugar pero el equipo todavía no cargó
-        # características ahí, ej. CADIZ en Eléctrico-China desde R4 -- entró al mercado pero sin
-        # invertir en características todavía), así que esta misma serie sirve para responder las dos
-        # preguntas juntas: qué tecnologías tiene DISPONIBLES el equipo en foco en cada mercado (la
-        # tecnología aparece en el eje) y con cuántas características las ofrece (la altura de la
-        # línea). Se pone acá, en Personal y Talento, porque es la contracara de la capacitación/I+D
-        # de arriba: presupuesto y gente invertidos vs. qué logró ofrecer el equipo al mercado.
-        st.subheader('Características y tecnologías disponibles')
-        # _MERCADOS_GAP (importado de gap_analysis, ['EE.UU.', 'China', 'Europa']) y no la variable
-        # local 'paises_macro' -- esa vive solo dentro de _seccion_resultado_mercado_macro(), no acá.
-        pais_rrhh_sel = st.selectbox('Mercado', _MERCADOS_GAP, key='sel_mercado_rrhh_caract')
-        caract = df[(df['Estado'] == f'Informe de mercado, {pais_rrhh_sel}') &
-                    (df['Seccion'].isin(_TECNOLOGIAS_GAP)) &
-                    (df['Metrica'] == 'Cantidad de características ofrecidas') &
-                    (df['Empresa'] == empresa_analisis)].copy()
-        caract['Valor'] = num(caract['Valor'])
-        caract = caract.dropna(subset=['Valor']).sort_values('Ronda_Orden')
-        if caract.empty:
-            st.info(f'{empresa_analisis} todavía no tiene características cargadas en ninguna tecnología para {pais_rrhh_sel}.')
-        else:
-            COLOR_TECH_RRHH = dict(zip(_TECNOLOGIAS_GAP, MUTED_SIN_MARRON))
-            fig_caract = go.Figure()
-            for tech in _TECNOLOGIAS_GAP:
-                d_c = caract[caract['Seccion'] == tech]
-                if d_c.empty:
-                    continue
-                fig_caract.add_trace(go.Scatter(x=d_c['Ronda'], y=d_c['Valor'], name=tech, mode='lines+markers',
-                                                 line=dict(color=COLOR_TECH_RRHH.get(tech, MUTED_SIN_MARRON[0]), width=2.5),
-                                                 marker=dict(size=7)))
-            fig_caract.update_layout(title=f'Características ofrecidas por tecnología — {empresa_analisis}, {pais_rrhh_sel}',
-                                      yaxis_title='Cantidad de características')
-            mostrar(fig_caract)
-            st.caption('Una tecnología aparece en el gráfico desde el año en que el equipo entra a ese mercado con ella '
-                       '(el primer punto puede valer 0 si todavía no invirtió en características, como suele pasar el '
-                       'año que recién entra) -- así se ve a la vez CUÁNDO se habilitó cada tecnología y CUÁNTO se '
-                       'invirtió en diferenciarla después.')
 
     with bloque_sost:
         # ---- Certificación ESG + Evolución del ESG (nuevo, Adenda 34, a pedido del equipo) ----
